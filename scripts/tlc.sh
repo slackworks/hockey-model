@@ -63,6 +63,35 @@ if ! command -v java >/dev/null 2>&1; then
   exit 1
 fi
 
+# An older JDK fails later with a class-version error, so the version is checked here.
+JAVA_MIN_MAJOR=11
+raw_version="$(java -version 2>&1)" || {
+  echo "tlc.sh: 'java -version' failed. Reinstall Java $JAVA_MIN_MAJOR or later." >&2
+  exit 1
+}
+if [[ ! "$raw_version" =~ \"([0-9][^\"]*)\" ]]; then
+  echo "tlc.sh: cannot read the Java version from 'java -version'." >&2
+  echo "  Install Java $JAVA_MIN_MAJOR or later." >&2
+  exit 1
+fi
+java_version="${BASH_REMATCH[1]}"
+# Java 8 and older report "1.8.0_292", so the major number is the part after "1.".
+if [[ "$java_version" == 1.* ]]; then
+  java_version="${java_version#1.}"
+fi
+java_major="${java_version%%[!0-9]*}"
+if [[ -z "$java_major" ]] || ((java_major < JAVA_MIN_MAJOR)); then
+  echo "tlc.sh: Java ${java_major:-$java_version} is too old for TLC." >&2
+  echo "  Install Java $JAVA_MIN_MAJOR or later." >&2
+  exit 1
+fi
+
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "tlc.sh: neither sha256sum nor shasum is on PATH." >&2
+  echo "  Install coreutils, or use the shasum that ships with macOS." >&2
+  exit 1
+fi
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

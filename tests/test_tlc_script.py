@@ -61,12 +61,20 @@ def _env_with_fakes(tmp_path: Path, jars: Path, **fakes: str) -> dict[str, str]:
     }
 
 
+def _fake_java(version_line: str, rest: str = "exit 0") -> str:
+    """Return a fake java that prints version_line for -version and runs rest otherwise."""
+    return f"case \"$*\" in -version*) echo '{version_line}' >&2; exit 0 ;; esac\n{rest}"
+
+
+_JAVA_17 = _fake_java('openjdk version "17.0.7" 2023-04-18')
+
+
 def test_checksum_mismatch_deletes_jar_and_names_both_sums(tmp_path: Path) -> None:
     jars = tmp_path / "jars"
     jars.mkdir()
     jar = jars / "tla2tools-v1.7.4.jar"
     jar.write_bytes(b"not the tla tools jar")
-    result = _run(env=_env_with_fakes(tmp_path, jars, java="exit 0"))
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=_JAVA_17))
     assert result.returncode == 1
     assert "checksum mismatch" in result.stderr
     assert "expected: 936a262061c9" in result.stderr
@@ -76,10 +84,78 @@ def test_checksum_mismatch_deletes_jar_and_names_both_sums(tmp_path: Path) -> No
 
 def test_failed_download_names_version_and_url(tmp_path: Path) -> None:
     jars = tmp_path / "jars"
-    result = _run(env=_env_with_fakes(tmp_path, jars, java="exit 0", curl="exit 22"))
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=_JAVA_17, curl="exit 22"))
     assert result.returncode == 1
     assert "cannot download tla2tools v1.7.4 from https://github.com/tlaplus" in result.stderr
     assert not (jars / "tla2tools-v1.7.4.jar").exists()
+
+
+@pytest.mark.parametrize(
+    ("version_line", "major"),
+    [
+        ('openjdk version "11.0.2" 2019-01-15', "11"),
+        ('openjdk version "17.0.7" 2023-04-18', "17"),
+        ('openjdk version "21" 2023-09-19', "21"),
+    ],
+)
+def test_java_at_or_above_eleven_passes_the_version_check(
+    tmp_path: Path, version_line: str, major: str
+) -> None:
+    # The download is stubbed to fail, so the run ends after the version check.
+    jars = tmp_path / "jars"
+    env = _env_with_fakes(tmp_path, jars, java=_fake_java(version_line), curl="exit 22")
+    result = _run(env=env)
+    assert "Java" not in result.stderr, f"Java {major} must pass the version check"
+    assert "cannot download tla2tools" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("version_line", "major"),
+    [('java version "1.8.0_292"', "8"), ('openjdk version "9.0.4"', "9")],
+)
+def test_java_below_eleven_fails_and_names_the_version(
+    tmp_path: Path, version_line: str, major: str
+) -> None:
+    jars = tmp_path / "jars"
+    env = _env_with_fakes(tmp_path, jars, java=_fake_java(version_line))
+    result = _run(env=env)
+    assert result.returncode == 1
+    assert f"Java {major} is too old" in result.stderr
+    assert "Install Java 11 or later" in result.stderr
+
+
+def test_unreadable_java_version_fails_and_asks_for_java_eleven(tmp_path: Path) -> None:
+    jars = tmp_path / "jars"
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=_fake_java("garbage")))
+    assert result.returncode == 1
+    assert "cannot read the Java version" in result.stderr
+
+
+def test_missing_sha256_tools_fail_and_name_both(tmp_path: Path) -> None:
+    # A PATH with every system tool except the two sha256 tools, plus a fake java.
+    jars = tmp_path / "jars"
+    env = _env_with_fakes(tmp_path, jars, java=_JAVA_17)
+    # The original PATH must not follow: it would still hold the sha256 tools.
+    fake_bin = tmp_path / "bin"
+    env["PATH"] = os.pathsep.join([str(fake_bin), _path_without({"sha256sum", "shasum"}, tmp_path)])
+    result = _run(env=env)
+    assert result.returncode == 1
+    assert "neither sha256sum nor shasum is on PATH" in result.stderr
+
+
+def _path_without(names: set[str], tmp_path: Path) -> str:
+    """Return a directory of symlinks to every tool on PATH except the names given."""
+    link_dir = tmp_path / "no-sha"
+    link_dir.mkdir()
+    for directory in os.environ["PATH"].split(os.pathsep):
+        source = Path(directory)
+        if not source.is_dir():
+            continue
+        for entry in source.iterdir():
+            target = link_dir / entry.name
+            if entry.name not in names and not (target.exists() or target.is_symlink()):
+                target.symlink_to(entry)
+    return str(link_dir)
 
 
 def test_workers_flag_is_rejected() -> None:
@@ -91,6 +167,7 @@ def test_workers_flag_is_rejected() -> None:
 
 # The fake java logs its arguments and exits with the code that the test sets for each config.
 _FAKE_JAVA = """\
+case "$*" in -version*) echo 'openjdk version "17.0.7" 2023-04-18' >&2; exit 0 ;; esac
 echo "$*" >> "$FAKE_JAVA_LOG"
 case "$*" in
     *daily_prepare_stall.cfg*) exit "${FAKE_STALL_RC:-0}" ;;

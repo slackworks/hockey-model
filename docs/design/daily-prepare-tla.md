@@ -225,6 +225,8 @@ The first one was a limit of the code. Issue #178 fixed it.
 3. `scripts/tlc.sh`: the run script below.
 4. `tests/test_tla_constants.py`: the constants test above.
 5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: both configs pass, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
+The Java version checks run against fake `java` output for versions 8, 9, 11, 17, and 21, and for unreadable output.
+A PATH without `sha256sum` and `shasum` exits 1 and names both.
 6. `.github/workflows/tla.yml`: the CI job below.
 7. `.editorconfig`: add a `[*.{tla,cfg}]` section with `indent_size = unset`. TLA+ aligns `/\` lists at any column, so the 2-space rule does not fit.
 8. `AGENTS.md`: add `- Model check: bash scripts/tlc.sh (TLC on specs/daily_prepare.tla; needs Java 11 or later)` under Commands.
@@ -248,6 +250,10 @@ Behavior:
    Use `sha256sum` when it is on `PATH`, and `shasum -a 256` when it is not.
    On a mismatch, delete the file, print the expected and the actual sums, and exit 1.
 6. Before any download, if `java` is not on `PATH`, exit 1 with "install Java 11 or later".
+   Then read the major version from `java -version`.
+   A major version below 11 exits 1 and names the version, because an old JDK fails later with a class-version error (#183).
+   A version line that cannot be read exits 1.
+   If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
    For `specs/daily_prepare_stall.cfg` first and then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
