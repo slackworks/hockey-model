@@ -62,14 +62,19 @@ def test_upcoming_game_is_predicted_with_no_late_run(store: sqlite3.Connection) 
     assert line.prediction.home_win + line.prediction.away_win == pytest.approx(1.0)
 
 
-def test_game_over_gets_no_prediction(store: sqlite3.Connection) -> None:
-    add_game(store, 11, "2026-01-20T17:00", "TOR", "BOS", state="FINAL")
+def test_game_over_gets_a_prediction_as_known_at_puck_drop(store: sqlite3.Connection) -> None:
+    # A late first report of the day is still full: it predicts every game that has a puck drop.
+    _seed_form(store)
+    add_game(store, 11, "2026-01-20T11:00", "TOR", "BOS", state="FINAL")
     report = build_report(store, _model(store), DAY, now=NOW)
     (line,) = report.lines
-    assert line.prediction is None
+    assert line.prediction is not None
+    assert line.prediction.made_after_start is True
+    assert line.prediction.home_win + line.prediction.away_win == pytest.approx(1.0)
     game = report_json(report)["games"][0]
-    assert game["home_win"] is None
-    assert game["skipped"] == "game is over or postponed (state FINAL); no prediction"
+    assert game["state"] == "FINAL"
+    assert game["home_win"] is not None
+    assert game["skipped"] is None
 
 
 def test_postponed_game_gets_no_prediction(store: sqlite3.Connection) -> None:

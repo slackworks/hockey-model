@@ -17,13 +17,14 @@ from hockey_model.game import GamePrediction, MissingInput, game_win_probability
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
-from hockey_model.sources.nhl import FINAL_STATES, GameRow
+from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.utc import require_utc
 
-# A postponed game has no result and no puck drop yet, so it gets no prediction.
-NO_PREDICTION_STATES = FINAL_STATES | {"PPD"}
+# A postponed game has no puck drop yet, so it gets no prediction. A game that is over or
+# live does: the report reads the inputs known at its puck drop, so a late first report is full.
+NO_PREDICTION_STATES = frozenset({"PPD"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +78,7 @@ def report_tag(day: date) -> str:
 
 def _predict_line(row: GameRow, model: GameModel, now: datetime, level: float) -> DailyLine:
     if row.state in NO_PREDICTION_STATES:
-        return DailyLine(row, None, f"game is over or postponed (state {row.state}); no prediction")
+        return DailyLine(row, None, f"game is postponed (state {row.state}); no prediction")
     # A late run uses the inputs known at puck drop, so the note in the report is true.
     as_of = min(now, row.start)
     prediction = game_win_probability(game_input(row), model, as_of=as_of, level=level)
