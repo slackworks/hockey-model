@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from seeding import add_game, add_team_form, utc
+from seeding import add_game, add_goalie, add_team_form, utc
 
 from hockey_model.daily_report import (
     DailyLine,
@@ -104,6 +104,51 @@ def test_started_game_is_a_late_run_with_inputs_as_of_start(store: sqlite3.Conne
     kinds = {m.kind for m in line.prediction.missing}
     assert MissingKind.LATE_RUN in kinds
     assert "late_run" in report_markdown(report)
+
+
+@pytest.mark.parametrize("state", ["FUT", "PRE", "LIVE", "CRIT", "FINAL", "OFF", "PPD"])
+def test_only_a_postponed_game_gets_no_prediction(store: sqlite3.Connection, state: str) -> None:
+    _seed_form(store)
+    add_game(store, 20, "2026-01-20T11:00", "TOR", "BOS", state=state)
+    (line,) = build_report(store, _model(store), DAY, now=NOW).lines
+    assert (line.prediction is None) == (state == "PPD")
+
+
+def test_a_finished_games_own_score_does_not_change_its_prediction(
+    store: sqlite3.Connection,
+) -> None:
+    _seed_form(store)
+    homes = []
+    # A later read replaces the earlier one, so the second score is the one the report sees.
+    for score, fetched in (((9, 0), utc("2026-01-20T13:00")), ((0, 9), utc("2026-01-20T14:00"))):
+        add_game(
+            store,
+            21,
+            "2026-01-20T11:00",
+            "TOR",
+            "BOS",
+            state="FINAL",
+            score=score,
+            fetched_at=fetched,
+        )
+        (line,) = build_report(store, _model(store), DAY, now=NOW).lines
+        assert line.prediction is not None
+        homes.append(line.prediction.home_win)
+    assert homes[0] == homes[1]
+
+
+def test_a_finished_game_in_reads_mode_names_the_boxscore_starter(
+    store: sqlite3.Connection,
+) -> None:
+    _seed_form(store)
+    add_game(store, 22, "2026-01-20T11:00", "TOR", "BOS", state="FINAL")
+    add_goalie(store, 22, "TOR", 8001, "A. Home")
+    add_goalie(store, 22, "BOS", 8002, "B. Away")
+    model = NhlGameModel(store, ELO_ONLY, GoalieMode.READS)
+    (line,) = build_report(store, model, DAY, now=NOW).lines
+    assert line.prediction is not None
+    notes = [m.note for m in line.prediction.missing if m.kind == MissingKind.LATE_RUN]
+    assert any("boxscore starter" in note for note in notes)
 
 
 def test_naive_now_is_an_error(store: sqlite3.Connection) -> None:

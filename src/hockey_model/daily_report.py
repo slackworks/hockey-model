@@ -1,8 +1,8 @@
 """Daily prediction report: every game of one Eastern game day, as Markdown and JSON.
 
 A game that started before the run is still predicted. Its inputs are taken as of the game
-start, and the report marks it as a late run. A game that is over or postponed gets no
-prediction.
+start, and the report marks it as a late run. A game that is over is predicted the same
+way. A postponed game gets no prediction.
 """
 
 import hashlib
@@ -21,10 +21,6 @@ from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.utc import require_utc
-
-# A postponed game has no puck drop yet, so it gets no prediction. A game that is over or
-# live does: the report reads the inputs known at its puck drop, so a late first report is full.
-NO_PREDICTION_STATES = frozenset({"PPD"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +73,9 @@ def report_tag(day: date) -> str:
 
 
 def _predict_line(row: GameRow, model: GameModel, now: datetime, level: float) -> DailyLine:
-    if row.state in NO_PREDICTION_STATES:
+    # A postponed game has no puck drop yet. A game that is over or live is predicted from the
+    # inputs known at its puck drop, so a late first report is full.
+    if row.state == "PPD":
         return DailyLine(row, None, f"game is postponed (state {row.state}); no prediction")
     # A late run uses the inputs known at puck drop, so the note in the report is true.
     as_of = min(now, row.start)
