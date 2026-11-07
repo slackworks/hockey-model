@@ -2,6 +2,7 @@
 
 import sqlite3
 import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from hockey_model.store.source_reads import (
     record_read,
 )
 from hockey_model.store.staleness import stale_sources
+from hockey_model.store.timestamps import iso_utc
 
 AS_OF = utc("2026-01-19T16:00")
 INJURIES = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries"
@@ -49,6 +51,29 @@ def _fresh_everything(conn: sqlite3.Connection, skip: str = "") -> None:
 
 def _reasons(conn: sqlite3.Connection, as_of: datetime = AS_OF) -> list[tuple[str, str]]:
     return stale_sources(conn, as_of)
+
+
+def test_a_store_with_many_dated_urls_is_judged_quickly(store: sqlite3.Connection) -> None:
+    # A backfilled store holds a URL for every score day and boxscore, and the report judges it
+    # once for each game. A scan of the whole table for each URL took minutes on a real store.
+    rows = [
+        (
+            "nhl_scores",
+            f"https://x/score/{n}",
+            iso_utc(AS_OF - timedelta(days=1, minutes=k)),
+            1,
+            None,
+        )
+        for n in range(6000)
+        for k in range(3)
+    ]
+    store.executemany(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error) VALUES (?, ?, ?, ?, ?)", rows
+    )
+    store.commit()
+    started = time.perf_counter()
+    stale_sources(store, AS_OF)
+    assert time.perf_counter() - started < 5.0
 
 
 def test_nothing_is_stale_when_every_source_read_well(store: sqlite3.Connection) -> None:

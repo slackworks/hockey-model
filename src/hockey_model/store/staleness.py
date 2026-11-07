@@ -37,23 +37,28 @@ class _Latest:
     good_at: datetime | None
 
 
+# One pass groups the newest good read of each URL, then one join attaches it. A subquery per
+# URL would scan the whole table for each URL, and the table has a row for every dated feed.
+_LATEST_READS_SQL = (
+    "WITH ranked AS ("
+    " SELECT source, url, fetched_at, ok, ROW_NUMBER() OVER ("
+    "  PARTITION BY source, url ORDER BY fetched_at DESC, rowid DESC) AS rank"
+    " FROM source_reads WHERE fetched_at < :cutoff),"
+    " good AS ("
+    " SELECT source, url, MAX(fetched_at) AS good_at FROM source_reads"
+    " WHERE ok = 1 AND fetched_at < :cutoff GROUP BY source, url)"
+    " SELECT l.source, l.url, l.fetched_at, l.ok, g.good_at"
+    " FROM ranked l LEFT JOIN good g ON g.source = l.source AND g.url = l.url"
+    " WHERE l.rank = 1"
+)
+
+
 def _latest_reads(conn: sqlite3.Connection, as_of: datetime) -> dict[tuple[str, str], _Latest]:
     """Return the newest attempt of each (source, URL) at or before ``as_of``.
 
     Two reads at one instant are ordered by row order, so the one written last wins.
     """
-    cutoff = iso_utc(as_of)
-    cursor = conn.execute(
-        "WITH ranked AS ("
-        " SELECT source, url, fetched_at, ok, ROW_NUMBER() OVER ("
-        "  PARTITION BY source, url ORDER BY fetched_at DESC, rowid DESC) AS rank"
-        " FROM source_reads WHERE fetched_at < ?)"
-        " SELECT l.source, l.url, l.fetched_at, l.ok,"
-        "  (SELECT MAX(r.fetched_at) FROM source_reads r WHERE r.source = l.source"
-        "   AND r.url = l.url AND r.ok = 1 AND r.fetched_at < ?)"
-        " FROM ranked l WHERE l.rank = 1",
-        (cutoff, cutoff),
-    )
+    cursor = conn.execute(_LATEST_READS_SQL, {"cutoff": iso_utc(as_of)})
     return {
         (source, url): _Latest(
             bool(ok), parse_iso_utc(stamp), None if good is None else parse_iso_utc(good)
