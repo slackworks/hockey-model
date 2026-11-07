@@ -202,7 +202,8 @@ The first model took 29 minutes 21 seconds with `-workers auto` on the developme
 Other checks ran on the same machine during that run, so the figure is an upper bound.
 The `tla` CI job time for the same spec is the cleaner figure.
 The earlier figure, 3 minutes 14 seconds, was on a 10-core Mac, so the two times are not a controlled comparison.
-The `tla` CI job has a 30-minute timeout, so the new run time leaves little margin.
+The `tla` CI job ran 30 minutes and was cancelled by its timeout during the liveness check: the search took 29 minutes on the runner.
+The job limit is now 60 minutes as a stopgap, and #188 tracks the reduction.
 #188 tracks the reduction.
 The liveness check of the full graph runs on one thread, so more workers speed up only the search.
 
@@ -384,7 +385,9 @@ concurrency:
 jobs:
   tlc:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The full config needs about 38 minutes on a runner: the search takes 29 minutes and the
+    # liveness check follows. #188 tracks the reduction that lets this limit come down.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
