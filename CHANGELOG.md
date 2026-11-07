@@ -35,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
 - The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
 
@@ -46,6 +47,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
+- Publish the first daily report of a game day even when the run starts after the first puck drop, with a `late` gate reason and a warning. Before this, a late trigger published nothing. [fix:report]
 - Fail a backfill that the time budget stops before it reads one older day or game. The last two days do not count, because a daily run completes the day that closed since the last run. Before, each run read the same recent days, stopped, and exited 75, so the backfill never finished and nothing said why. The refresh now exits 1 and names `--budget-seconds`. [fix:store]
 - Read a failed NHL score day again on the next refresh, for 30 days. A day that failed and was followed by a good day was never read again, so its games were missing from the Elo and the fit. [fix:store]
 - Refuse a boxscore that does not have exactly one starting goalie for each team. A boxscore without a goalie made the next refresh stop with a database error. [fix:sources]
