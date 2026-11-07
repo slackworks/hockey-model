@@ -76,7 +76,11 @@ if [[ ! -f "$marker" ]]; then
   if ((refresh_rc != 0)); then
     exit "$refresh_rc"
   fi
-  case "$(jq -r '.backfill_complete' "$report")" in
+  complete="$(jq -r '.backfill_complete' "$report")" || {
+    echo "daily-prepare: cannot read $report with jq." >&2
+    exit 1
+  }
+  case "$complete" in
     true) ;;
     false)
       echo "daily-prepare: the backfill stopped before it reached 2014-10-01; run it again." >&2
