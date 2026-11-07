@@ -200,6 +200,21 @@ The test reads the `CONSTANTS` block of the `.cfg` file with one shape regex for
 It then checks in code that each needed value is an integer, as `rules/regex-validation.md` says.
 A missing or non-integer constant fails the test with a message that names the constant and the file.
 
+### Smaller configs (#185, partial)
+
+Sweep with `ArrivalsCount = FALSE`, all properties on, and 4 workers for each run.
+
+| Config | Distinct states | Time |
+| --- | --- | --- |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`) | 295,932 | 12 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 11,354 | 1 s |
+| `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,450,576 | 1 min 32 s |
+| Full `.cfg` | 21,233,742 | 23 min 22 s |
+
+Every config in the sweep passes.
+The full config is not yet replaced in CI.
+The reductions, the preservation arguments, the break-test coverage, and the repeated timings are open in #188.
+
 ## Properties
 
 Each property names the code rule that it guards, and the break test that proves it is not empty.
@@ -388,6 +403,14 @@ The path filter runs TLC on such a change.
 - The `--date` input. It names files and does not change the state machine.
 - A job that the runner kills before the cache save, and cache eviction. Both drop a run or the whole store. The cache-scope work in #139 covers them.
 - Due days in calm weather. The model assumes that a good re-read resolves every game.
+
+## Semgrep scope (#182)
+
+The nbl-dev Semgrep catalog has no TLA+ ruleset.
+So the scan reports `unknown_type` for `specs/daily_prepare.tla` and skips it.
+This gap is accepted.
+The file is model text, and TLC reads it. Nothing in the repo runs it as code.
+The catalog lives in the nbl-dev plugin, outside this repo, so a catalog entry is not a change this repo can make.
 
 ## Appendix: reference spec
 
