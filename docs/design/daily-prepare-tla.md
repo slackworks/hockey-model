@@ -195,10 +195,12 @@ Day 1 is the oldest day, so window 1 holds days 3 and 4, and day 4 is open.
 
 `specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, and the other constants as above.
 
-With these values, TLC finds 21,233,742 distinct states in the first model, and 295,932 in the stall model.
+With these values, TLC finds 27,181,712 distinct states in the first model, and 295,722 in the stall model.
 Before the arrival step, the counts were 4,000,218 and 16,050.
 The arrival step, the `arrived` set, and the `backlog` flag multiply the state space.
-The first model took 23 minutes 22 seconds with `-workers auto` on the development machine in the #186 run.
+The first model took 29 minutes 21 seconds with `-workers auto` on the development machine in the #186 run.
+Other checks ran on the same machine during that run, so the figure is an upper bound.
+The `tla` CI job time for the same spec is the cleaner figure.
 The earlier figure, 3 minutes 14 seconds, was on a 10-core Mac, so the two times are not a controlled comparison.
 The `tla` CI job has a 30-minute timeout, so the new run time leaves little margin.
 #188 tracks the reduction.
@@ -221,10 +223,10 @@ Sweep with `ArrivalsCount = FALSE`, all properties on, and 4 workers for each ru
 
 | Config | Distinct states | Time |
 | --- | --- | --- |
-| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`) | 295,932 | 12 s |
-| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 11,354 | 1 s |
-| `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,450,576 | 1 min 32 s |
-| Full `.cfg` | 21,233,742 | 23 min 22 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`) | 295,722 | 12 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 10,982 | 1 s |
+| `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,504,428 | 1 min 35 s |
+| Full `.cfg` | 27,181,712 | 29 min 21 s (upper bound) |
 
 Every config in the sweep passes.
 The full config is not yet replaced in CI.
@@ -276,7 +278,10 @@ The first one was a limit of the code. Issue #178 fixed it.
    `BacklogStallExitsOne` fails in the stall `.cfg` with `ArrivalsCount = TRUE`, and it passes with the current rule.
    The current rule is the one that the code uses (`BACKLOG_BEFORE`, test `test_a_day_that_closed_since_the_last_run_does_not_count_as_progress`).
 5. The reorder fix (`BacklogFirst = TRUE`) passes the stall `.cfg` and the full `.cfg`, both with the current rule.
-   The full run took 33 minutes 2 seconds and 32,886,360 distinct states, against 23 minutes 22 seconds and 21,233,742 for the current order.
+   The full run took 32 minutes 49 seconds and 32,886,360 distinct states, against 29 minutes 21 seconds and 27,181,712 for the current order.
+   The reorder count is the same as before the open-day fix (finding 6).
+   In the full `.cfg`, the first tick closes the only open day, and a reorder run reaches that day only after day 1 is abandoned, which needs a tick.
+   So the full `.cfg` under the reorder never reads the open day while it is open, and the stall `.cfg` is the check that does.
    It does not remove the need for the current rule.
    With `BacklogFirst = TRUE` and `ArrivalsCount = TRUE`, `BacklogStallExitsOne` still fails in the stall `.cfg`, because a run can count an arrival after the backlog is complete.
    The full `.cfg` with both settings was not run.
