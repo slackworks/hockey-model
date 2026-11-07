@@ -30,7 +30,7 @@ def test_help_prints_usage_and_exits_zero() -> None:
     assert "Exit codes:" in result.stdout
 
 
-def test_help_prints_the_whole_exit_code_block() -> None:
+def test_help_names_the_deadlock_exit_code() -> None:
     assert "for a deadlock" in _run("--help").stdout
 
 
@@ -129,6 +129,49 @@ def test_unreadable_java_version_fails_and_asks_for_java_eleven(tmp_path: Path) 
     result = _run(env=_env_with_fakes(tmp_path, jars, java=_fake_java("garbage")))
     assert result.returncode == 1
     assert "cannot read the Java version" in result.stderr
+    assert "First line of its output: garbage" in result.stderr
+
+
+def test_quoted_number_before_the_version_line_is_ignored(tmp_path: Path) -> None:
+    # A banner line with a quoted number must not stand in for the version.
+    jars = tmp_path / "jars"
+    banner = """case "$*" in -version*) echo 'Picked up X: "9 apples"' >&2; """
+    java = banner + """echo 'openjdk version "17.0.7"' >&2; exit 0 ;; esac"""
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=java, curl="exit 22"))
+    assert "too old" not in result.stderr
+    assert "cannot download tla2tools" in result.stderr
+
+
+def test_failed_java_version_command_names_its_output(tmp_path: Path) -> None:
+    jars = tmp_path / "jars"
+    java = 'case "$*" in -version*) echo "no runtime" >&2; exit 1 ;; esac\nexit 0'
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=java))
+    assert result.returncode == 1
+    assert "cannot read the Java version" in result.stderr
+    assert "First line of its output: no runtime" in result.stderr
+
+
+def test_failed_sha_tool_names_the_private_copy(tmp_path: Path) -> None:
+    jars = tmp_path / "jars"
+    jars.mkdir()
+    (jars / "tla2tools-v1.7.4.jar").write_bytes(b"jar bytes")
+    result = _run(env=_env_with_fakes(tmp_path, jars, java=_JAVA_17, sha256sum="exit 1"))
+    assert result.returncode == 1
+    assert "cannot compute the SHA-256 of the private copy" in result.stderr
+
+
+def test_shasum_is_used_when_sha256sum_is_missing(tmp_path: Path) -> None:
+    jars = tmp_path / "jars"
+    jars.mkdir()
+    (jars / "tla2tools-v1.7.4.jar").write_bytes(b"jar bytes")
+    env = _env_with_fakes(tmp_path, jars, java=_JAVA_17, shasum='echo "deadbeef  $3"')
+    env["PATH"] = os.pathsep.join(
+        [str(tmp_path / "bin"), _path_without({"sha256sum", "shasum"}, tmp_path)]
+    )
+    result = _run(env=env)
+    assert result.returncode == 1
+    assert "checksum mismatch" in result.stderr
+    assert "actual:   deadbeef" in result.stderr
 
 
 def test_missing_sha256_tools_fail_and_name_both(tmp_path: Path) -> None:
@@ -238,6 +281,8 @@ def test_a_failed_second_config_returns_its_code(tmp_path: Path) -> None:
         (11, "found a deadlock (exit 11)"),
         (12, "found a violated invariant (exit 12)"),
         (13, "found a violated action or temporal property (exit 13)"),
+        (10, "failed with exit 10. No counterexample"),
+        (130, "failed with exit 130. No counterexample"),
         (255, "failed with exit 255. No counterexample"),
     ],
 )

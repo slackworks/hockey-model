@@ -9,8 +9,9 @@
 #   TLA_TOOLS_DIR  Directory for the jar. Default: $HOME/.cache/hockey-model/tla.
 #
 # Exit codes: 0 when every property holds. 12 for a violated invariant. 13 for a violated
-# action or temporal property. 11 for a deadlock. 2 for an unknown argument. Any other code
-# comes from TLC or from this script, and the output above names the cause.
+# action or temporal property. 11 for a deadlock. 2 for an unknown argument. 1 for a setup
+# failure in this script, or for a JVM crash. Any other code comes from TLC, and the output
+# above names the cause.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,7 +31,8 @@ Run TLC on specs/daily_prepare.tla with specs/daily_prepare_stall.cfg and specs/
 Environment:
   TLA_TOOLS_DIR  Directory for the jar. Default: $HOME/.cache/hockey-model/tla.
 Exit codes: 0 when every property holds. 12 for a violated invariant. 13 for a violated
-action or temporal property. 11 for a deadlock. Other codes come from TLC or from this script.
+action or temporal property. 11 for a deadlock. 2 for an unknown argument. 1 for a setup
+failure in this script, or for a JVM crash. Other codes come from TLC.
 EOF
 }
 
@@ -65,23 +67,19 @@ fi
 
 # An older JDK fails later with a class-version error, so the version is checked here.
 JAVA_MIN_MAJOR=11
-raw_version="$(java -version 2>&1)" || {
-  echo "tlc.sh: 'java -version' failed. Reinstall Java $JAVA_MIN_MAJOR or later." >&2
-  exit 1
-}
-if [[ ! "$raw_version" =~ \"([0-9][^\"]*)\" ]]; then
+# The match is anchored to the "version" line, so a quoted number in another line is ignored.
+# Java 8 and older report "1.8.0_292", so group 3 is the major number in both forms.
+version_re='(openjdk|java) version "(1\.)?([0-9]+)'
+raw_version="$(java -version 2>&1 || true)"
+if [[ ! "$raw_version" =~ $version_re ]]; then
   echo "tlc.sh: cannot read the Java version from 'java -version'." >&2
+  echo "  First line of its output: ${raw_version%%$'\n'*}" >&2
   echo "  Install Java $JAVA_MIN_MAJOR or later." >&2
   exit 1
 fi
-java_version="${BASH_REMATCH[1]}"
-# Java 8 and older report "1.8.0_292", so the major number is the part after "1.".
-if [[ "$java_version" == 1.* ]]; then
-  java_version="${java_version#1.}"
-fi
-java_major="${java_version%%[!0-9]*}"
-if [[ -z "$java_major" ]] || ((java_major < JAVA_MIN_MAJOR)); then
-  echo "tlc.sh: Java ${java_major:-$java_version} is too old for TLC." >&2
+java_major="${BASH_REMATCH[3]}"
+if ((java_major < JAVA_MIN_MAJOR)); then
+  echo "tlc.sh: Java $java_major is too old for TLC." >&2
   echo "  Install Java $JAVA_MIN_MAJOR or later." >&2
   exit 1
 fi
@@ -95,7 +93,11 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-mkdir -p "$TLA_TOOLS_DIR"
+mkdir -p "$TLA_TOOLS_DIR" || {
+  echo "tlc.sh: cannot create the jar directory $TLA_TOOLS_DIR." >&2
+  echo "  Set TLA_TOOLS_DIR to a writable directory." >&2
+  exit 1
+}
 if [[ ! -f "$JAR" ]]; then
   if ! curl -fsSL -o "$tmp/download.jar" "$TLA_URL"; then
     echo "tlc.sh: cannot download tla2tools $TLA_TOOLS_VERSION from $TLA_URL." >&2
@@ -107,8 +109,14 @@ fi
 
 # Verify and run one private copy. Checking the cached file and then running it would leave a
 # gap in which another user of a shared TLA_TOOLS_DIR could replace it.
-cp "$JAR" "$tmp/tla2tools.jar"
-actual="$(sha256_of "$tmp/tla2tools.jar")"
+cp "$JAR" "$tmp/tla2tools.jar" || {
+  echo "tlc.sh: cannot copy $JAR to a private directory." >&2
+  exit 1
+}
+actual="$(sha256_of "$tmp/tla2tools.jar")" || {
+  echo "tlc.sh: cannot compute the SHA-256 of the private copy of $JAR." >&2
+  exit 1
+}
 if [[ "$actual" != "$TLA_TOOLS_SHA256" ]]; then
   rm -f "$JAR"
   echo "tlc.sh: checksum mismatch for $JAR; the file was deleted." >&2
@@ -134,8 +142,14 @@ done
 case "$rc" in
   0) ;;
   11) echo "tlc.sh: TLC found a deadlock (exit 11). The trace is above." >&2 ;;
-  12) echo "tlc.sh: TLC found a violated invariant (exit 12). The counterexample trace is above." >&2 ;;
-  13) echo "tlc.sh: TLC found a violated action or temporal property (exit 13). The counterexample trace is above." >&2 ;;
+  12)
+    echo "tlc.sh: TLC found a violated invariant (exit 12)." >&2
+    echo "  The counterexample trace is above." >&2
+    ;;
+  13)
+    echo "tlc.sh: TLC found a violated action or temporal property (exit 13)." >&2
+    echo "  The counterexample trace is above." >&2
+    ;;
   *) echo "tlc.sh: TLC failed with exit $rc. No counterexample: read the TLC error above." >&2 ;;
 esac
 exit "$rc"
