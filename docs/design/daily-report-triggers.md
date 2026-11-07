@@ -66,7 +66,9 @@ The overheads are measured from these notices before the trigger lead is set.
 
 ## Missed days
 
-A run after the puck drop with no release writes a warning and publishes nothing.
+A run after the puck drop with no release writes a warning and publishes the first report of the day late.
+The games that have not started still need the report, so a late first report is better than none.
+A late report predicts the games that are finished as known at their puck drop, so it is full.
 A separate scheduled check alerts when a game day has no release, or when its only report has every row made after the start (#112).
 
 ## Actions cost

@@ -151,7 +151,9 @@ def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path:
     assert json.loads(result.stdout)["reason"] == "already-published"
 
 
-def test_gate_after_the_puck_drop_publishes_nothing_and_warns(fakes: Path, tmp_path: Path) -> None:
+def test_gate_after_the_puck_drop_publishes_the_first_report_late_and_warns(
+    fakes: Path, tmp_path: Path
+) -> None:
     due = json.dumps(
         {
             "due": False,
@@ -165,15 +167,17 @@ def test_gate_after_the_puck_drop_publishes_nothing_and_warns(fakes: Path, tmp_p
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "due": False,
-        "publish": False,
+        "due": True,
+        "publish": True,
         "tag": TAG,
-        "reason": "puck-drop-passed",
+        "reason": "late",
         "date": DAY,
     }
+    assert "::warning::" in result.stderr
+    assert "has started" in result.stderr
 
 
-def test_gate_inside_the_margin_says_the_puck_drop_is_too_close(
+def test_gate_inside_the_margin_publishes_the_first_report_late(
     fakes: Path, tmp_path: Path
 ) -> None:
     due = json.dumps(
@@ -189,7 +193,8 @@ def test_gate_inside_the_margin_says_the_puck_drop_is_too_close(
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due)
     result = _run("report-gate.sh", env, "--date", DAY, "--margin-seconds", "600")
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["reason"] == "puck-drop-too-close"
+    out = json.loads(result.stdout)
+    assert (out["reason"], out["due"], out["publish"]) == ("late", True, True)
     assert "has started" not in result.stderr
     assert "is less than 600 seconds away" in result.stderr
     assert "gh release view" in "\n".join(_calls(tmp_path))

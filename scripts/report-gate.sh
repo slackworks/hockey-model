@@ -6,8 +6,8 @@
 #   --date   Eastern game day to check. Default: the game day that holds now.
 #   --force  Publish even outside the trigger slot. A day that is already
 #            published is still skipped.
-#   --margin-seconds  Seconds the build needs after this run starts. The day is due only
-#            when the run can finish before the first puck drop. Default: 0.
+#   --margin-seconds  Seconds the build needs after this run starts. A published day is replaced
+#            only when the run can finish before the first puck drop. Default: 0.
 #   --dry-run  Build a report that the caller does not publish. This implies --force,
 #            and the published-release check is skipped, so a published day is due again.
 #
@@ -119,16 +119,17 @@ if [[ "$dry_run" != true ]]; then
     elif [[ "$due" == "true" ]]; then
       reason="due"
     else
-      # The day has no release, and this run cannot publish before the puck drop. Say which
-      # case it is, so a missed day shows in the run log.
+      # The day has no release, and this run cannot beat the puck drop. A late report still
+      # has the games that have not started, so the first report of a day always publishes.
+      # Say which case it is, so a late day shows in the run log.
+      due="true"
+      reason="late"
       if [[ "$puck_drop_passed" == true ]]; then
-        reason="puck-drop-passed"
         echo "::warning::report-gate: the first puck drop of $day${first_drop:+ was at $first_drop}" \
-          "has started and no report was published. This run cannot publish it." >&2
+          "has started. This run publishes the first report of the day late." >&2
       else
-        reason="puck-drop-too-close"
         echo "::warning::report-gate: the first puck drop of $day${first_drop:+ is at $first_drop}" \
-          "is less than $margin_s seconds away, so this run cannot publish before it." >&2
+          "is less than $margin_s seconds away. This run publishes the first report late." >&2
       fi
     fi
   fi
