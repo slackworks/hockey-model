@@ -67,7 +67,7 @@ fi
 
 # An older JDK fails later with a class-version error, so the version is checked here.
 JAVA_MIN_MAJOR=11
-# The match is anchored to the "version" line, so a quoted number in another line is ignored.
+# The match is anchored to the `version "` token, so a quoted number in another line is ignored.
 # Java 8 and older report "1.8.0_292", so group 3 is the major number in both forms.
 version_re='(openjdk|java) version "(1\.)?([0-9]+)'
 raw_version="$(java -version 2>&1 || true)"
