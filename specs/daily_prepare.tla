@@ -83,7 +83,9 @@ ScoreDone(d) == Done(Score(d))
 BoxDone(d) == ~WantBox(d) \/ Abandoned(Box(d))
 WindowDays(k) == {d \in Days : (NWindows - k) * DaysPerWindow < d
                                 /\ d <= (NWindows - k + 1) * DaysPerWindow}
-WindowDone(k) == \A d \in WindowDays(k) : ScoreDone(d) /\ BoxDone(d)
+\* A day that is still open is not required to be complete: the model does not record a good
+\* read of an open day, and a failed or skipped read leaves the run unclean, so no marker.
+WindowDone(k) == \A d \in WindowDays(k) : (d \in open \/ ScoreDone(d)) /\ BoxDone(d)
 
 Broken(u) == IF u.kind = "score" THEN u.day \in BrokenScore ELSE u.day \in BrokenBox
 
@@ -161,7 +163,9 @@ Attempt(u, ok) ==
     /\ reads' = reads + 1
     /\ progress' = (progress \/ CountsAsProgress(u, ok))
     /\ backlog' = (backlog \/ CountsAsBacklog(u, ok))
-    /\ okRead' = [okRead EXCEPT ![u] = @ \/ ok]
+    \* A good read of a day that is still open does not complete it (day_is_complete needs a
+    \* read after the close). streak and the ages still reset, as in source_reads.
+    /\ okRead' = [okRead EXCEPT ![u] = @ \/ (ok /\ u.day \notin open)]
     /\ IF ok
        THEN /\ streak' = [streak EXCEPT ![u] = 0]
             /\ span' = [span EXCEPT ![u] = FALSE]
@@ -286,10 +290,10 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 -----------------------------------------------------------------------------
 \* Safety
 
-\* Checked on the step that writes the marker. A day that is still open then needs only its
-\* score read. Once it closes, the plain refresh after the marker reads its missing boxscores
-\* (the non-backfill branch of nhl() reads every missing boxscore), so the model does not
-\* require them in a later state.
+\* Checked on the step that writes the marker. A day that is still open then is not required to
+\* be complete. Once it closes, the plain refresh after the marker reads the day and its missing
+\* boxscores (the non-backfill branch of nhl() reads every missing boxscore), so the model does
+\* not require them in a later state.
 MarkerOnlyWhenComplete == [][(~marker /\ marker') => \A k \in 1..NWindows : WindowDone(k)]_vars
 
 AbandonedIsNoted == phase /= "idle" => gaps \subseteq noted
@@ -311,7 +315,9 @@ StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
 
 \* The same rule, judged on the backlog alone. An arrival does not count here. With
 \* ArrivalsCount TRUE, a run can count an arrival as progress and still exit 75 with no
-\* backlog unit finished. This property fails then, and StallExitsOne does not.
+\* backlog unit finished. This property fails then, and StallExitsOne does not. With
+\* ArrivalsCount FALSE, progress and backlog are equal, so this property is the same check as
+\* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
 BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
                               => exitCode' = 1]_vars
 

@@ -157,12 +157,19 @@ Abstractions, and the reason for each:
 5. A tick closes the oldest open day.
    `open` holds the days that are not closed, and it starts as `OpenDays`.
    `arrived` holds the days that closed since the last run ended.
+   One tick is `ABANDON_MIN_SPAN_DAYS`, which is 0.5 day, so the model closes two days for each real day.
    The model closes at most `|OpenDays|` days, so the state space stays finite.
    No new day arrives, so an endless daily run is not in the model.
    One arrival in one run shows the stall (see the findings).
 6. In the code, `BACKLOG_BEFORE` leaves out the days that are too recent to count.
    The model leaves out the days that closed since the last run, which is the case of a daily run.
-   This is a narrower rule than the code's, so it is an abstraction and not a proof of equivalence.
+   The code uses a date cutoff: today minus `BACKLOG_BEFORE`, which is 2 days, or about 4 ticks.
+   A second run in the same tick, such as a retry after exit 75, sees `arrived = {}`.
+   It can count a day that closed one tick ago, and the code would not count that day.
+   So the model counts as much progress as the code, or more, and the code exits 1 in at least as many cases.
+   The safety properties are sound in that direction.
+   The model cannot show a false exit 1 in the code, where the only work left is within 2 days of today.
+   #191 tracks the cutoff as a tick count.
 7. `progress` is what the code counts, and it follows `ArrivalsCount`.
    `backlog` is the ground truth: a finished unit that is not an arrival.
    The code chooses the exit code from `progress`.
@@ -172,6 +179,14 @@ Abstractions, and the reason for each:
 9. After the marker, the plain refresh reads every missing boxscore (the non-backfill branch of `nhl()`).
    So the model does not require the boxscores of a day that closes after the marker.
    `MarkerOnlyWhenComplete` checks the step that writes the marker, for this reason.
+10. A good read of a day that is still open does not set `okRead`.
+    The code needs a read after the close (`day_is_complete`, `DAY_COMPLETE_AFTER_CLOSE`), so a day that closes is read again.
+    The model pays for that read, which is the read that the old rule counted as progress.
+    `streak` and the ages reset on any good read, as in `source_reads`.
+    `WindowDone` does not require an open day to be complete.
+    A failed or skipped read of an open day leaves the run unclean, so no marker follows.
+11. `BacklogStallExitsOne` is the same check as `StallExitsOne` when `ArrivalsCount` is `FALSE`, because `progress` and `backlog` are equal then.
+    It exists as the target of the `ArrivalsCount` mutation, and it is not an independent check.
 
 ## Constants
 
@@ -186,7 +201,7 @@ The arrival step, the `arrived` set, and the `backlog` flag multiply the state s
 The first model took 23 minutes 22 seconds with `-workers auto` on the development machine in the #186 run.
 The earlier figure, 3 minutes 14 seconds, was on a 10-core Mac, so the two times are not a controlled comparison.
 The `tla` CI job has a 30-minute timeout, so the new run time leaves little margin.
-#185 tracks the reduction.
+#188 tracks the reduction.
 The liveness check of the full graph runs on one thread, so more workers speed up only the search.
 
 `tests/test_tla_constants.py` keeps the values of both `.cfg` files in step with the code:
@@ -266,7 +281,11 @@ The first one was a limit of the code. Issue #178 fixed it.
    With `BacklogFirst = TRUE` and `ArrivalsCount = TRUE`, `BacklogStallExitsOne` still fails in the stall `.cfg`, because a run can count an arrival after the backlog is complete.
    The full `.cfg` with both settings was not run.
    The current counting rule is the fix. The reorder does not replace it and costs more states, so the code keeps its current order.
-6. Arrivals expose a gap in `MarkerOnlyWhenComplete`.
+6. A read of a day that was still open completed the day once it closed (found in the review of PR #190).
+   The model skipped the re-read after the close, which the code pays every day.
+   `Attempt` now sets `okRead` only for a day that is closed, and `WindowDone` does not require an open day to be complete.
+   The stall `.cfg` still passes with the current rule, and `ArrivalsCount = TRUE` still fails.
+7. Arrivals expose a gap in `MarkerOnlyWhenComplete`.
    A run can write the marker while a day is open, and the day closes later with its boxscore unread.
    The code covers this with the plain refresh after the marker, so the invariant now checks the step that writes the marker.
 
@@ -505,7 +524,9 @@ ScoreDone(d) == Done(Score(d))
 BoxDone(d) == ~WantBox(d) \/ Abandoned(Box(d))
 WindowDays(k) == {d \in Days : (NWindows - k) * DaysPerWindow < d
                                 /\ d <= (NWindows - k + 1) * DaysPerWindow}
-WindowDone(k) == \A d \in WindowDays(k) : ScoreDone(d) /\ BoxDone(d)
+\* A day that is still open is not required to be complete: the model does not record a good
+\* read of an open day, and a failed or skipped read leaves the run unclean, so no marker.
+WindowDone(k) == \A d \in WindowDays(k) : (d \in open \/ ScoreDone(d)) /\ BoxDone(d)
 
 Broken(u) == IF u.kind = "score" THEN u.day \in BrokenScore ELSE u.day \in BrokenBox
 
@@ -583,7 +604,9 @@ Attempt(u, ok) ==
     /\ reads' = reads + 1
     /\ progress' = (progress \/ CountsAsProgress(u, ok))
     /\ backlog' = (backlog \/ CountsAsBacklog(u, ok))
-    /\ okRead' = [okRead EXCEPT ![u] = @ \/ ok]
+    \* A good read of a day that is still open does not complete it (day_is_complete needs a
+    \* read after the close). streak and the ages still reset, as in source_reads.
+    /\ okRead' = [okRead EXCEPT ![u] = @ \/ (ok /\ u.day \notin open)]
     /\ IF ok
        THEN /\ streak' = [streak EXCEPT ![u] = 0]
             /\ span' = [span EXCEPT ![u] = FALSE]
@@ -708,10 +731,10 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 -----------------------------------------------------------------------------
 \* Safety
 
-\* Checked on the step that writes the marker. A day that is still open then needs only its
-\* score read. Once it closes, the plain refresh after the marker reads its missing boxscores
-\* (the non-backfill branch of nhl() reads every missing boxscore), so the model does not
-\* require them in a later state.
+\* Checked on the step that writes the marker. A day that is still open then is not required to
+\* be complete. Once it closes, the plain refresh after the marker reads the day and its missing
+\* boxscores (the non-backfill branch of nhl() reads every missing boxscore), so the model does
+\* not require them in a later state.
 MarkerOnlyWhenComplete == [][(~marker /\ marker') => \A k \in 1..NWindows : WindowDone(k)]_vars
 
 AbandonedIsNoted == phase /= "idle" => gaps \subseteq noted
@@ -733,7 +756,9 @@ StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
 
 \* The same rule, judged on the backlog alone. An arrival does not count here. With
 \* ArrivalsCount TRUE, a run can count an arrival as progress and still exit 75 with no
-\* backlog unit finished. This property fails then, and StallExitsOne does not.
+\* backlog unit finished. This property fails then, and StallExitsOne does not. With
+\* ArrivalsCount FALSE, progress and backlog are equal, so this property is the same check as
+\* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
 BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
                               => exitCode' = 1]_vars
 
