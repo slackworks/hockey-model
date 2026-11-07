@@ -2,7 +2,7 @@
 
 ## Problem
 
-The daily report must be published before the first puck drop of each game day.
+The daily report is published before the first puck drop of each game day. When no run did, the first report of the day is published late.
 A report published after puck drop is useless for scoring, because a reader drops every prediction made after the start.
 GitHub Actions schedules run in UTC, and a scheduled run can start 10 to 60 minutes late, or be dropped.
 A fix that depends on one run starting on time fails when that run is late.

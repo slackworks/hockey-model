@@ -21,7 +21,7 @@ on:
         type: boolean
         default: false
 
-# One budget for the whole workflow. The gate reserves it before puck drop, and the report
+# One budget for the whole workflow. The gate reserves it before the build starts, on time or late, and the report
 # step enforces it.
 env:
   REPORT_BUDGET_S: "600"

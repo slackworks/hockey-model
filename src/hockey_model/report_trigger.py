@@ -35,8 +35,8 @@ def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | No
     """Return True while a run that starts at ``now`` can publish before the puck drop.
 
     Pass the time of the run itself. ``margin`` is the time the run needs after it starts,
-    such as the report budget. A run that finishes after the puck drop publishes a report
-    that no reader can use, so the gate skips it.
+    such as the report budget. A run that finishes after the puck drop cannot replace a
+    published report, so the gate skips the replace. A day with no release still publishes late.
     """
     require_utc(now, "report trigger now")
     require_utc(first_start, "first puck drop")
