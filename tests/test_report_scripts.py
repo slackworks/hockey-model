@@ -151,30 +151,13 @@ def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path:
     assert json.loads(result.stdout)["reason"] == "already-published"
 
 
-def test_gate_after_the_puck_drop_publishes_nothing_and_warns(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps(
-        {
-            "due": False,
-            "tag": TAG,
-            "date": DAY,
-            "games": 3,
-            "first_puck_drop_utc": "2026-11-05T00:00:00Z",
-            "puck_drop_passed": True,
-        }
-    )
-    result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {
-        "due": False,
-        "publish": False,
-        "tag": TAG,
-        "reason": "puck-drop-passed",
-        "date": DAY,
-    }
-
-
-def test_gate_inside_the_margin_says_the_puck_drop_is_too_close(
-    fakes: Path, tmp_path: Path
+@pytest.mark.parametrize(
+    ("puck_drop_passed", "margin_args"),
+    [(True, []), (False, ["--margin-seconds", "600"])],
+    ids=["after-the-puck-drop", "inside-the-margin"],
+)
+def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
+    fakes: Path, tmp_path: Path, puck_drop_passed: bool, margin_args: list[str]
 ) -> None:
     due = json.dumps(
         {
@@ -183,17 +166,22 @@ def test_gate_inside_the_margin_says_the_puck_drop_is_too_close(
             "date": DAY,
             "games": 3,
             "first_puck_drop_utc": "2026-11-05T00:00:00Z",
-            "puck_drop_passed": False,
+            "puck_drop_passed": puck_drop_passed,
         }
     )
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due)
-    result = _run("report-gate.sh", env, "--date", DAY, "--margin-seconds", "600")
+    result = _run("report-gate.sh", env, "--date", DAY, *margin_args)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["reason"] == "puck-drop-too-close"
-    assert "has started" not in result.stderr
-    assert "is less than 600 seconds away" in result.stderr
+    assert json.loads(result.stdout) == {
+        "due": True,
+        "publish": True,
+        "tag": TAG,
+        "reason": "late",
+        "date": DAY,
+    }
     assert "gh release view" in "\n".join(_calls(tmp_path))
     assert "::warning::" in result.stderr
+    assert "has passed or is less than" in result.stderr
     assert "2026-11-05T00:00:00Z" in result.stderr
 
 

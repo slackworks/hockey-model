@@ -6,15 +6,22 @@
 #   --date   Eastern game day to check. Default: the game day that holds now.
 #   --force  Publish even outside the trigger slot. A day that is already
 #            published is still skipped.
-#   --margin-seconds  Seconds the build needs after this run starts. The day is due only
-#            when the run can finish before the first puck drop. Default: 0.
+#   --margin-seconds  Seconds the build needs after this run starts. A published day is replaced
+#            only when the run can finish before the first puck drop. Default: 0.
 #   --dry-run  Build a report that the caller does not publish. This implies --force,
 #            and the published-release check is skipped, so a published day is due again.
 #
 # Prints one JSON object on stdout:
 #   {"due": bool, "publish": bool, "tag": str, "reason": str, "date": str}.
 # "due" says the report is built. "publish" says the report becomes a release, and it is
-# false for --dry-run.
+# false for --dry-run. "reason" is one of:
+#   due                 the day has no release and this run beats the puck drop
+#   late                the day has no release and this run does not beat the puck drop; the
+#                       first report of the day still publishes
+#   replace             the day has a release and this run beats the puck drop; it is replaced
+#   already-published   the day has a release and this run does not replace it
+#   no-games            the schedule lists no games, so nothing publishes
+#   dry-run             the report is built and not published
 # Exits non-zero when the schedule payload is malformed or the release lookup fails.
 set -euo pipefail
 
@@ -91,7 +98,6 @@ due="$(jq -r '.due' <<<"$status_json")"
 games="$(jq -r '.games' <<<"$status_json")"
 day="$(jq -r '.date' <<<"$status_json")"
 first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
-puck_drop_passed="$(jq -r '.puck_drop_passed // false' <<<"$status_json")"
 
 reason="dry-run"
 if [[ "$dry_run" != true ]]; then
@@ -119,17 +125,13 @@ if [[ "$dry_run" != true ]]; then
     elif [[ "$due" == "true" ]]; then
       reason="due"
     else
-      # The day has no release, and this run cannot publish before the puck drop. Say which
-      # case it is, so a missed day shows in the run log.
-      if [[ "$puck_drop_passed" == true ]]; then
-        reason="puck-drop-passed"
-        echo "::warning::report-gate: the first puck drop of $day${first_drop:+ was at $first_drop}" \
-          "has started and no report was published. This run cannot publish it." >&2
-      else
-        reason="puck-drop-too-close"
-        echo "::warning::report-gate: the first puck drop of $day${first_drop:+ is at $first_drop}" \
-          "is less than $margin_s seconds away, so this run cannot publish before it." >&2
-      fi
+      # The day has no release, and this run cannot beat the puck drop. A late report still
+      # has the games that have not started, so the first report of a day always publishes.
+      due="true"
+      reason="late"
+      echo "::warning::report-gate: the first puck drop of $day${first_drop:+ at $first_drop}" \
+        "has passed or is less than $margin_s seconds away. This run publishes the first" \
+        "report of the day late." >&2
     fi
   fi
 fi

@@ -3,7 +3,8 @@
 The scheduler fires at minute ``TRIGGER_MINUTE_UTC`` of each hour in ``TRIGGER_HOURS_UTC``.
 Every trigger that fires before the first puck drop of a game day is due. The gate then
 skips a day that already has a release, so the first run that starts before the puck drop
-publishes. A late run therefore still publishes when it beats the puck drop. A game day with
+publishes. A day with no release also publishes late, because the games that have not started
+still need a report (see scripts/report-gate.sh). A game day with
 no games has its first puck drop at the end of the day. Game days are Eastern dates: see
 game_day.py. How the hours and the minute were chosen: docs/design/daily-report-triggers.md.
 """
@@ -34,8 +35,8 @@ def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | No
     """Return True while a run that starts at ``now`` can publish before the puck drop.
 
     Pass the time of the run itself. ``margin`` is the time the run needs after it starts,
-    such as the report budget. A run that finishes after the puck drop publishes a report
-    that no reader can use, so the gate skips it.
+    such as the report budget. A run that finishes after the puck drop cannot replace a
+    published report, so the gate skips the replace. A day with no release still publishes late.
     """
     require_utc(now, "report trigger now")
     require_utc(first_start, "first puck drop")

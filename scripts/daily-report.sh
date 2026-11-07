@@ -7,7 +7,7 @@
 #
 # Reads the store path from HOCKEY_MODEL_DB. The morning run of daily-prepare.sh does the
 # slow work. When its prepared-DATE marker is missing, this script stops with exit code 1
-# and writes no report, because the slow work does not fit before the puck drop. Run the
+# and writes no report, because the slow work does not fit in the report budget. Run the
 # daily-prepare workflow for the day, then run this script again. Any failed step stops
 # the script with its exit code, so a failed run writes no report.
 #

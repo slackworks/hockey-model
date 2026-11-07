@@ -3,7 +3,7 @@
 # The schedule fires at each trigger slot. The gate job publishes at the first slot that runs
 # while the day's first puck drop is still ahead. Each later slot before the puck drop replaces
 # the release files and notes. After the puck drop, a run skips a published day, and a run that
-# finds no release publishes nothing. The cron minute and hours
+# finds no release publishes the first report of the day late. The cron minute and hours
 # MUST match TRIGGER_MINUTE_UTC and TRIGGER_HOURS_UTC in report_trigger.py.
 name: daily-report
 
@@ -21,7 +21,7 @@ on:
         type: boolean
         default: false
 
-# One budget for the whole workflow. The gate reserves it before puck drop, and the report
+# One budget for the whole workflow. The gate reserves it before the build starts, on time or late, and the report
 # step enforces it.
 env:
   REPORT_BUDGET_S: "600"

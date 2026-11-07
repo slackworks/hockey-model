@@ -95,8 +95,10 @@ if ! jq -e '(.games | type == "array") and all(.games[]; .made_after_start | typ
   exit 1
 fi
 
-# A report with no rows has no game to judge, so it raises no alert.
-if jq -e '(.games | length) > 0 and all(.games[]; .made_after_start == true)' "$report" \
+# A report with no rows has no game to judge, so it raises no alert. A postponed row has no
+# puck drop and no prediction, so it must not hide a report whose other rows came late.
+if jq -e '[.games[] | select(.state != "PPD")] as $played
+  | ($played | length) > 0 and all($played[]; .made_after_start == true)' "$report" \
   >/dev/null; then
   echo "::error::check-daily-report: every game row of $tag was made after its start." \
     "The report came after the puck drop." >&2
