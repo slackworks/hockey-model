@@ -47,6 +47,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
 - Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
 - Publish the first daily report of a game day even when the run starts after the first puck drop, with a `late` gate reason and a warning. Before this, a late trigger published nothing. [fix:report]
 - Fail a backfill that the time budget stops before it reads one older day or game. The last two days do not count, because a daily run completes the day that closed since the last run. Before, each run read the same recent days, stopped, and exited 75, so the backfill never finished and nothing said why. The refresh now exits 1 and names `--budget-seconds`. [fix:store]
