@@ -40,7 +40,9 @@ concurrency:
 jobs:
   tlc:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The full config needs about 38 minutes on a runner: the search takes 29 minutes and the
+    # liveness check follows. #188 tracks the reduction that lets this limit come down.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
