@@ -133,6 +133,19 @@ def test_a_report_where_every_row_is_after_the_start_fails(fakes: Path, tmp_path
     assert "made after its start" in result.stderr
 
 
+def test_a_postponed_row_does_not_hide_a_late_report(fakes: Path, tmp_path: Path) -> None:
+    report = {
+        "games": [
+            {"made_after_start": True, "state": "FINAL"},
+            {"made_after_start": False, "state": "PPD"},
+        ]
+    }
+    env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_REPORT_JSON=json.dumps(report))
+    result = _run(tmp_path, env, "--date", DAY)
+    assert result.returncode == 1
+    assert "made after its start" in result.stderr
+
+
 def test_a_report_with_no_rows_raises_no_alert(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_REPORT_JSON='{"games": []}')
     result = _run(tmp_path, env, "--date", DAY)
