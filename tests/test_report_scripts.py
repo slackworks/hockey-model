@@ -356,13 +356,15 @@ def test_publish_needs_the_build_commit(fakes: Path, tmp_path: Path) -> None:
     assert "GITHUB_SHA" in result.stderr
 
 
-@pytest.mark.parametrize("bad", ["../2026-11-04", "2026-11-04 extra", "2026-1-4", "tomorrow"])
+@pytest.mark.parametrize(
+    "bad", ["../2026-11-04", "2026-11-04 extra", "2026-1-4", "tomorrow", "2026-02-30"]
+)
 def test_publish_refuses_a_malformed_date(fakes: Path, tmp_path: Path, bad: str) -> None:
     _write_report(tmp_path / "report")
     args = ("--date", bad, "--report-dir", str(tmp_path / "report"))
     result = _run("publish-daily-report.sh", _env(fakes, tmp_path), *args)
     assert result.returncode == 2
-    assert "must be YYYY-MM-DD" in result.stderr
+    assert "not a real date YYYY-MM-DD" in result.stderr
     assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
 
 

@@ -207,7 +207,15 @@ def test_a_failed_report_due_call_fails_the_check(fakes: Path, tmp_path: Path) -
 def test_a_missing_date_is_a_usage_error(fakes: Path, tmp_path: Path) -> None:
     result = _run(tmp_path, _env(fakes, tmp_path), "--date", "2026-11")
     assert result.returncode == 2
-    assert "must be YYYY-MM-DD" in result.stderr
+    assert "not a real date YYYY-MM-DD" in result.stderr
+
+
+@pytest.mark.parametrize("bad", ["2026-02-30", "2025-02-29", "2026-13-01"])
+def test_an_impossible_date_is_a_usage_error(fakes: Path, tmp_path: Path, bad: str) -> None:
+    result = _run(tmp_path, _env(fakes, tmp_path), "--date", bad)
+    assert result.returncode == 2
+    assert "not a real date" in result.stderr
+    assert _calls(tmp_path) == ""
 
 
 def test_an_unknown_argument_is_a_usage_error(fakes: Path, tmp_path: Path) -> None:

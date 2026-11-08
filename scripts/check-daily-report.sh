@@ -38,8 +38,10 @@ while (($# > 0)); do
   esac
 done
 
-if [[ ! "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-  echo "check-daily-report: --date must be YYYY-MM-DD, got '$day'; see --help" >&2
+# shellcheck source=scripts/valid-day.sh
+source "$(dirname "$0")/valid-day.sh"
+if ! is_valid_day "$day"; then
+  echo "check-daily-report: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
 fi
 
