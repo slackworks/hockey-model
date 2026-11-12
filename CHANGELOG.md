@@ -42,6 +42,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games that start on the cutoff day are no longer in the cohort. [fix:experiments]
 - Fail a confirmation run, before it writes any file, when the games scored differ from the cohort count or the run has no interval. [fix:experiments]
 - Add a note to the run payload that says why a run is inconclusive when its interval is wider than the expected effect. [feat:experiments]

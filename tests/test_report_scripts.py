@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,7 @@ LIVE = ["xg_form", "rest"]
 DAY = "2026-11-04"
 TAG = f"reports-{DAY}"
 SHA = "0123456789abcdef0123456789abcdef01234567"
+REAL_UV = shutil.which("uv") or ""
 
 
 @pytest.fixture
@@ -61,6 +63,7 @@ def fakes(tmp_path: Path) -> Path:
         '  if [[ -n "${FAKE_UV_FAIL:-}" ]]; then echo "uv boom" >&2; exit 3; fi\n'
         '  printf "%s" "$FAKE_DUE_JSON"\n'
         "fi\n"
+        'if [[ "$*" == "run hockey-model report-decide"* ]]; then exec "$FAKE_REAL_UV" "$@"; fi\n'
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
         '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'
         "fi\n"
@@ -80,6 +83,8 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "FAKE_DUE_JSON": json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3}),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,
+        # report-decide is the real command: it holds the decision the gate script prints.
+        "FAKE_REAL_UV": REAL_UV,
     }
     env.update(extra)
     return env
