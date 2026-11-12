@@ -8,7 +8,8 @@ from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from hockey_model.backtest.runner import run_backtest, write_game_records
+from hockey_model.backtest.game_records import write_game_records
+from hockey_model.backtest.runner import run_backtest
 from hockey_model.daily_report import build_report, model_identity, report_tag, write_report
 from hockey_model.game import game_win_probability
 from hockey_model.game_day import game_day_of, game_day_window

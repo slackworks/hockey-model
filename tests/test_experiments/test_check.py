@@ -10,13 +10,19 @@ Covers:
 import hashlib
 import json
 import subprocess
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from seeding import add_game, add_goalie, add_goalie_form, add_team_form
+from experiment_support import (
+    ENOUGH_GAMES,
+    FIT_SEASONS,
+    VALID_RECORD_DATA,
+    make_record,
+    register,
+    seed,
+)
+from seeding import add_game
 
-from hockey_model.backtest.metrics import MIN_BLOCK_LENGTH, MIN_INDEPENDENT_BLOCKS
 from hockey_model.backtest.runner import BacktestReport
 from hockey_model.experiments.check import (
     check_all,
@@ -30,28 +36,6 @@ from hockey_model.experiments.history import (
 )
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
 
-_VALID_RECORD_DATA = {
-    "id": "0001-valid",
-    "title": "Valid record",
-    "hypothesis": "Feature X improves log loss.",
-    "cohort": "confirmation",
-    "data_cutoff": "2026-10-31",
-    "primary_metric": "mean_per_game_log_loss",
-    "baseline": {"fit_id": 1, "commit": "abc123"},
-    "selection_folds": [[20152016, 20212022]],
-    "min_games": 10,
-    "candidate_features": ["xg_form", "rest"],
-    "look_number": 1,
-    "expected_effect": None,
-    "promotion_criterion": "95th percentile below zero",
-    "failure_outcome": "ship Elo alone",
-    "status": "registered",
-}
-
-# Seasons a confirmation run needs: selection seasons, validation seasons, and
-# seasons to fit on before the scored cohort.
-FIT_SEASONS = range(20152016, 20262027, 10001)
-
 # A record that already spent its look.
 _SPENT = {
     "status": "rejected",
@@ -63,19 +47,6 @@ _SPENT = {
         "csv_hash": "0" * 64,
     },
 }
-
-
-def _make_record(data: dict | None = None) -> ExperimentRecord:
-    """Create a valid record from base data, overridden by data."""
-    merged = {**_VALID_RECORD_DATA, **(data or {})}
-    return ExperimentRecord.from_dict(merged)
-
-
-def _register(registry: Path, data: dict | None = None) -> ExperimentRecord:
-    """Write a record into the fixture registry and return it."""
-    record = _make_record(data)
-    record.save(registry / f"{record.id}.json")
-    return record
 
 
 def _repo_root() -> Path:
@@ -103,32 +74,6 @@ def _init_repo(root: Path) -> None:
     _git(root, "config", "commit.gpgsign", "false")
 
 
-# The scored cohort of a run needs this many games for a bootstrap interval.
-ENOUGH_GAMES = MIN_INDEPENDENT_BLOCKS * MIN_BLOCK_LENGTH
-
-
-def _seed(store, seasons, *, game_type: int = 2, first_id: int = 1, games: int = 20) -> int:
-    """Put ``games`` final games in each season and return the last game id used."""
-    game_id = first_id - 1
-    for season in seasons:
-        for index in range(games):
-            game_id += 1
-            start = datetime(season // 10000, 11, 1) + timedelta(
-                days=index % 20, minutes=(index // 20) * 90
-            )
-            add_game(
-                store, game_id, start.strftime("%Y-%m-%dT%H:%M"), season=season, game_type=game_type
-            )
-            # Form and a starter for both teams, so the features are measured, not imputed.
-            add_team_form(store, game_id, "TOR", 2.6, 2.5)
-            add_team_form(store, game_id, "BOS", 2.5, 2.6)
-            add_goalie(store, game_id, "TOR", 11, "G TOR")
-            add_goalie(store, game_id, "BOS", 21, "G BOS")
-            add_goalie_form(store, game_id, 11, 2.5, 2)
-            add_goalie_form(store, game_id, 21, 2.5, 2)
-    return game_id
-
-
 class TestCheckAll:
     """Test check_all on a temporary registry."""
 
@@ -141,7 +86,7 @@ class TestCheckAll:
 
     def test_check_all_valid_record(self, registry_dir: Path):
         """A valid record passes, and immutability is reported as unchecked outside git."""
-        _register(registry_dir)
+        register(registry_dir)
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is True
         entry = result["records"][0]
@@ -151,7 +96,7 @@ class TestCheckAll:
 
     def test_check_all_invalid_record(self, registry_dir: Path):
         """A record with a status the schema rejects makes check_all fail."""
-        bad = _make_record({"status": "invalid_status"})
+        bad = make_record({"status": "invalid_status"})
         bad.save(registry_dir / f"{bad.id}.json")
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
@@ -159,7 +104,7 @@ class TestCheckAll:
 
     def test_check_all_fails_when_a_result_csv_is_missing(self, registry_dir: Path):
         """A result that names a CSV the repository does not hold is an error."""
-        _register(
+        register(
             registry_dir,
             {
                 "status": "rejected",
@@ -181,7 +126,7 @@ class TestCheckAll:
         csv_path = registry_dir / "results" / "0001-valid-games.csv"
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         csv_path.write_text("game_id,run\n1,elo\n", encoding="utf-8")
-        _register(
+        register(
             registry_dir,
             {
                 "status": "rejected",
@@ -204,7 +149,7 @@ class TestCheckAll:
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         text = "game_id,run\n1,elo\n"
         csv_path.write_text(text, encoding="utf-8")
-        _register(
+        register(
             registry_dir,
             {
                 "status": "rejected",
@@ -239,14 +184,14 @@ class TestRegistrationCommit:
 
     def test_registration_commit_is_none_without_git(self, registry_dir: Path):
         """A registry that git does not track has no registration commit."""
-        _register(registry_dir)
+        register(registry_dir)
         assert registration_commit("0001-valid", registry_dir.parent) is None
 
     def test_registration_commit_is_the_first_commit(self, tmp_path: Path, registry_dir: Path):
         """The registration commit is the oldest commit that touched the record."""
         root = tmp_path
         _init_repo(root)
-        _register(registry_dir)
+        register(registry_dir)
         _git(root, "add", "experiments")
         _git(root, "commit", "-m", "register the record")
         first = _git(root, "rev-parse", "HEAD").strip()
@@ -261,7 +206,7 @@ class TestImmutableFields:
         """A record identical to its registered version passes."""
         root = tmp_path
         _init_repo(root)
-        record = _register(registry_dir)
+        record = register(registry_dir)
         _git(root, "add", "experiments")
         _git(root, "commit", "-m", "register the record")
         commit = registration_commit("0001-valid", root)
@@ -274,12 +219,12 @@ class TestImmutableFields:
         """Editing min_games after registration fails the check."""
         root = tmp_path
         _init_repo(root)
-        registered = _register(registry_dir)
+        registered = register(registry_dir)
         _git(root, "add", "experiments")
         _git(root, "commit", "-m", "register the record")
         commit = registration_commit("0001-valid", root)
         assert commit is not None
-        edited = _make_record({"min_games": 5000})
+        edited = make_record({"min_games": 5000})
         edited.save(registry_dir / "0001-valid.json")
         _git(root, "commit", "-am", "quietly change min_games")
         with pytest.raises(HockeyModelError, match="immutable field\\(s\\) min_games changed"):
@@ -292,13 +237,13 @@ class TestImmutableFields:
         """A field the record did not carry at registration is a schema addition, not a change."""
         root = tmp_path
         _init_repo(root)
-        first = {k: v for k, v in _VALID_RECORD_DATA.items() if k != "candidate_features"}
+        first = {k: v for k, v in VALID_RECORD_DATA.items() if k != "candidate_features"}
         (registry_dir / "0001-valid.json").write_text(json.dumps(first), encoding="utf-8")
         _git(root, "add", "experiments")
         _git(root, "commit", "-m", "register the record")
         commit = registration_commit("0001-valid", root)
         assert commit is not None
-        current = _make_record({"candidate_features": ["xg_form", "rest"]})
+        current = make_record({"candidate_features": ["xg_form", "rest"]})
         check_immutable_fields(current, commit, root)
 
     def test_immutable_fields_raise_when_the_commit_has_no_record(
@@ -309,7 +254,7 @@ class TestImmutableFields:
         _init_repo(root)
         _git(root, "commit", "--allow-empty", "-m", "an empty commit")
         commit = _git(root, "rev-parse", "HEAD").strip()
-        record = _register(registry_dir)
+        record = register(registry_dir)
         with pytest.raises(HockeyModelError, match="is not in the history of the record"):
             check_immutable_fields(record, commit, root)
 
@@ -327,21 +272,21 @@ class TestStatusMatchesResult:
 
     def test_promoted_without_a_result_fails(self, registry_dir: Path):
         """A record cannot claim promotion with no result behind it."""
-        _register(registry_dir, {"status": "promoted"})
+        register(registry_dir, {"status": "promoted"})
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "holds no result" in result["errors"][0]
 
     def test_registered_with_a_result_fails(self, registry_dir: Path):
         """A registered record that holds a result was edited back by hand."""
-        _register(registry_dir, {"result": self._RESULT})
+        register(registry_dir, {"result": self._RESULT})
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "'registered' but the record holds a result" in result["errors"][0]
 
     def test_inconclusive_without_a_result_passes(self, registry_dir: Path):
         """A run with no interval is inconclusive and writes no result."""
-        _register(registry_dir, {"status": "inconclusive"})
+        register(registry_dir, {"status": "inconclusive"})
         assert check_all(repo_root=registry_dir.parent)["ok"] is True
 
 
@@ -351,7 +296,7 @@ class TestOneShot:
     def _commit_result(self, root: Path, registry_dir: Path) -> ExperimentRecord:
         """Commit a registered record, then commit its result."""
         _init_repo(root)
-        record = _register(registry_dir)
+        record = register(registry_dir)
         _git(root, "add", "experiments")
         _git(root, "commit", "-m", "register the record")
         data = record.to_dict()
@@ -402,7 +347,7 @@ class TestRegistryRules:
 
     def test_file_name_must_match_the_record_id(self, registry_dir: Path):
         """Editing the id inside a record file cannot hide it from the history checks."""
-        record = _make_record({"id": "0009-renamed"})
+        record = make_record({"id": "0009-renamed"})
         record.save(registry_dir / "0001-valid.json")
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
@@ -410,22 +355,22 @@ class TestRegistryRules:
 
     def test_an_unknown_candidate_feature_fails(self, registry_dir: Path):
         """A typo in a frozen record is caught before the record is frozen."""
-        _register(registry_dir, {"candidate_features": ["xg_frm"]})
+        register(registry_dir, {"candidate_features": ["xg_frm"]})
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "unknown feature 'xg_frm'" in result["errors"][0]
 
     def test_a_repeated_candidate_feature_fails(self, registry_dir: Path):
         """The checker applies the same rule as the fit command: each feature once."""
-        _register(registry_dir, {"candidate_features": ["rest", "rest"]})
+        register(registry_dir, {"candidate_features": ["rest", "rest"]})
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "'rest' is named more than once" in result["errors"][0]
 
     def test_two_records_cannot_share_a_number(self, registry_dir: Path):
         """The registry number is the record's slot, so a repeat is an error."""
-        _register(registry_dir, {"id": "0003-first"})
-        _register(registry_dir, {"id": "0003-second"})
+        register(registry_dir, {"id": "0003-first"})
+        register(registry_dir, {"id": "0003-second"})
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "registry number 0003 is used by more than one record" in result["errors"][0]
@@ -433,8 +378,8 @@ class TestRegistryRules:
     def test_a_deleted_record_fails(self, tmp_path: Path, registry_dir: Path):
         """Removing a committed record from the working tree is an error."""
         _init_repo(tmp_path)
-        _register(registry_dir, {"id": "0001-valid"})
-        _register(registry_dir, _SPENT | {"id": "0002-other"})
+        register(registry_dir, {"id": "0001-valid"})
+        register(registry_dir, _SPENT | {"id": "0002-other"})
         _git(tmp_path, "add", "experiments")
         _git(tmp_path, "commit", "-m", "register two records")
         (registry_dir / "0002-other.json").unlink()
@@ -445,8 +390,8 @@ class TestRegistryRules:
     def test_a_committed_deletion_fails(self, tmp_path: Path, registry_dir: Path):
         """A record removed in a later commit still counts: a committed number stays."""
         _init_repo(tmp_path)
-        _register(registry_dir, {"id": "0001-valid"})
-        _register(registry_dir, _SPENT | {"id": "0002-other"})
+        register(registry_dir, {"id": "0001-valid"})
+        register(registry_dir, _SPENT | {"id": "0002-other"})
         _git(tmp_path, "add", "experiments")
         _git(tmp_path, "commit", "-m", "register two records")
         _git(tmp_path, "rm", "-q", "experiments/0002-other.json")
@@ -458,8 +403,8 @@ class TestRegistryRules:
     def test_a_deleted_record_without_a_result_is_no_loss(self, tmp_path: Path, registry_dir: Path):
         """A record that never ran can be removed before it matters."""
         _init_repo(tmp_path)
-        _register(registry_dir, {"id": "0001-valid"})
-        _register(registry_dir, {"id": "0002-draft"})
+        register(registry_dir, {"id": "0001-valid"})
+        register(registry_dir, {"id": "0002-draft"})
         _git(tmp_path, "add", "experiments")
         _git(tmp_path, "commit", "-m", "register two records")
         _git(tmp_path, "rm", "-q", "experiments/0002-draft.json")
@@ -480,11 +425,11 @@ class TestRegistryRules:
                 "csv_hash": "0" * 64,
             },
         }
-        _register(registry_dir, spent)
+        register(registry_dir, spent)
         _git(tmp_path, "add", "experiments")
         _git(tmp_path, "commit", "-m", "register and run")
         _git(tmp_path, "mv", "experiments/0002-a.json", "experiments/0002-b.json")
-        _make_record({"id": "0002-b"}).save(registry_dir / "0002-b.json")
+        make_record({"id": "0002-b"}).save(registry_dir / "0002-b.json")
         _git(tmp_path, "commit", "-am", "rename and reset")
         result = check_all(repo_root=tmp_path)
         assert result["ok"] is False
@@ -494,7 +439,7 @@ class TestRegistryRules:
         origin = tmp_path / "origin"
         (origin / "experiments").mkdir(parents=True)
         _init_repo(origin)
-        _register(origin / "experiments")
+        register(origin / "experiments")
         _git(origin, "add", "experiments")
         _git(origin, "commit", "-m", "register the record")
         _git(origin, "commit", "--allow-empty", "-m", "a second commit")
@@ -513,7 +458,7 @@ class TestRegistryRules:
         path.write_text("[1, 2]", encoding="utf-8")
         _git(tmp_path, "add", "experiments")
         _git(tmp_path, "commit", "-m", "store a broken record")
-        _register(registry_dir)
+        register(registry_dir)
         result = check_all(repo_root=tmp_path)
         assert result["ok"] is False
         assert "must be a JSON object" in result["errors"][0]
@@ -539,7 +484,7 @@ class TestResultPaths:
         outside = registry_dir.parent / "elsewhere.csv"
         outside.write_text("x\n", encoding="utf-8")
         digest = hashlib.sha256(b"x\n").hexdigest()
-        _register(registry_dir, self._result(str(outside), digest))
+        register(registry_dir, self._result(str(outside), digest))
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "is not inside experiments/results/" in result["errors"][0]
@@ -549,7 +494,7 @@ class TestResultPaths:
         outside = registry_dir.parent / "elsewhere.csv"
         outside.write_text("x\n", encoding="utf-8")
         digest = hashlib.sha256(b"x\n").hexdigest()
-        _register(registry_dir, self._result("experiments/results/../../elsewhere.csv", digest))
+        register(registry_dir, self._result("experiments/results/../../elsewhere.csv", digest))
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert "is not inside experiments/results/" in result["errors"][0]
@@ -562,7 +507,7 @@ class TestResultPaths:
         csv_path.parent.mkdir(parents=True)
         csv_path.write_text("x\n", encoding="utf-8")
         digest = hashlib.sha256(b"x\n").hexdigest()
-        _register(registry_dir, self._result("experiments/results/0001-valid-games.csv", digest))
+        register(registry_dir, self._result("experiments/results/0001-valid-games.csv", digest))
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         monkeypatch.chdir(elsewhere)
@@ -576,9 +521,9 @@ class TestRunExperiment:
         self, registry_dir: Path, store
     ):
         """A confirmation run scores only cohort games and saves status, result, and CSV."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
-        record = _register(registry_dir, {"id": "0002-forward"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0002-forward"})
         payload, entries = run_experiment(record.id, store, repo_root=registry_dir.parent)
         assert payload["ok"] is True
         assert payload["scored"] == "seasons from 20262027 onward"
@@ -599,9 +544,9 @@ class TestRunExperiment:
 
     def test_run_experiment_writes_the_named_games_file(self, registry_dir: Path, store):
         """A run writes the per-game file the caller names, one row per exported game."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
-        record = _register(registry_dir, {"id": "0009-games"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0009-games"})
         out = registry_dir / "scratch-games.csv"
         payload, entries = run_experiment(
             record.id, store, games_out=out, repo_root=registry_dir.parent
@@ -611,9 +556,9 @@ class TestRunExperiment:
 
     def test_confirmation_run_refuses_when_already_run(self, registry_dir: Path, store):
         """The second confirmation run of a record is refused."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
-        record = _register(registry_dir, {"id": "0002-forward"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0002-forward"})
         run_experiment(record.id, store, repo_root=registry_dir.parent)
         with pytest.raises(HockeyModelError, match="expected registered"):
             run_experiment(record.id, store, repo_root=registry_dir.parent)
@@ -622,9 +567,9 @@ class TestRunExperiment:
         self, registry_dir: Path, store
     ):
         """A registered record that already holds a result cannot run again."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000)
-        _register(
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000)
+        register(
             registry_dir,
             {
                 "id": "0008-spent",
@@ -642,43 +587,43 @@ class TestRunExperiment:
 
     def test_confirmation_run_refuses_when_not_registered(self, registry_dir: Path, store):
         """A confirmation record with a status other than registered cannot run."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000)
-        record = _register(registry_dir, {"id": "0003-spent", "status": "promoted"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000)
+        record = register(registry_dir, {"id": "0003-spent", "status": "promoted"})
         with pytest.raises(HockeyModelError, match="confirmation status is 'promoted'"):
             run_experiment(record.id, store, repo_root=registry_dir.parent)
 
     def test_confirmation_run_refuses_when_cohort_has_no_games(self, registry_dir: Path, store):
         """A store with only exploration seasons cannot feed a confirmation cohort."""
-        _seed(store, FIT_SEASONS)
-        record = _register(registry_dir, {"id": "0004-early"})
+        seed(store, FIT_SEASONS)
+        record = register(registry_dir, {"id": "0004-early"})
         with pytest.raises(HockeyModelError, match="confirmation cohort has 0 games"):
             run_experiment(record.id, store, repo_root=registry_dir.parent)
 
     def test_confirmation_run_excludes_playoff_games(self, registry_dir: Path, store):
         """Playoff games in the confirmation season are not part of the cohort."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], game_type=3, first_id=1000)
-        _seed(store, [20262027], game_type=2, first_id=2000)
-        record = _register(registry_dir, {"id": "0005-playoffs", "min_games": 25})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], game_type=3, first_id=1000)
+        seed(store, [20262027], game_type=2, first_id=2000)
+        record = register(registry_dir, {"id": "0005-playoffs", "min_games": 25})
         with pytest.raises(HockeyModelError, match="cohort has 20 games"):
             run_experiment(record.id, store, repo_root=registry_dir.parent)
 
     def test_confirmation_run_scores_only_games_after_the_cutoff(self, registry_dir: Path, store):
         """Games that started before the registered data_cutoff are not scored."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
         for day in range(1, 11):
             add_game(store, 3000 + day, f"2026-10-{day:02d}T00:00", season=20262027)
-        record = _register(registry_dir, {"id": "0006-cutoff", "min_games": 15})
+        record = register(registry_dir, {"id": "0006-cutoff", "min_games": 15})
         _, entries = run_experiment(record.id, store, repo_root=registry_dir.parent)
         scored_ids = {entry["game_id"] for entry in entries}
         assert scored_ids == set(range(1000, 1000 + ENOUGH_GAMES))
 
     def test_exploration_run_never_writes_a_result(self, registry_dir: Path, store):
         """An exploration run reports its seasons and says it cannot promote anything."""
-        _seed(store, FIT_SEASONS)
-        record = _register(registry_dir, {"id": "0007-explore", "cohort": "exploration"})
+        seed(store, FIT_SEASONS)
+        record = register(registry_dir, {"id": "0007-explore", "cohort": "exploration"})
         payload, _ = run_experiment(record.id, store, repo_root=registry_dir.parent)
         assert payload["ok"] is True
         assert payload["scored"] == "seasons 20162017 to 20252026"
@@ -689,9 +634,9 @@ class TestRunExperiment:
 
     def test_the_stored_result_path_is_relative(self, registry_dir: Path, store):
         """The committed record holds no machine-local path."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
-        record = _register(registry_dir, {"id": "0002-forward"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0002-forward"})
         run_experiment(record.id, store, repo_root=registry_dir.parent)
         saved = ExperimentRecord.load(registry_dir / "0002-forward.json")
         assert saved.result is not None
@@ -699,9 +644,9 @@ class TestRunExperiment:
 
     def test_a_failed_export_leaves_the_look_unspent(self, registry_dir: Path, store):
         """If the caller's export cannot be written, the record is not changed."""
-        _seed(store, FIT_SEASONS)
-        _seed(store, [20262027], first_id=1000)
-        record = _register(registry_dir, {"id": "0002-forward"})
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0002-forward"})
         bad_out = registry_dir.parent / "missing-dir" / "games.csv"
         with pytest.raises(OSError):
             run_experiment(record.id, store, games_out=bad_out, repo_root=registry_dir.parent)
@@ -711,7 +656,7 @@ class TestRunExperiment:
 
     def test_a_run_without_an_interval_refuses_to_record(self, registry_dir: Path):
         """A run that scored nothing does not spend the look."""
-        record = _make_record()
+        record = make_record()
         csv_path = registry_dir / "results" / "0001-valid-games.csv"
         csv_path.parent.mkdir()
         csv_path.write_text("x\n", encoding="utf-8")
@@ -731,7 +676,7 @@ class TestRunExperiment:
             record_with_result(record, empty_report, csv_path, registry_dir.parent)
 
     def test_the_refusal_names_why_the_run_has_no_interval(self, registry_dir: Path):
-        record = _make_record()
+        record = make_record()
         csv_path = registry_dir / "results" / "0001-valid-games.csv"
         csv_path.parent.mkdir()
         csv_path.write_text("x\n", encoding="utf-8")
@@ -766,7 +711,7 @@ class TestMain:
             exited.append(code if code is not None else 0)
             raise SystemExit(code)
 
-        _register(registry_dir)
+        register(registry_dir)
         monkeypatch.chdir(repo_root)
         monkeypatch.setattr("sys.exit", fake_exit)
         from hockey_model.experiments.check import main

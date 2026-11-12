@@ -4,16 +4,14 @@ The backtest uses no price data. It scores the model against the results of the 
 home win rate, and the results-only Elo.
 """
 
-import csv
 import math
 import sqlite3
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields
-from datetime import datetime
-from pathlib import Path
+from dataclasses import asdict, dataclass
 
 from hockey_model.backtest.eligibility import SeasonCount, ineligibility_reasons, season_counts
+from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.metrics import (
     CalibrationBin,
     block_bootstrap_mean_ci,
@@ -33,7 +31,6 @@ from hockey_model.game_model.logistic import LogisticFit, fit_logistic, predict_
 from hockey_model.game_model.seasons import DEFAULT_PLAN, SeasonPlan, in_cohort, scored_label
 from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
-from hockey_model.store.timestamps import iso_utc
 from hockey_model.types import HockeyModelError
 
 MONEYPUCK_LEAK_NOTE = (
@@ -72,19 +69,6 @@ class ScoredRun:
     diff_vs_elo_ci: tuple[float, float] | None
     # The mean per-game log-loss difference against the Elo. None for the Elo run.
     mean_diff_vs_elo: float | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class GameRecord:
-    """One predicted game, for scoring against a line outside hockey-model."""
-
-    game_id: int
-    start: datetime
-    home: str
-    away: str
-    run: str
-    home_win_prob: float
-    home_won: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,7 +234,9 @@ def _score_seasons(
     return scored
 
 
-def _scored_run(name: str, games: Sequence[_Scored], elo_losses: Sequence[float]) -> ScoredRun:
+def _scored_run(
+    name: str, games: Sequence[_Scored], elo_losses: Sequence[float], tail: float
+) -> ScoredRun:
     probs = [g.by_run[name] for g in games]
     wins = [g.row.home_won for g in games]
     ci = None
@@ -259,7 +245,7 @@ def _scored_run(name: str, games: Sequence[_Scored], elo_losses: Sequence[float]
         diffs = [a - b for a, b in zip(per_game_log_loss(probs, wins), elo_losses, strict=True)]
         # Too few blocks leave the interval unavailable, never a false certainty.
         if bootstrap_problem(len(diffs)) is None:
-            ci = block_bootstrap_mean_ci(diffs)
+            ci = block_bootstrap_mean_ci(diffs, tail)
         mean_diff = sum(diffs) / len(diffs)
     return ScoredRun(
         name,
@@ -349,7 +335,8 @@ def _build_report(
     wins = [g.row.home_won for g in games]
     elo_losses = per_game_log_loss([g.by_run[ELO] for g in games], wins)
     runs = tuple(
-        _scored_run(name, games, elo_losses) for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
+        _scored_run(name, games, elo_losses, plan.interval_tail)
+        for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
     )
     coverage = season_counts(conn, ((g.row.game.season, g.row.game.game_type) for g in games), plan)
     reasons = ineligibility_reasons(coverage, len(games))
@@ -385,7 +372,7 @@ def run_backtest(
 ) -> tuple[BacktestReport, list[GameRecord]]:
     """Run the walk-forward backtest on the stored games.
 
-    Success is one test: the 95th percentile of the block-bootstrap interval of the
+    Success is one test: the upper end of the block-bootstrap interval of the
     per-game log loss of the model minus that of the Elo, with the goalie who started,
     is below zero. The guess run never changes success. Success also needs a covered
     cohort and enough independent blocks; see ``BacktestReport.eligible``.
@@ -402,18 +389,3 @@ def run_backtest(
             "run `hockey-model refresh --backfill-from 2014-10-01`"
         )
     return _build_report(conn, plan, candidates, scoring, tested, games), _records(games)
-
-
-def write_game_records(path: Path, records: Sequence[GameRecord]) -> None:
-    """Write one CSV row for each record. The ``start`` column is ISO 8601 UTC."""
-    names = [f.name for f in fields(GameRecord)]
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(names)
-        for record in records:
-            writer.writerow(
-                [
-                    iso_utc(record.start) if name == "start" else getattr(record, name)
-                    for name in names
-                ]
-            )

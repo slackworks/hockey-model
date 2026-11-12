@@ -13,6 +13,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from hockey_model.experiments.looks import MAX_LOOKS
 from hockey_model.experiments.models import (
     IMMUTABLE_FIELDS,
     ExperimentRecord,
@@ -291,7 +292,7 @@ class TestSchemaValidation:
     number=st.integers(min_value=1, max_value=9999),
     slug=st.from_regex(r"[a-z][a-z0-9-]{0,20}", fullmatch=True),
     min_games=st.integers(min_value=1, max_value=100000),
-    looks=st.integers(min_value=1, max_value=50),
+    looks=st.integers(min_value=1, max_value=MAX_LOOKS),
 )
 def test_a_well_formed_record_passes_the_registry_schema(
     number: int, slug: str, min_games: int, looks: int
@@ -306,6 +307,12 @@ def test_a_well_formed_record_passes_the_registry_schema(
         }
     )
     validate_against_schema(record, EXPERIMENT_SCHEMA)
+
+
+def test_a_look_number_above_the_maximum_fails_the_registry_schema() -> None:
+    record = _make_record({"look_number": MAX_LOOKS + 1})
+    with pytest.raises(HockeyModelError, match=r"look_number"):
+        validate_against_schema(record, EXPERIMENT_SCHEMA)
 
 
 _JSON_LEAVES = st.one_of(

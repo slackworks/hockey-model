@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hockey_model.experiments.looks import MAX_LOOKS
+
 EXPERIMENT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -48,7 +50,7 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
         },
         "min_games": {"type": "integer", "minimum": 1},
         "candidate_features": {"type": "array", "items": {"type": "string"}},
-        "look_number": {"type": "integer", "minimum": 1},
+        "look_number": {"type": "integer", "minimum": 1, "maximum": MAX_LOOKS},
         "expected_effect": {"type": ["number", "null"]},
         "promotion_criterion": {"type": "string"},
         "failure_outcome": {"type": "string"},
