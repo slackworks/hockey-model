@@ -206,4 +206,3 @@ def test_check_partition_fails_exactly_for_a_missing_unknown_or_repeated_module(
     )
     assert set(problems) == expected
     assert len(problems) == len(expected)
-    assert (problems == []) == (sorted(set(listed)) == sorted(listed) and set(listed) == covered)

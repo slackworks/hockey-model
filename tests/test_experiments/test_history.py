@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from experiment_support import VALID_RECORD_DATA
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -19,7 +20,7 @@ from hockey_model.experiments.history import (
     deleted_record_ids,
     registration_commit,
 )
-from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.experiments.models import IMMUTABLE_FIELDS, ExperimentRecord
 from hockey_model.types import HockeyModelError
 
 
@@ -65,24 +66,6 @@ def test_deleted_record_ids_is_empty_before_the_first_commit(repo_root: Path) ->
 
 _ID = "0001-valid"
 _RESULTS = (None, "a", "b", "c")
-_BASE = {
-    "id": _ID,
-    "title": "Valid record",
-    "hypothesis": "Feature X improves log loss.",
-    "cohort": "confirmation",
-    "data_cutoff": "2026-10-31",
-    "primary_metric": "mean_per_game_log_loss",
-    "baseline": {"fit_id": 1, "commit": "abc123"},
-    "selection_folds": None,
-    "min_games": 10,
-    "candidate_features": ["xg_form"],
-    "look_number": 1,
-    "expected_effect": None,
-    "promotion_criterion": "95th percentile below zero",
-    "failure_outcome": "ship Elo alone",
-    "status": "registered",
-    "result": None,
-}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -96,7 +79,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _record(result: str | None = None, **changes: object) -> ExperimentRecord:
-    data = {**_BASE, **changes}
+    data = {**VALID_RECORD_DATA, **changes}
     if result is not None:
         data["status"] = "rejected"
         data["result"] = {
@@ -136,14 +119,33 @@ def test_one_shot_fails_exactly_when_a_committed_result_differs_from_head(
         check_one_shot(head, root)
 
 
-@settings(max_examples=15, deadline=None)
-@given(
-    title=st.booleans(),
-    min_games=st.booleans(),
-    status=st.booleans(),
-)
+# One replacement value for each frozen field except the id, which names the record itself.
+_CHANGED = {
+    "title": "Another title",
+    "hypothesis": "Another hypothesis.",
+    "cohort": "exploration",
+    "data_cutoff": "2026-11-30",
+    "primary_metric": "brier",
+    "baseline": {"fit_id": 2, "commit": "def456"},
+    "selection_folds": [[20152016, 20162017]],
+    "min_games": 11,
+    "expected_effect": -0.5,
+    "promotion_criterion": "another criterion",
+    "failure_outcome": "another outcome",
+    "candidate_features": ["rest"],
+    "look_number": 2,
+}
+
+
+def test_the_frozen_field_list_is_fully_exercised() -> None:
+    """A new frozen field must get a replacement value above, or this test fails."""
+    assert set(_CHANGED) | {"id"} == set(IMMUTABLE_FIELDS)
+
+
+@settings(max_examples=20, deadline=None)
+@given(changed=st.sets(st.sampled_from(sorted(_CHANGED))), status=st.booleans())
 def test_immutable_fields_fail_exactly_when_a_frozen_field_changed(
-    tmp_path_factory: pytest.TempPathFactory, title: bool, min_games: bool, status: bool
+    tmp_path_factory: pytest.TempPathFactory, changed: set[str], status: bool
 ) -> None:
     root = tmp_path_factory.mktemp("repo")
     (root / "experiments").mkdir()
@@ -151,16 +153,11 @@ def test_immutable_fields_fail_exactly_when_a_frozen_field_changed(
     _commit(root, _record())
     commit = registration_commit(_ID, root)
     assert commit is not None
-    changes: dict[str, object] = {}
-    if title:
-        changes["title"] = "Another title"
-    if min_games:
-        changes["min_games"] = 11
-    current = _record(None, **changes)
-    if status:
-        current = _record("a", **changes)
-    if title or min_games:
-        with pytest.raises(HockeyModelError, match="immutable"):
+    # The status and the result are not frozen, so they change with no effect on the check.
+    current = _record("a" if status else None, **{name: _CHANGED[name] for name in changed})
+    if changed:
+        with pytest.raises(HockeyModelError, match="immutable") as caught:
             check_immutable_fields(current, commit, root)
+        assert all(name in str(caught.value) for name in changed)
     else:
         check_immutable_fields(current, commit, root)
