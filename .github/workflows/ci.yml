@@ -17,6 +17,7 @@ concurrency:
 jobs:
   validation:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,6 +30,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: validation
     steps:
       # The registry checker reads the git history of each record.
@@ -55,6 +57,7 @@ jobs:
 
   editorconfig:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,30 +79,32 @@ jobs:
   # fails here. The source-tree jobs above cannot see that.
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv run --no-project python3 scripts/smoke_wheel.py
-      # The probe drops a SQL resource from the wheel. The smoke test must then fail.
-      - name: Smoke test fails when a package-data file is missing
+      # The probe drops one file from the wheel. The smoke test must then fail at a check, which
+      # is exit 1. Exit 2 is a setup failure, and exit 0 is a test that missed the gap.
+      - name: Smoke test fails when a package-data file or the entry point is missing
         run: |
-          if uv run --no-project python3 scripts/smoke_wheel.py --drop schema.sql; then
-            echo "the smoke test passed on a wheel without schema.sql" >&2
-            exit 1
-          fi
-      - name: Smoke test fails when the entry point is missing
-        run: |
-          if uv run --no-project python3 scripts/smoke_wheel.py --drop entry_points.txt; then
-            echo "the smoke test passed on a wheel without entry_points.txt" >&2
-            exit 1
-          fi
+          for name in schema.sql views.sql entry_points.txt; do
+            code=0
+            uv run --no-project python3 scripts/smoke_wheel.py --drop "$name" || code=$?
+            if [ "$code" -ne 1 ]; then
+              echo "probe $name: expected exit 1 from a failed check, got $code" >&2
+              exit 1
+            fi
+          done
 
   # Keep ZIZMOR_VERSION equal to the zizmor hook rev in .pre-commit-config.yaml.
-  # The default policy runs offline, so the job needs no token beyond the read-only default.
+  # The job token has the read-only contents permission. It lets zizmor run its online audits,
+  # which check the commit pins.
   zizmor:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       ZIZMOR_VERSION: 1.32.0
     steps:
@@ -108,3 +113,5 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uvx "zizmor==${ZIZMOR_VERSION}" --no-progress .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}

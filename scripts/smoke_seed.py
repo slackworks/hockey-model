@@ -14,12 +14,8 @@ from hockey_model.sources.nhl import GameRow
 from hockey_model.store.db import connect
 from hockey_model.store.nhl_writes import write_games
 
-FINISHED_ID = 2015020001
-SCHEDULED_ID = 2025020001
-
-
-def _start(text: str) -> datetime:
-    return datetime.fromisoformat(text).replace(tzinfo=UTC)
+TEAMS = ("TOR", "BOS")
+GAME_COUNT = 2
 
 
 def seed(path: Path) -> None:
@@ -28,24 +24,22 @@ def seed(path: Path) -> None:
     try:
         rows = [
             GameRow(
-                FINISHED_ID,
+                2015020001,
                 20152016,
                 2,
-                _start("2015-11-01T00:00"),
-                "TOR",
-                "BOS",
+                datetime(2015, 11, 1, tzinfo=UTC),
+                *TEAMS,
                 "OFF",
                 3,
                 2,
                 "REG",
             ),
             GameRow(
-                SCHEDULED_ID,
+                2025020001,
                 20262027,
                 2,
-                _start("2026-12-01T00:00"),
-                "TOR",
-                "BOS",
+                datetime(2026, 12, 1, tzinfo=UTC),
+                *TEAMS,
                 "FUT",
                 None,
                 None,
@@ -54,8 +48,11 @@ def seed(path: Path) -> None:
         ]
         write_games(conn, rows, datetime(2026, 11, 1, tzinfo=UTC))
         conn.commit()
+        stored = conn.execute("SELECT COUNT(*) FROM games").fetchone()[0]
     finally:
         conn.close()
+    if stored != GAME_COUNT:
+        raise SystemExit(f"seed {path}: expected {GAME_COUNT} games in the store, found {stored}")
 
 
 if __name__ == "__main__":
