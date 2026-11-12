@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `hockey-model refresh --retry-skipped`, which reads again the score days, boxscores, and MoneyPuck files that earlier reads skipped as known gaps. [feat:store]
+- Stop the MoneyPuck reads of a refresh when the time budget is spent, after the first file of the run, and say so in the notes. [feat:store]
+- Name a boxscore game that a write leaves listed as missing, and read one game at most once in a refresh. [feat:store]
 - Scale the promotion bar of a confirmation record with its look number: look `k` promotes only when the upper end of the interval from the `BASE_TAIL / k` tail lies below zero, and a confirmation record must set `look_number` to one more than the earlier confirmation records. [feat:experiments]
 - Add a note to the run payload when the confirmation season floor moves the first scored season. [feat:experiments]
 - Add a TLA+ model of the daily prepare backfill, checked by TLC in a `tla` CI job and by `scripts/tlc.sh`. [feat:store]
