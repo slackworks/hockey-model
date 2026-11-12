@@ -645,7 +645,7 @@ class TestRunExperiment:
     def test_a_failed_export_leaves_the_look_unspent(self, registry_dir: Path, store):
         """If the caller's export cannot be written, the record is not changed."""
         seed(store, FIT_SEASONS)
-        seed(store, [20262027], first_id=1000)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
         record = register(registry_dir, {"id": "0002-forward"})
         bad_out = registry_dir.parent / "missing-dir" / "games.csv"
         with pytest.raises(OSError):

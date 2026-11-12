@@ -1,19 +1,27 @@
 """Tests for the look count, the cohort check, and the data_cutoff instant in a run."""
 
 import dataclasses
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import pytest
-from experiment_support import ENOUGH_GAMES, FIT_SEASONS, register, seed
+from experiment_support import ENOUGH_GAMES, FIT_SEASONS, make_record, register, seed
+from hypothesis import given
+from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
 from hockey_model.backtest import runner
 from hockey_model.experiments import check
 from hockey_model.experiments.check import check_all, run_experiment
-from hockey_model.experiments.cohort import cutoff_instant
+from hockey_model.experiments.cohort import (
+    cutoff_instant,
+    floor_notes,
+    plan_for,
+    require_scored_cohort,
+)
 from hockey_model.experiments.looks import BASE_TAIL
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
+from hockey_model.game_model.seasons import season_of
 
 
 def _prepare(store, cutoff: str = "2026-10-31") -> None:
@@ -98,7 +106,7 @@ class TestScoredCohort:
             return dataclasses.replace(report, runs=runs), records
 
         monkeypatch.setattr(check, "run_backtest", short)
-        with pytest.raises(HockeyModelError, match="scored .* games.*cohort holds"):
+        with pytest.raises(HockeyModelError, match="scored .* games.*cohort held"):
             run_experiment("0001-first", store, repo_root=registry_dir.parent)
         assert ExperimentRecord.load(registry_dir / "0001-first.json").status == "registered"
         assert not (registry_dir / "results" / "0001-first-games.csv").exists()
@@ -148,3 +156,99 @@ class TestSeasonFloorNote:
         register(registry_dir, {"id": "0001-first"})
         payload, _ = run_experiment("0001-first", store, repo_root=registry_dir.parent)
         assert not any("data_cutoff" in n for n in payload["notes"])
+
+
+class TestRefusedRunWritesNothing:
+    """A run that cannot record a result leaves no file in the results directory."""
+
+    def test_a_run_without_an_interval_writes_no_csv(
+        self, registry_dir: Path, store, monkeypatch: pytest.MonkeyPatch
+    ):
+        _prepare(store)
+        register(registry_dir, {"id": "0001-first"})
+        real = runner.run_backtest
+
+        def without_interval(conn, plan, **kwargs):
+            report, records = real(conn, plan, **kwargs)
+            runs = tuple(
+                dataclasses.replace(r, diff_vs_elo_ci=None) if r.name == runner.MODEL_ACTUAL else r
+                for r in report.runs
+            )
+            return dataclasses.replace(report, runs=runs), records
+
+        monkeypatch.setattr(check, "run_backtest", without_interval)
+        with pytest.raises(HockeyModelError, match="no interval"):
+            run_experiment("0001-first", store, repo_root=registry_dir.parent)
+        assert not (registry_dir / "results").exists()
+
+    def test_a_reused_registry_number_refuses_the_run(self, registry_dir: Path, store):
+        _prepare(store)
+        register(registry_dir, {"id": "0001-first"})
+        register(registry_dir, {"id": "0001-second", "look_number": 2})
+        with pytest.raises(HockeyModelError, match="registry number 0001 is also used by"):
+            run_experiment("0001-second", store, repo_root=registry_dir.parent)
+
+
+class TestInconclusiveNote:
+    """A run wider than the expected effect says why it is inconclusive."""
+
+    def test_a_wide_interval_adds_a_note(self, registry_dir: Path, store):
+        _prepare(store)
+        register(registry_dir, {"id": "0001-first", "expected_effect": -1e-9})
+        payload, _ = run_experiment("0001-first", store, repo_root=registry_dir.parent)
+        assert payload["status"] == "inconclusive"
+        assert any("above the expected effect" in n for n in payload["notes"])
+
+    def test_a_promoted_or_rejected_run_adds_no_such_note(self, registry_dir: Path, store):
+        _prepare(store)
+        register(registry_dir, {"id": "0001-first", "expected_effect": None})
+        payload, _ = run_experiment("0001-first", store, repo_root=registry_dir.parent)
+        assert not any("above the expected effect" in n for n in payload["notes"])
+
+
+_DAYS = st.dates(min_value=date(2000, 1, 1), max_value=date(2099, 12, 31))
+
+
+@given(_DAYS)
+def test_the_cutoff_instant_is_the_last_microsecond_of_the_day(day: date):
+    record = make_record({"data_cutoff": day.isoformat()})
+    assert cutoff_instant(record) == datetime.combine(day, time.max, tzinfo=UTC)
+
+
+@given(st.text(max_size=20))
+def test_a_cutoff_text_gives_an_instant_or_a_named_error(text: str):
+    record = dataclasses.replace(make_record(), data_cutoff=text)
+    try:
+        cutoff_instant(record)
+    except HockeyModelError as exc:
+        assert "0001-valid" in str(exc)
+
+
+@pytest.mark.parametrize("text", ["20261031", "2026-W44-6", "2026-10-31T00:00", " 2026-10-31"])
+def test_a_cutoff_in_another_iso_form_is_refused(text: str):
+    record = dataclasses.replace(make_record(), data_cutoff=text)
+    with pytest.raises(HockeyModelError, match="YYYY-MM-DD"):
+        cutoff_instant(record)
+
+
+@given(_DAYS)
+def test_floor_notes_name_the_cutoff_only_when_the_floor_moved_the_season(day: date):
+    record = make_record({"data_cutoff": day.isoformat()})
+    plan = plan_for(record)
+    notes = floor_notes(record, plan)
+    if season_of(day) == plan.scored[0]:
+        assert notes == []
+    else:
+        assert len(notes) == 1
+        assert day.isoformat() in notes[0]
+        assert str(plan.scored[0]) in notes[0]
+
+
+@given(st.integers(0, 3000), st.integers(0, 3000))
+def test_require_scored_cohort_refuses_exactly_a_different_count(scored: int, cohort: int):
+    record = make_record()
+    if scored == cohort:
+        require_scored_cohort(record, scored, cohort)
+    else:
+        with pytest.raises(HockeyModelError, match="scored"):
+            require_scored_cohort(record, scored, cohort)

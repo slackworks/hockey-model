@@ -372,7 +372,7 @@ def run_backtest(
 ) -> tuple[BacktestReport, list[GameRecord]]:
     """Run the walk-forward backtest on the stored games.
 
-    Success is one test: the 95th percentile of the block-bootstrap interval of the
+    Success is one test: the upper end of the block-bootstrap interval of the
     per-game log loss of the model minus that of the Elo, with the goalie who started,
     is below zero. The guess run never changes success. Success also needs a covered
     cohort and enough independent blocks; see ``BacktestReport.eligible``.

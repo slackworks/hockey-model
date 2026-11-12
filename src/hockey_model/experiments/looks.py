@@ -6,10 +6,11 @@ Design: docs/design/promotion-bar.md
 from collections.abc import Sequence
 
 from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.game_model.seasons import INTERVAL_TAIL
 from hockey_model.types import HockeyModelError
 
-# One look cuts this share of the bootstrap at the promoted end of the interval.
-BASE_TAIL = 0.05
+# The first look cuts this share of the bootstrap at the promoted end of the interval.
+BASE_TAIL = INTERVAL_TAIL
 # The bootstrap holds BOOTSTRAP_RESAMPLES means, so a smaller tail than BASE_TAIL / MAX_LOOKS
 # would rest on too few resamples.
 MAX_LOOKS = 10
@@ -44,10 +45,5 @@ def look_problem(record: ExperimentRecord, earlier: Sequence[ExperimentRecord]) 
             f"look_number is {record.look_number}, expected {expected}: "
             f"earlier confirmation records score overlapping games ({named}); "
             f"set look_number to {expected}"
-        )
-    if expected > MAX_LOOKS:
-        return (
-            f"look_number {expected} is above the maximum of {MAX_LOOKS}; "
-            "register a new hypothesis instead of a further look at the same games"
         )
     return None

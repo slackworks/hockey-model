@@ -161,9 +161,9 @@ def run_experiment(
         plan = exploration_plan()
 
     report, game_records = run_backtest(conn, plan, candidates=record.candidate_features)
-    model = _model_run(report)
-    if record.cohort == "confirmation" and model is not None:
-        require_scored_cohort(record, model.games, cohort_games)
+    # The checks come before any write, so a refused run leaves no file behind.
+    if record.cohort == "confirmation":
+        require_scored_cohort(record, _require_interval(record, report).games, cohort_games)
     # The caller's export goes first. A write failure then leaves the look unspent.
     if games_out is not None:
         write_game_records(games_out, game_records)
@@ -174,7 +174,7 @@ def run_experiment(
         write_game_records(csv_path, game_records)
         updated = record_with_result(record, report, csv_path, root)
         updated.save(registry_dir(root) / f"{updated.id}.json")
-        notes = report.notes + tuple(plan_notes)
+        notes = report.notes + tuple(plan_notes) + _inconclusive_notes(updated)
     else:
         updated = record
         notes = report.notes + ("This run is exploratory: it cannot promote a feature.",)
@@ -304,12 +304,49 @@ def _model_run(report: BacktestReport) -> ScoredRun | None:
     return next((run for run in report.runs if run.name == MODEL_ACTUAL), None)
 
 
+def _interval_of(model: ScoredRun) -> tuple[float, float]:
+    """Return the interval of a scored run that has one."""
+    if model.diff_vs_elo_ci is None:
+        raise HockeyModelError(f"scored run {model.name!r} has no interval")
+    return model.diff_vs_elo_ci
+
+
+def _require_interval(record: ExperimentRecord, report: BacktestReport) -> ScoredRun:
+    """Return the model run, and refuse a run that produced no interval."""
+    model = _model_run(report)
+    if model is None or model.diff_vs_elo_ci is None:
+        why = "; ".join(report.ineligible_reasons) or "the model run is missing"
+        raise HockeyModelError(
+            f"experiment {record.id!r}: the run produced no interval ({why}), so there is no "
+            "result to record; the record is unchanged. Refresh the store and run again"
+        )
+    return model
+
+
+def _inconclusive_notes(record: ExperimentRecord) -> tuple[str, ...]:
+    """Say why a run is inconclusive when the interval is wider than the expected effect."""
+    if record.status != STATUS_INCONCLUSIVE or record.result is None:
+        return ()
+    if record.expected_effect is None:
+        return ()
+    low, high = record.result.interval
+    return (
+        f"The interval half-width {(high - low) / 2:.4f} is above the expected effect "
+        f"{abs(record.expected_effect):.4f}, so the run is inconclusive and the look is spent.",
+    )
+
+
 def _check_look(record: ExperimentRecord, repo_root: Path) -> None:
     """Raise when the look number of a confirmation record breaks the registry rule."""
     number = record.id[:4]
-    earlier = [
-        get_record(other, repo_root) for other in list_records(repo_root) if other[:4] < number
-    ]
+    ids = list_records(repo_root)
+    twins = [other for other in ids if other[:4] == number and other != record.id]
+    if twins:
+        raise HockeyModelError(
+            f"experiment {record.id!r}: registry number {number} is also used by {twins[0]!r}; "
+            "a new record needs a new number"
+        )
+    earlier = [get_record(other, repo_root) for other in ids if other[:4] < number]
     problem = look_problem(record, earlier)
     if problem is not None:
         raise HockeyModelError(f"experiment {record.id!r}: {problem}")
@@ -340,19 +377,13 @@ def record_with_result(
     A run with no interval has no result to record. The run then fails before it
     saves, so the look is not spent on a run that scored nothing.
     """
-    model = _model_run(report)
-    if model is None or model.diff_vs_elo_ci is None:
-        why = "; ".join(report.ineligible_reasons) or "the model run is missing"
-        raise HockeyModelError(
-            f"experiment {record.id!r}: the run produced no interval ({why}), so there is no "
-            "result to record; the record is unchanged. Refresh the store and run again"
-        )
+    model = _require_interval(record, report)
     data = record.to_dict()
     data["status"] = _confirmation_status(record, report)
     data["result"] = {
         "games": model.games,
         "difference": model.mean_diff_vs_elo,
-        "interval": list(model.diff_vs_elo_ci),
+        "interval": list(_interval_of(model)),
         "csv_path": csv_path.relative_to(repo_root).as_posix(),
         "csv_hash": _file_hash(csv_path),
     }

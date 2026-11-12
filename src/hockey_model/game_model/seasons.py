@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from hockey_model.backtest.metrics import DEFAULT_TAIL
 from hockey_model.sources.nhl import GameRow
 
 # The Elo replays from this season. Its games set the ratings and are never in a fit.
@@ -74,6 +73,11 @@ def season_of(day: date) -> int:
     return season_code(season_start_year(day))
 
 
+# Each end of the bootstrap interval of a first look cuts this share of the resampled means.
+# A later look cuts less (experiments/looks.py).
+INTERVAL_TAIL = 0.05
+
+
 @dataclass(frozen=True, slots=True)
 class SeasonPlan:
     """The season ranges of one backtest. A test passes a short plan."""
@@ -89,7 +93,7 @@ class SeasonPlan:
     # registration cutoff, so a spent cohort is never scored twice.
     cutoff: datetime | None = None
     # The share of the bootstrap each end of the interval cuts. A later look cuts less.
-    interval_tail: float = DEFAULT_TAIL
+    interval_tail: float = INTERVAL_TAIL
 
 
 def confirmation_plan(cutoff: datetime) -> SeasonPlan:

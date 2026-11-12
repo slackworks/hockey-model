@@ -4,6 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from hockey_model.backtest.metrics import BOOTSTRAP_RESAMPLES
 from hockey_model.experiments.looks import (
     BASE_TAIL,
     MAX_LOOKS,
@@ -78,8 +79,24 @@ def test_an_exploration_record_is_not_checked() -> None:
     assert look_problem(_record(cohort="exploration", look_number=5), earlier=[]) is None
 
 
-def test_a_look_above_the_maximum_is_a_problem() -> None:
-    earlier = [_record(id=f"{n:04d}-x", look_number=n) for n in range(1, MAX_LOOKS + 1)]
-    problem = look_problem(_record(id="0099-z", look_number=MAX_LOOKS + 1), earlier=earlier)
-    assert problem is not None
-    assert str(MAX_LOOKS) in problem
+@pytest.mark.parametrize("look", range(1, MAX_LOOKS + 1))
+def test_every_supported_look_gives_a_tail_the_bootstrap_accepts(look: int) -> None:
+    tail = promotion_tail(look)
+    assert 1 / BOOTSTRAP_RESAMPLES <= tail < 0.5
+
+
+@given(
+    st.lists(st.sampled_from(["confirmation", "exploration"]), max_size=6),
+    st.integers(min_value=1, max_value=8),
+)
+def test_look_problem_accepts_exactly_the_count_of_earlier_confirmations_plus_one(
+    cohorts: list[str], look: int
+) -> None:
+    earlier = [_record(id=f"{n:04d}-e", cohort=c) for n, c in enumerate(cohorts, start=1)]
+    expected = cohorts.count("confirmation") + 1
+    problem = look_problem(_record(id="0099-now", look_number=look), earlier=earlier)
+    if look == expected:
+        assert problem is None
+    else:
+        assert problem is not None
+        assert f"expected {expected}" in problem

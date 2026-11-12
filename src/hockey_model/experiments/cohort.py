@@ -3,6 +3,7 @@
 Design: docs/design/promotion-bar.md
 """
 
+import re
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
@@ -13,6 +14,9 @@ from hockey_model.game_model.seasons import SeasonPlan, confirmation_plan, in_co
 from hockey_model.store.reads import LATEST_GAME, final_games_before
 from hockey_model.types import HockeyModelError
 
+# fromisoformat also reads 20261031 and 2026-W44-6, which are not the registered form.
+_CUTOFF_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
 
 def cutoff_instant(record: ExperimentRecord) -> datetime:
     """Return the instant after which games are in the cohort.
@@ -21,12 +25,15 @@ def cutoff_instant(record: ExperimentRecord) -> datetime:
     started on that day. The instant is the last microsecond of that day in UTC, and the cohort
     holds the games that start after it. Game starts are stored in UTC.
     """
+    problem = (
+        f"experiment {record.id!r}: data_cutoff {record.data_cutoff!r} is not a YYYY-MM-DD date"
+    )
+    if not _CUTOFF_SHAPE.fullmatch(record.data_cutoff):
+        raise HockeyModelError(problem)
     try:
         return datetime.combine(date.fromisoformat(record.data_cutoff), time.max, tzinfo=UTC)
     except ValueError as exc:
-        raise HockeyModelError(
-            f"experiment {record.id!r}: data_cutoff {record.data_cutoff!r} is not a YYYY-MM-DD date"
-        ) from exc
+        raise HockeyModelError(problem) from exc
 
 
 def plan_for(record: ExperimentRecord) -> SeasonPlan:
@@ -62,14 +69,14 @@ def require_cohort_size(
 
 
 def require_scored_cohort(record: ExperimentRecord, scored: int, cohort: int) -> None:
-    """Refuse a run that scored fewer games than the cohort held before the run.
+    """Refuse a run that scored a different count of games than the cohort held before it.
 
     A game dropped during the run, for example for a missing feature, would otherwise record
-    a smaller cohort than the one the record registered a minimum for.
+    a smaller cohort than the one the pre-run check counted against ``min_games``.
     """
-    if scored != cohort or scored < record.min_games:
+    if scored != cohort:
         raise HockeyModelError(
-            f"experiment {record.id!r}: the run scored {scored} games, but the cohort holds "
-            f"{cohort} games and the registered minimum is {record.min_games}; the record is "
-            "unchanged. Find why the run dropped games, then run again"
+            f"experiment {record.id!r}: the run scored {scored} games, but the cohort held "
+            f"{cohort} games before the run; the record is unchanged. "
+            "Find why the run dropped games, then run again"
         )
