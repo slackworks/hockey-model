@@ -71,3 +71,40 @@ jobs:
           echo "${EC_SHA256}  $archive" | sha256sum -c -
           tar -xzf "$archive" -C /usr/local/bin editorconfig-checker
       - run: editorconfig-checker
+
+  # Builds the wheel and runs it from a clean venv, so a missing package-data file or entry point
+  # fails here. The source-tree jobs above cannot see that.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv run --no-project python3 scripts/smoke_wheel.py
+      # The probe drops a SQL resource from the wheel. The smoke test must then fail.
+      - name: Smoke test fails when a package-data file is missing
+        run: |
+          if uv run --no-project python3 scripts/smoke_wheel.py --drop schema.sql; then
+            echo "the smoke test passed on a wheel without schema.sql" >&2
+            exit 1
+          fi
+      - name: Smoke test fails when the entry point is missing
+        run: |
+          if uv run --no-project python3 scripts/smoke_wheel.py --drop entry_points.txt; then
+            echo "the smoke test passed on a wheel without entry_points.txt" >&2
+            exit 1
+          fi
+
+  # Keep ZIZMOR_VERSION equal to the zizmor hook rev in .pre-commit-config.yaml.
+  # The default policy runs offline, so the job needs no token beyond the read-only default.
+  zizmor:
+    runs-on: ubuntu-latest
+    env:
+      ZIZMOR_VERSION: 1.32.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uvx "zizmor==${ZIZMOR_VERSION}" --no-progress .github/workflows
