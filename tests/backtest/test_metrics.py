@@ -247,3 +247,22 @@ def test_the_bootstrap_raises_exactly_when_the_sample_is_too_small(count: int) -
     else:
         with pytest.raises(ValueError, match="independent blocks"):
             block_bootstrap_mean_ci(values)
+
+
+def test_a_smaller_tail_gives_a_wider_interval() -> None:
+    rng = random.Random(3)
+    values = [rng.gauss(0.0, 1.0) for _ in range(400)]
+    low5, high5 = block_bootstrap_mean_ci(values)
+    low05, high05 = block_bootstrap_mean_ci(values, tail=0.005)
+    assert low05 < low5 < high5 < high05
+
+
+def test_the_default_tail_is_five_percent() -> None:
+    values = [random.Random(4).gauss(0.0, 1.0) for _ in range(400)]
+    assert block_bootstrap_mean_ci(values) == block_bootstrap_mean_ci(values, tail=0.05)
+
+
+@pytest.mark.parametrize("tail", [0.0, -0.1, 0.5, 0.9, float("nan")])
+def test_bootstrap_rejects_a_tail_outside_the_open_half(tail: float) -> None:
+    with pytest.raises(ValueError, match="tail"):
+        block_bootstrap_mean_ci([0.1] * 200, tail=tail)

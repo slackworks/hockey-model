@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from hockey_model.backtest.metrics import DEFAULT_TAIL
 from hockey_model.sources.nhl import GameRow
 
 # The Elo replays from this season. Its games set the ratings and are never in a fit.
@@ -87,6 +88,8 @@ class SeasonPlan:
     # Score only games that start after this instant. A confirmation record uses its
     # registration cutoff, so a spent cohort is never scored twice.
     cutoff: datetime | None = None
+    # The share of the bootstrap each end of the interval cuts. A later look cuts less.
+    interval_tail: float = DEFAULT_TAIL
 
 
 def confirmation_plan(cutoff: datetime) -> SeasonPlan:

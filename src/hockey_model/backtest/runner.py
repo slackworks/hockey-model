@@ -234,7 +234,9 @@ def _score_seasons(
     return scored
 
 
-def _scored_run(name: str, games: Sequence[_Scored], elo_losses: Sequence[float]) -> ScoredRun:
+def _scored_run(
+    name: str, games: Sequence[_Scored], elo_losses: Sequence[float], tail: float
+) -> ScoredRun:
     probs = [g.by_run[name] for g in games]
     wins = [g.row.home_won for g in games]
     ci = None
@@ -243,7 +245,7 @@ def _scored_run(name: str, games: Sequence[_Scored], elo_losses: Sequence[float]
         diffs = [a - b for a, b in zip(per_game_log_loss(probs, wins), elo_losses, strict=True)]
         # Too few blocks leave the interval unavailable, never a false certainty.
         if bootstrap_problem(len(diffs)) is None:
-            ci = block_bootstrap_mean_ci(diffs)
+            ci = block_bootstrap_mean_ci(diffs, tail)
         mean_diff = sum(diffs) / len(diffs)
     return ScoredRun(
         name,
@@ -333,7 +335,8 @@ def _build_report(
     wins = [g.row.home_won for g in games]
     elo_losses = per_game_log_loss([g.by_run[ELO] for g in games], wins)
     runs = tuple(
-        _scored_run(name, games, elo_losses) for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
+        _scored_run(name, games, elo_losses, plan.interval_tail)
+        for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
     )
     coverage = season_counts(conn, ((g.row.game.season, g.row.game.game_type) for g in games), plan)
     reasons = ineligibility_reasons(coverage, len(games))

@@ -18,8 +18,9 @@ MIN_BLOCK_LENGTH = 16
 # A resample of fewer independent blocks than this repeats a few blocks, so its interval is
 # narrow for lack of data, not for lack of risk. A series this short has no usable interval.
 MIN_INDEPENDENT_BLOCKS = 10
-_LOW_PERCENTILE = 0.05
-_HIGH_PERCENTILE = 0.95
+# Each end of the interval cuts this share of the resampled means. A confirmation record
+# with a later look uses a smaller share (experiments/looks.py).
+DEFAULT_TAIL = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +105,24 @@ def bootstrap_problem(count: int) -> str | None:
     )
 
 
-def block_bootstrap_mean_ci(values: Sequence[float]) -> tuple[float, float]:
-    """Return the 5th and 95th percentile of the mean over block resamples.
+def block_bootstrap_mean_ci(
+    values: Sequence[float], tail: float = DEFAULT_TAIL
+) -> tuple[float, float]:
+    """Return the ``tail`` and ``1 - tail`` percentile of the mean over block resamples.
+
+    The default tail gives the 5th and the 95th percentile. A ``tail`` below
+    ``1 / BOOTSTRAP_RESAMPLES`` or at 0.5 or above raises, because it names no resample.
 
     ``values`` must be in game start order. Blocks are runs of consecutive games, because
     games on one night share teams and goalies. A list with fewer than
     ``MIN_INDEPENDENT_BLOCKS`` blocks raises, because its resamples would repeat one or two
     blocks and show a false certainty.
     """
+    if not 1 / BOOTSTRAP_RESAMPLES <= tail < 0.5:
+        raise ValueError(
+            f"bootstrap the mean: tail {tail} is outside [{1 / BOOTSTRAP_RESAMPLES}, 0.5); "
+            "pass a tail that names a resample"
+        )
     if not values:
         raise ValueError("bootstrap the mean: the list is empty; pass at least one value")
     problem = bootstrap_problem(len(values))
@@ -134,6 +145,6 @@ def block_bootstrap_mean_ci(values: Sequence[float]) -> tuple[float, float]:
             taken += len(piece)
         means.append(total / count)
     means.sort()
-    return means[int(_LOW_PERCENTILE * BOOTSTRAP_RESAMPLES)], means[
-        int(_HIGH_PERCENTILE * BOOTSTRAP_RESAMPLES)
-    ]
+    low = round(tail * BOOTSTRAP_RESAMPLES)
+    high = round((1.0 - tail) * BOOTSTRAP_RESAMPLES)
+    return means[low], means[min(high, BOOTSTRAP_RESAMPLES - 1)]
