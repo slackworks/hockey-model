@@ -47,8 +47,9 @@ A hypothesis that needs more looks MUST be a new record with a new cohort, not a
 ## Cutoff
 
 `data_cutoff` means "data through this day".
-The candidate may have used any game that started on that day.
-The cohort holds the games that start after the last microsecond of that day in UTC.
+The day is an Eastern game day, as in `game_day.py`.
+The candidate may have used any game of that game day.
+The cohort holds the games that start after the last microsecond of that game day.
 A cutoff before the first confirmation season moves the first scored season to `CONFIRMATION_START`.
 The run payload then carries a note that names the cutoff and the season.
 
