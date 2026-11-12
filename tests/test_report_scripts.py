@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,7 @@ LIVE = ["xg_form", "rest"]
 DAY = "2026-11-04"
 TAG = f"reports-{DAY}"
 SHA = "0123456789abcdef0123456789abcdef01234567"
+REAL_UV = shutil.which("uv") or ""
 
 
 @pytest.fixture
@@ -61,6 +63,14 @@ def fakes(tmp_path: Path) -> Path:
         '  if [[ -n "${FAKE_UV_FAIL:-}" ]]; then echo "uv boom" >&2; exit 3; fi\n'
         '  printf "%s" "$FAKE_DUE_JSON"\n'
         "fi\n"
+        'if [[ "$*" == "run hockey-model report-decide"* ]]; then\n'
+        '  case "${FAKE_DECIDE_MODE:-}" in\n'
+        '  fail) echo "decide boom" >&2; exit 3 ;;\n'
+        "  empty) exit 0 ;;\n"
+        '  partial) printf "{\\"due\\": true}"; exit 0 ;;\n'
+        "  esac\n"
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
         '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'
         "fi\n"
@@ -80,6 +90,8 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "FAKE_DUE_JSON": json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3}),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,
+        # report-decide is the real command: it holds the decision the gate script prints.
+        "FAKE_REAL_UV": REAL_UV,
     }
     env.update(extra)
     return env
@@ -765,3 +777,21 @@ def test_a_rerun_clears_the_previous_marker_before_it_writes(fakes: Path, tmp_pa
     env["PATH"] = f"{failing}{os.pathsep}{env['PATH']}"
     assert _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out)).returncode == 4
     assert not (out / "complete").exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("fail", "report-decide failed"),
+        ("empty", "report-decide payload lacks"),
+        ("partial", "report-decide payload lacks"),
+    ],
+)
+def test_gate_stops_when_the_decision_step_fails_or_prints_a_bad_payload(
+    fakes: Path, tmp_path: Path, mode: str, message: str
+) -> None:
+    env = _env(fakes, tmp_path, FAKE_DECIDE_MODE=mode)
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert result.stdout == ""
