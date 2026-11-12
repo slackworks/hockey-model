@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Scale the promotion bar of a confirmation record with its look number: look `k` promotes only when the upper end of the interval from the `BASE_TAIL / k` tail lies below zero, and a confirmation record must set `look_number` to one more than the earlier confirmation records. [feat:experiments]
+- Add a note to the run payload when the confirmation season floor moves the first scored season. [feat:experiments]
 - Add a TLA+ model of the daily prepare backfill, checked by TLC in a `tla` CI job and by `scripts/tlc.sh`. [feat:store]
 - Add `hockey-model refresh --reread-moneypuck`, which reads the MoneyPuck files even when they are fresh. [feat:store]
 - Add the typed player, roster, projection, matchup, playoff, and JSON CLI APIs. [feat:types]
@@ -37,6 +39,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Read `data_cutoff` of a confirmation record as "data through this day", so games that start on the cutoff day are no longer in the cohort. [fix:experiments]
+- Fail a confirmation run, before it saves, when the games scored differ from the cohort count. [fix:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
 - The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
