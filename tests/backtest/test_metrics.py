@@ -303,3 +303,23 @@ def test_a_smaller_tail_gives_an_interval_that_contains_the_larger_tail_interval
     narrow = block_bootstrap_mean_ci(values, large)
     assert wide[0] <= narrow[0]
     assert narrow[1] <= wide[1]
+
+
+def test_a_tail_that_cuts_nothing_gives_the_whole_message() -> None:
+    expected = (
+        "bootstrap the mean: tail 0.0004 cuts 0 of 1000 resamples from each end; "
+        "pass a tail that cuts at least one and fewer than half"
+    )
+    with pytest.raises(ValueError) as caught:
+        block_bootstrap_mean_ci([0.1] * 200, tail=0.0004)
+    assert str(caught.value) == expected
+
+
+def test_a_non_finite_tail_gives_the_whole_message() -> None:
+    expected = (
+        "bootstrap the mean: tail nan cuts 0 of 1000 resamples from each end; "
+        "pass a tail that cuts at least one and fewer than half"
+    )
+    with pytest.raises(ValueError) as caught:
+        block_bootstrap_mean_ci([0.1] * 200, tail=float("nan"))
+    assert str(caught.value) == expected
