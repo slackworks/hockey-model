@@ -53,7 +53,7 @@ def seed(store, seasons, *, game_type: int = 2, first_id: int = 1, games: int = 
     for season in seasons:
         for index in range(games):
             game_id += 1
-            start = datetime(season // 10000, 11, 1) + timedelta(
+            start = datetime(season // 10000, 11, 2) + timedelta(
                 days=index % 20, minutes=(index // 20) * 90
             )
             add_game(

@@ -1,7 +1,7 @@
 """Tests for the look count, the cohort check, and the data_cutoff instant in a run."""
 
 import dataclasses
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,7 @@ from hockey_model.experiments.cohort import (
 )
 from hockey_model.experiments.looks import BASE_TAIL
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
+from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
 
 
@@ -115,14 +116,17 @@ class TestScoredCohort:
 class TestCutoffInstant:
     """data_cutoff names the last day of data, so that day's games are not in the cohort."""
 
-    def test_the_cutoff_instant_is_the_last_microsecond_of_the_day_utc(self, registry_dir: Path):
+    def test_the_cutoff_instant_is_the_last_microsecond_of_the_eastern_game_day(
+        self, registry_dir: Path
+    ):
         record = register(registry_dir, {"data_cutoff": "2026-10-31"})
-        assert cutoff_instant(record) == datetime(2026, 10, 31, 23, 59, 59, 999999, tzinfo=UTC)
+        assert cutoff_instant(record) == datetime(2026, 11, 1, 3, 59, 59, 999999, tzinfo=UTC)
 
     def test_a_game_on_the_cutoff_day_is_not_scored(self, registry_dir: Path, store):
         _prepare(store)
-        add_game(store, 4000, "2026-10-31T23:00", season=20262027)
-        add_game(store, 4001, "2026-11-01T00:00", season=20262027)
+        # 2026-11-01T00:00Z is 20:00 Eastern on 2026-10-31, a game of the cutoff day.
+        add_game(store, 4000, "2026-11-01T00:00", season=20262027)
+        add_game(store, 4001, "2026-11-01T05:00", season=20262027)
         for gid in (4000, 4001):
             add_team_form(store, gid, "TOR", 2.6, 2.5)
             add_team_form(store, gid, "BOS", 2.5, 2.6)
@@ -212,7 +216,8 @@ _DAYS = st.dates(min_value=date(2000, 1, 1), max_value=date(2099, 12, 31))
 @given(_DAYS)
 def test_the_cutoff_instant_is_the_last_microsecond_of_the_day(day: date):
     record = make_record({"data_cutoff": day.isoformat()})
-    assert cutoff_instant(record) == datetime.combine(day, time.max, tzinfo=UTC)
+    closes = game_day_window(day)[1]
+    assert cutoff_instant(record) == closes - timedelta(microseconds=1)
 
 
 @given(st.text(max_size=20))

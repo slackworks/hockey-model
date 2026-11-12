@@ -98,6 +98,7 @@ tag="$(jq -r '.tag' <<<"$status_json")"
 due="$(jq -r '.due' <<<"$status_json")"
 games="$(jq -r '.games' <<<"$status_json")"
 day="$(jq -r '.date' <<<"$status_json")"
+# Optional: only the late-run warning names it.
 first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
 
 # The decision is in report_gate.py. This script reads the facts: the schedule above, and the

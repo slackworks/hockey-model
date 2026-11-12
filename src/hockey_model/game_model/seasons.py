@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from hockey_model.game_day import game_day_of
 from hockey_model.sources.nhl import GameRow
 
 # The Elo replays from this season. Its games set the ratings and are never in a fit.
@@ -103,7 +104,7 @@ def confirmation_plan(cutoff: datetime) -> SeasonPlan:
     later season. Only games that start after the cutoff are scored.
     """
     # The floor keeps a record with an early cutoff from scoring exploration seasons.
-    first_season = max(CONFIRMATION_START, season_of(cutoff.date()))
+    first_season = max(CONFIRMATION_START, season_of(game_day_of(cutoff)))
     return SeasonPlan(
         scored=(first_season, OPEN_END),
         game_types=(REGULAR_SEASON_TYPE,),
