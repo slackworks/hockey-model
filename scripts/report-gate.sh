@@ -27,6 +27,7 @@
 set -euo pipefail
 
 day=""
+have_date=false
 force=false
 dry_run=false
 margin_s=0
@@ -43,6 +44,7 @@ while (($# > 0)); do
       exit 2
     fi
     day="$2"
+    have_date=true
     shift 2
     ;;
   --margin-seconds)
@@ -75,7 +77,7 @@ done
 
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
-if [[ -n "$day" ]] && ! is_valid_day "$day"; then
+if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
   echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
 fi
@@ -84,7 +86,7 @@ fi
 # run after the puck drop is still answered from the release state.
 # Without --date, report-due picks the Eastern game day that holds now.
 args=()
-if [[ -n "$day" ]]; then
+if [[ "$have_date" == true ]]; then
   args+=(--date "$day")
 fi
 if [[ "$force" == true ]]; then

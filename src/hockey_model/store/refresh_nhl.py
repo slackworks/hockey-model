@@ -275,7 +275,7 @@ def _after_read(run: RefreshRun, game_id: int, older: bool, unresolved: list[str
 def _boxscore_worklist(run: RefreshRun, game_ids: list[int]) -> list[int]:
     """Return the games to read: not a known gap, and not already read in this refresh.
 
-    One game costs one request in a refresh, even when two windows list it.
+    One game gets one good read in a refresh, even when two windows list it.
     """
     gaps = run.skipped(BOXSCORES)
     if gaps:

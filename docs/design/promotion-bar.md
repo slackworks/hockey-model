@@ -53,6 +53,13 @@ The cohort holds the games that start after the last microsecond of that game da
 A cutoff before the first confirmation season moves the first scored season to `CONFIRMATION_START`.
 The run payload then carries a note that names the cutoff and the season.
 
+## Power rule
+A run is inconclusive when the half-width of its interval is above the absolute `expected_effect`, even when the upper end lies below zero.
+A later look uses a smaller tail, so its interval is wider.
+A later look is therefore held to a stricter power bar than the first look.
+This follows from the rule and is not a separate choice.
+The open decision in #200 can change it.
+
 ## Interval ends
 
 The two ends of the bootstrap interval leave the same count of resampled means outside.

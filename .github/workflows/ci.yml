@@ -100,8 +100,8 @@ jobs:
           done
 
   # Keep ZIZMOR_VERSION equal to the zizmor hook rev in .pre-commit-config.yaml.
-  # The job token has the read-only contents permission. It lets zizmor run its online audits,
-  # which check the commit pins.
+  # The job gets no token, so zizmor runs offline as the local hook does. An unhashed PyPI
+  # download then never sees a credential.
   zizmor:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -113,5 +113,3 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uvx "zizmor==${ZIZMOR_VERSION}" --no-progress .github/workflows
-        env:
-          GH_TOKEN: ${{ github.token }}
