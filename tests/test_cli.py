@@ -12,8 +12,9 @@ from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
 from hockey_model import cli
+from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.metrics import calibration
-from hockey_model.backtest.runner import BacktestReport, GameRecord, ScoredRun
+from hockey_model.backtest.runner import BacktestReport, ScoredRun
 from hockey_model.cli import CliRuntime
 from hockey_model.game_model.features import ALL_FEATURE_NAMES
 from hockey_model.identity import Catalog

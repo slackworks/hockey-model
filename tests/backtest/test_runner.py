@@ -14,12 +14,8 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from hockey_model.backtest import eligibility, runner
-from hockey_model.backtest.runner import (
-    MONEYPUCK_LEAK_NOTE,
-    GameRecord,
-    run_backtest,
-    write_game_records,
-)
+from hockey_model.backtest.game_records import GameRecord, write_game_records
+from hockey_model.backtest.runner import MONEYPUCK_LEAK_NOTE, run_backtest
 from hockey_model.game import MissingInput, MissingKind
 from hockey_model.game_model.features import FEATURES, FeatureRow, GoalieMode
 from hockey_model.game_model.seasons import SeasonPlan

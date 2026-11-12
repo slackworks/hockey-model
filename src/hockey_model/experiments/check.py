@@ -20,13 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
-from hockey_model.backtest.runner import (
-    MODEL_ACTUAL,
-    BacktestReport,
-    GameRecord,
-    run_backtest,
-    write_game_records,
-)
+from hockey_model.backtest.game_records import GameRecord, write_game_records
+from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, run_backtest
 from hockey_model.experiments.history import (
     check_immutable_fields,
     check_one_shot,

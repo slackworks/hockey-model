@@ -4,16 +4,14 @@ The backtest uses no price data. It scores the model against the results of the 
 home win rate, and the results-only Elo.
 """
 
-import csv
 import math
 import sqlite3
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields
-from datetime import datetime
-from pathlib import Path
+from dataclasses import asdict, dataclass
 
 from hockey_model.backtest.eligibility import SeasonCount, ineligibility_reasons, season_counts
+from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.metrics import (
     CalibrationBin,
     block_bootstrap_mean_ci,
@@ -33,7 +31,6 @@ from hockey_model.game_model.logistic import LogisticFit, fit_logistic, predict_
 from hockey_model.game_model.seasons import DEFAULT_PLAN, SeasonPlan, in_cohort, scored_label
 from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
-from hockey_model.store.timestamps import iso_utc
 from hockey_model.types import HockeyModelError
 
 MONEYPUCK_LEAK_NOTE = (
@@ -72,19 +69,6 @@ class ScoredRun:
     diff_vs_elo_ci: tuple[float, float] | None
     # The mean per-game log-loss difference against the Elo. None for the Elo run.
     mean_diff_vs_elo: float | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class GameRecord:
-    """One predicted game, for scoring against a line outside hockey-model."""
-
-    game_id: int
-    start: datetime
-    home: str
-    away: str
-    run: str
-    home_win_prob: float
-    home_won: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,18 +386,3 @@ def run_backtest(
             "run `hockey-model refresh --backfill-from 2014-10-01`"
         )
     return _build_report(conn, plan, candidates, scoring, tested, games), _records(games)
-
-
-def write_game_records(path: Path, records: Sequence[GameRecord]) -> None:
-    """Write one CSV row for each record. The ``start`` column is ISO 8601 UTC."""
-    names = [f.name for f in fields(GameRecord)]
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(names)
-        for record in records:
-            writer.writerow(
-                [
-                    iso_utc(record.start) if name == "start" else getattr(record, name)
-                    for name in names
-                ]
-            )
