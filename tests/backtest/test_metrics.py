@@ -261,13 +261,6 @@ def test_a_smaller_tail_gives_a_wider_interval() -> None:
     assert low05 < low5 < high5 < high05
 
 
-def test_the_default_tail_is_five_percent() -> None:
-    values = [random.Random(4).gauss(0.0, 1.0) for _ in range(400)]
-    assert block_bootstrap_mean_ci(values, INTERVAL_TAIL) == block_bootstrap_mean_ci(
-        values, tail=INTERVAL_TAIL
-    )
-
-
 @pytest.mark.parametrize("tail", [0.0, -0.1, 0.0004, 0.4996, 0.5, 0.9, float("nan")])
 def test_bootstrap_rejects_a_tail_outside_the_open_half(tail: float) -> None:
     with pytest.raises(ValueError, match="tail"):

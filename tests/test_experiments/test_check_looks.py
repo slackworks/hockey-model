@@ -3,6 +3,7 @@
 import dataclasses
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from experiment_support import ENOUGH_GAMES, FIT_SEASONS, make_record, register, seed
@@ -11,6 +12,7 @@ from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
 from hockey_model.backtest import runner
+from hockey_model.backtest.runner import ScoredRun
 from hockey_model.experiments import check
 from hockey_model.experiments.check import check_all, run_experiment
 from hockey_model.experiments.cohort import (
@@ -25,7 +27,7 @@ from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
 
 
-def _prepare(store, cutoff: str = "2026-10-31") -> None:
+def _prepare(store) -> None:
     seed(store, FIT_SEASONS)
     seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
 
@@ -257,3 +259,29 @@ def test_require_scored_cohort_refuses_exactly_a_different_count(scored: int, co
     else:
         with pytest.raises(HockeyModelError, match="scored"):
             require_scored_cohort(record, scored, cohort)
+
+
+def _report_with_interval(low: float, high: float):
+    """The status rule reads only the runs of a report, so a stand-in with runs is enough."""
+    run = ScoredRun("model_actual", 100, 0.6, 0.2, (), (low, high), (low + high) / 2)
+    return SimpleNamespace(runs=(run,))
+
+
+@given(
+    low=st.floats(min_value=-1.0, max_value=1.0),
+    width=st.floats(min_value=0.0, max_value=2.0),
+    effect=st.one_of(st.none(), st.floats(min_value=-1.0, max_value=1.0)),
+)
+def test_the_status_follows_the_upper_end_and_the_power_rule(
+    low: float, width: float, effect: float | None
+) -> None:
+    high = low + width
+    record = make_record({"expected_effect": effect})
+    status = check._confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+    underpowered = effect is not None and width / 2 > abs(effect)
+    if underpowered:
+        assert status == "inconclusive"
+    elif high < 0.0:
+        assert status == "promoted"
+    else:
+        assert status == "rejected"

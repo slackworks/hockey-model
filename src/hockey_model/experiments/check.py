@@ -346,7 +346,15 @@ def _check_look(record: ExperimentRecord, repo_root: Path) -> None:
             f"experiment {record.id!r}: registry number {number} is also used by {twins[0]!r}; "
             "a new record needs a new number"
         )
-    earlier = [get_record(other, repo_root) for other in ids if other[:4] < number]
+    earlier = []
+    for other in (i for i in ids if i[:4] < number):
+        try:
+            earlier.append(get_record(other, repo_root))
+        except HockeyModelError as exc:
+            raise HockeyModelError(
+                f"experiment {record.id!r}: cannot count the earlier record {other!r} "
+                f"for the look number: {exc}"
+            ) from exc
     problem = look_problem(record, earlier)
     if problem is not None:
         raise HockeyModelError(f"experiment {record.id!r}: {problem}")

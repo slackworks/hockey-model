@@ -127,7 +127,7 @@ def test_gate_due_and_not_published_publishes(fakes: Path, tmp_path: Path) -> No
     }
 
 
-@pytest.mark.parametrize("bad", ["20261031", "2026-W44-6", "2026-02-30", "0000-01-01"])
+@pytest.mark.parametrize("bad", ["", "20261031", "2026-W44-6", "2026-02-30", "0000-01-01"])
 def test_gate_refuses_an_invalid_date(fakes: Path, tmp_path: Path, bad: str) -> None:
     result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", bad)
     assert result.returncode == 2
