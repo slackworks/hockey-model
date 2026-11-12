@@ -60,7 +60,8 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         "--retry-skipped",
         action="store_true",
         help="read again the score days, boxscores, and MoneyPuck files that earlier reads"
-        " skipped as known gaps; one good read clears a gap",
+        " skipped as known gaps; one good read clears a gap. A boxscore whose last read failed"
+        " less than a day ago still waits",
     )
     parser.add_argument(
         "--budget-seconds",

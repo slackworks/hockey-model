@@ -7,6 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from refresh_support import (
     BOX_URL,
     NOW,
@@ -179,6 +181,38 @@ def test_a_boxscore_written_but_still_missing_is_named(
         "nhl_boxscores" in n and str(GAME) in n and "still listed as missing" in n
         for n in report.notes
     )
+    # A game that never resolves must not hold the backfill open for ever.
+    assert report.backfill_complete is True
+
+
+def test_a_read_that_leaves_a_game_missing_is_not_progress(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    conn.execute("DELETE FROM goalie_games WHERE game_id = ?", (GAME,))
+    conn.commit()
+    monkeypatch.setattr(refresh_nhl, "write_boxscore", lambda *args, **kwargs: None)
+    result = read_boxscores(RefreshRun(conn, FakeClient(), NOW), [GAME])
+    assert result.progress == 0
+    assert result.clean is True
+
+
+def test_a_read_that_completes_an_old_game_is_progress(conn: sqlite3.Connection) -> None:
+    refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    conn.execute("DELETE FROM goalie_games WHERE game_id = ?", (GAME,))
+    conn.commit()
+    result = read_boxscores(RefreshRun(conn, FakeClient(), NOW), [GAME])
+    assert result.progress == 1
+    assert read_boxscores(RefreshRun(conn, FakeClient(), NOW), [GAME], recent=[GAME]).progress == 0
+
+
+def test_a_failing_moneypuck_run_is_not_complete(conn: sqlite3.Connection) -> None:
+    overrides: dict[str, bytes | Exception] = {
+        goalie_games_url(season): SourceError("moneypuck", "u", "HTTP 503")
+        for season in range(2014, 2026)
+    }
+    report = refresh(conn, FakeClient(overrides), now=NOW, backfill_from=date(2026, 1, 10))
+    assert any("stopped after 3 failed files" in n for n in report.notes)
     assert report.backfill_complete is False
 
 
@@ -196,3 +230,43 @@ def test_one_game_is_read_once_in_a_refresh(conn: sqlite3.Connection) -> None:
     conn.commit()
     read_boxscores(run, [GAME, GAME])
     assert client.urls.count(BAD_BOX) == first + 1
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    retry=st.booleans(),
+    failed=st.sets(st.sampled_from(["a", "b", "c"])),
+)
+def test_skipped_is_empty_with_retry_and_the_abandoned_set_without(
+    tmp_path_factory: pytest.TempPathFactory, retry: bool, failed: set[str]
+) -> None:
+    store = connect(tmp_path_factory.mktemp("s") / "store.db")
+    try:
+        for url in failed:
+            for days in (3, 1):
+                record_read(store, "nhl_scores", url, NOW - timedelta(days=days), error="HTTP 503")
+        store.commit()
+        run = RefreshRun(store, FakeClient(), NOW, retry_skipped=retry)
+        expected = frozenset() if retry else abandoned_urls(store, "nhl_scores")
+        assert run.skipped("nhl_scores") == expected
+        assert retry or expected == frozenset(failed)
+    finally:
+        store.close()
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    ids=st.lists(st.integers(1, 6), max_size=12),
+    read=st.sets(st.integers(1, 6)),
+)
+def test_the_worklist_drops_repeats_read_games_and_keeps_the_first_order(
+    tmp_path_factory: pytest.TempPathFactory, ids: list[int], read: set[int]
+) -> None:
+    store = connect(tmp_path_factory.mktemp("s") / "store.db")
+    try:
+        run = RefreshRun(store, FakeClient(), NOW)
+        run.boxscores_read.update(read)
+        work = refresh_nhl._boxscore_worklist(run, ids)
+        assert work == [g for g in dict.fromkeys(ids) if g not in read]
+    finally:
+        store.close()

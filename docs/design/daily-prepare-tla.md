@@ -108,6 +108,10 @@ It stays abandoned, even when it had a good read before the failures.
    So a stop after `MAX_UNIT_FAILURES` failures exits 1, not 75.
 3. With exit 0 from refresh, the script writes the marker when `backfill_complete` is true, and exits 75 when it is false.
    Exit 75 happens only for a budget stop or a boxscore retry skip, with no error from any source.
+   A budget stop can also happen in the MoneyPuck step (#136).
+   The MoneyPuck step always reads its first stale file, so each run makes progress on those files.
+   The TLA+ model does not include this stop.
+   A game that a boxscore read leaves still missing (#130) is named in the notes and does not hold the backfill open.
 
 ### The workflow: `.github/workflows/daily-prepare.yml`
 

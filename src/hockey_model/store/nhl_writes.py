@@ -115,24 +115,22 @@ def _stored_teams(conn: sqlite3.Connection, table: str, game_id: int) -> set[str
 
 
 def game_is_missing_boxscore(conn: sqlite3.Connection, game_id: int) -> bool:
-    """Return True when the final game ``game_id`` lacks a stored boxscore side."""
-    marks = ",".join("?" for _ in FINAL_STATES)
-    row = conn.execute(
-        "SELECT 1 FROM games g"
-        f" WHERE g.game_id = ? AND g.state IN ({marks}) AND NOT ({_STORED_BOTH_SIDES})",
-        [game_id, *sorted(FINAL_STATES)],
-    ).fetchone()
-    return row is not None
+    """Return True when ``game_id`` is in ``games_missing_boxscore``."""
+    return bool(games_missing_boxscore(conn, game_id=game_id))
 
 
 def games_missing_boxscore(
-    conn: sqlite3.Connection, first_day: date | None = None, last_day: date | None = None
+    conn: sqlite3.Connection,
+    first_day: date | None = None,
+    last_day: date | None = None,
+    game_id: int | None = None,
 ) -> list[int]:
     """Return the ids of final games whose boxscore is not stored for both teams, oldest first.
 
     A team is stored when it has a skater line and a goalie line. A game with one side only
     is listed again, so a refresh reads it and adds the missing side. ``first_day`` and
-    ``last_day`` are Eastern game days, both included. Either may be None.
+    ``last_day`` are Eastern game days, both included. Either may be None. ``game_id`` limits the
+    answer to one game. A game counts as final when any stored row of it is final.
     """
     marks = ",".join("?" for _ in FINAL_STATES)
     low = None if first_day is None else iso_utc(game_day_window(first_day)[0])
@@ -142,7 +140,8 @@ def games_missing_boxscore(
         f" WHERE g.state IN ({marks})"
         f" AND NOT ({_STORED_BOTH_SIDES})"
         " AND (? IS NULL OR g.start_utc >= ?) AND (? IS NULL OR g.start_utc < ?)"
+        " AND (? IS NULL OR g.game_id = ?)"
         " ORDER BY g.start_utc, g.game_id",
-        [*sorted(FINAL_STATES), low, low, high, high],
+        [*sorted(FINAL_STATES), low, low, high, high, game_id, game_id],
     )
     return [row[0] for row in cursor]

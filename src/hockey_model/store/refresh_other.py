@@ -69,9 +69,14 @@ def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
     if tried == 0 or not run.out_of_time():
         return False
     run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    _mark_incomplete(run)
+    return True
+
+
+def _mark_incomplete(run: RefreshRun) -> None:
+    """Say that a backfill stopped before it read every file."""
     if run.backfill_complete:
         run.backfill_complete = False
-    return True
 
 
 def _note_gaps(run: RefreshRun) -> frozenset[str]:
@@ -88,8 +93,8 @@ def moneypuck(run: RefreshRun) -> None:
     current = season_start_year(run.now.date())
     tried = 0
     if _stale(run, TEAM_GAMES_URL):
-        tried += 1
-        run.attempt(
+        # Only a file that was read counts, so a failing team file does not hold back the rest.
+        tried += run.attempt(
             MONEYPUCK,
             TEAM_GAMES_URL,
             lambda stamp: _note_credit(
@@ -106,18 +111,20 @@ def moneypuck(run: RefreshRun) -> None:
             run.notes.append(
                 f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried"
             )
+            _mark_incomplete(run)
             break
         if not _goalie_file_stale(run, season, current):
             continue
         if _stop_for_time(run, f"the goalie file of season {season}", tried):
             break
-        tried += 1
 
         def unit(stamp: datetime, season: int = season) -> int:
             rows = fetch_goalie_games(run.client, season)
             return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
 
-        failures = 0 if run.attempt(MONEYPUCK, url, unit) else failures + 1
+        ok = run.attempt(MONEYPUCK, url, unit)
+        tried += ok
+        failures = 0 if ok else failures + 1
 
 
 def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stamp: datetime) -> int:
@@ -130,6 +137,8 @@ def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stam
     return result.written
 
 
+# The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
+# and the live goalie reads must run even when a backfill spent its time (#136).
 def espn_starters(run: RefreshRun) -> None:
     """Read the ESPN probable goalies for today and tomorrow, as game days in Eastern time."""
     today = game_day_of(run.now)

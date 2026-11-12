@@ -259,6 +259,19 @@ def _note_boxscore_gaps(run: RefreshRun, skipped: int, unresolved: list[str]) ->
         )
 
 
+def _after_read(run: RefreshRun, game_id: int, older: bool, unresolved: list[str]) -> int:
+    """Record a good boxscore read, and return 1 when it is progress on the backlog.
+
+    A read that leaves the game missing is not progress, and it is not a failure: the game
+    stays in the worklist (see #130), and a note names it.
+    """
+    run.boxscores_read.add(game_id)
+    if game_is_missing_boxscore(run.conn, game_id):
+        unresolved.append(str(game_id))
+        return 0
+    return int(older)
+
+
 def _boxscore_worklist(run: RefreshRun, game_ids: list[int]) -> list[int]:
     """Return the games to read: not a known gap, and not already read in this refresh.
 
@@ -311,10 +324,7 @@ def read_boxscores(
         ok = run.attempt(BOXSCORES, url, unit)
         failures = 0 if ok else failures + 1
         clean = clean and ok
-        progress += ok and game_id not in recent
         if ok:
-            run.boxscores_read.add(game_id)
-            if game_is_missing_boxscore(run.conn, game_id):
-                unresolved.append(str(game_id))
+            progress += _after_read(run, game_id, game_id not in recent, unresolved)
     _note_boxscore_gaps(run, skipped, unresolved)
-    return ReadResult(clean and not unresolved, stopped=False, progress=progress)
+    return ReadResult(clean, stopped=False, progress=progress)
