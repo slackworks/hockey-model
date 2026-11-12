@@ -16,11 +16,10 @@ from hockey_model.sources.nhl import (
 )
 from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store.db import StoreError
-from hockey_model.store.nhl_writes import write_boxscore, write_games
+from hockey_model.store.nhl_writes import game_is_missing_boxscore, write_boxscore, write_games
 from hockey_model.store.reads import game_row, unresolved_games
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.source_reads import (
-    abandoned_urls,
     failed_since,
     failed_urls,
     last_ok_read,
@@ -77,7 +76,7 @@ def _day_of(url: str) -> date:
 def _failed_days(run: RefreshRun) -> list[date]:
     """Return the recent score days whose newest read failed, except the known gaps."""
     oldest = game_day_of(run.now - FAILED_DAY_RETRY_WINDOW)
-    skipped = abandoned_urls(run.conn, SCORES)
+    skipped = run.skipped(SCORES)
     days = (_day_of(url) for url in failed_urls(run.conn, SCORES) if url not in skipped)
     return [day for day in days if day >= oldest]
 
@@ -159,7 +158,7 @@ class ReadResult(NamedTuple):
 
 def score_gaps(run: RefreshRun) -> set[date]:
     """Return the score days that failed in every recent read, and note them in the report."""
-    skipped = sorted(_day_of(url) for url in abandoned_urls(run.conn, SCORES))
+    skipped = sorted(_day_of(url) for url in run.skipped(SCORES))
     if skipped:
         names = _describe([day.isoformat() for day in skipped])
         run.notes.append(f"{SCORES}: skipped {names}, which failed in every read")
@@ -247,6 +246,44 @@ def check_boxscore_identity(conn: sqlite3.Connection, game_id: int, rows: Boxsco
         )
 
 
+def _note_boxscore_gaps(run: RefreshRun, skipped: int, unresolved: list[str]) -> None:
+    """Note the games that a boxscore read left aside or left still missing."""
+    if skipped:
+        run.notes.append(
+            f"{BOXSCORES}: {skipped} skipped, because the last read failed a day ago or less"
+        )
+    if unresolved:
+        run.notes.append(
+            f"{BOXSCORES}: {_describe(unresolved)} written but still listed as missing; "
+            "check the team codes and the goalie rows of the boxscore"
+        )
+
+
+def _after_read(run: RefreshRun, game_id: int, older: bool, unresolved: list[str]) -> int:
+    """Record a good boxscore read, and return 1 when it is progress on the backlog.
+
+    A read that leaves the game missing is not progress, and it is not a failure: the game
+    stays in the worklist (see #130), and a note names it.
+    """
+    run.boxscores_read.add(game_id)
+    if game_is_missing_boxscore(run.conn, game_id):
+        unresolved.append(str(game_id))
+        return 0
+    return int(older)
+
+
+def _boxscore_worklist(run: RefreshRun, game_ids: list[int]) -> list[int]:
+    """Return the games to read: not a known gap, and not already read in this refresh.
+
+    One game gets one good read in a refresh, even when two windows list it.
+    """
+    gaps = run.skipped(BOXSCORES)
+    if gaps:
+        run.notes.append(f"{BOXSCORES}: {len(gaps)} games skipped, because every read failed")
+    unique = [g for g in dict.fromkeys(game_ids) if g not in run.boxscores_read]
+    return [g for g in unique if boxscore_url(g) not in gaps]
+
+
 def read_boxscores(
     run: RefreshRun, game_ids: list[int], recent: Collection[int] = ()
 ) -> ReadResult:
@@ -259,10 +296,8 @@ def read_boxscores(
     skipped = 0
     progress = 0
     clean = True
-    gaps = abandoned_urls(run.conn, BOXSCORES)
-    waiting = [g for g in game_ids if boxscore_url(g) not in gaps]
-    if gaps:
-        run.notes.append(f"{BOXSCORES}: {len(gaps)} games skipped, because every read failed")
+    unresolved: list[str] = []
+    waiting = _boxscore_worklist(run, game_ids)
     for index, game_id in enumerate(waiting):
         if failures >= MAX_UNIT_FAILURES:
             left = len(waiting) - index
@@ -289,9 +324,7 @@ def read_boxscores(
         ok = run.attempt(BOXSCORES, url, unit)
         failures = 0 if ok else failures + 1
         clean = clean and ok
-        progress += ok and game_id not in recent
-    if skipped:
-        run.notes.append(
-            f"{BOXSCORES}: {skipped} skipped, because the last read failed a day ago or less"
-        )
+        if ok:
+            progress += _after_read(run, game_id, game_id not in recent, unresolved)
+    _note_boxscore_gaps(run, skipped, unresolved)
     return ReadResult(clean, stopped=False, progress=progress)

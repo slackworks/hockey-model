@@ -56,7 +56,7 @@ The joint test passed on 2,792 games from the 2024-25 and 2025-26 seasons.
 The live model uses expected-goals form and rest.
 Its log loss is 0.6763.
 The results-only Elo has 0.6876.
-The 95% interval of the difference is -0.0144 to -0.0083.
+The 90% interval (5th to 95th percentile) of the difference is -0.0144 to -0.0083.
 The guess run vetoed goalie goals saved above expected.
 MoneyPuck data may leak into the result, because MoneyPuck's own model may have trained on the scored games.
 The run did not score the model against a betting market.

@@ -45,7 +45,7 @@ The goalie features read no starter, so the actual run and the guess run give th
 
 ## Scored result
 
-| Run | Games | Log loss | Brier | 95% interval of the log loss difference to Elo |
+| Run | Games | Log loss | Brier | 90% interval (5th to 95th percentile) of the log loss difference to Elo |
 | --- | --- | --- | --- | --- |
 | home_rate | 2792 | 0.68973 | 0.24829 | -0.00675 to +0.01103 |
 | elo | 2792 | 0.68760 | 0.24679 | not applicable |
@@ -54,6 +54,7 @@ The goalie features read no starter, so the actual run and the guess run give th
 
 The interval comes from a block bootstrap with 16-game blocks.
 The success test needs the 95th percentile of the difference below zero.
+This report is a first look. A later look at the same games uses a smaller tail (see `docs/design/promotion-bar.md`).
 The interval of `model_actual` is fully below zero, so the test passed.
 The rows `model_actual` and `model_guess` are equal because neither live feature reads the starting goalie.
 The equal scores do not show that a wrong goalie costs nothing.
@@ -90,7 +91,7 @@ The log loss of each run is below.
 | Model (actual starters) | 0.6633 | 0.6911 |
 | Results-only Elo | 0.6741 | 0.7035 |
 
-1. The model minus the line is +0.0029 in 2024-25, with a 95% block-bootstrap interval of -0.0032 to +0.0091.
+1. The model minus the line is +0.0029 in 2024-25, with a 90% block-bootstrap interval (5th to 95th percentile) of -0.0032 to +0.0091.
    The model is level with the line.
 2. The model minus the line is +0.0085 in 2025-26, with an interval of +0.0035 to +0.0140.
    The model is significantly worse than the line.

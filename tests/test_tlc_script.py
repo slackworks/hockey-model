@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+# The mutation run copies src and tests only, so the script is not there to test.
+if "mutants" in Path(__file__).resolve().parts:
+    pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "tlc.sh"
 

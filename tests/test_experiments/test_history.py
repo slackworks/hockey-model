@@ -9,9 +9,18 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from experiment_support import VALID_RECORD_DATA
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from hockey_model.experiments import history
-from hockey_model.experiments.history import deleted_record_ids, registration_commit
+from hockey_model.experiments.history import (
+    check_immutable_fields,
+    check_one_shot,
+    deleted_record_ids,
+    registration_commit,
+)
+from hockey_model.experiments.models import IMMUTABLE_FIELDS, ExperimentRecord
 from hockey_model.types import HockeyModelError
 
 
@@ -53,3 +62,102 @@ def test_deleted_record_ids_is_empty_before_the_first_commit(repo_root: Path) ->
     """A repository with no commits has nothing tracked at HEAD."""
     subprocess.run(["git", "init"], cwd=repo_root, capture_output=True, check=True)
     assert deleted_record_ids([], repo_root) == []
+
+
+_ID = "0001-valid"
+_RESULTS = (None, "a", "b", "c")
+
+
+def _git(root: Path, *args: str) -> None:
+    identity = ["-c", "user.name=Fixture", "-c", "user.email=f@example.com"]
+    subprocess.run(
+        ["git", *identity, "-c", "commit.gpgsign=false", *args],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    )
+
+
+def _record(result: str | None = None, **changes: object) -> ExperimentRecord:
+    data = {**VALID_RECORD_DATA, **changes}
+    if result is not None:
+        data["status"] = "rejected"
+        data["result"] = {
+            "games": 20,
+            "difference": 0.001,
+            "interval": [0.0, 0.002],
+            "csv_path": f"experiments/results/{result}.csv",
+            "csv_hash": "0" * 64,
+        }
+    return ExperimentRecord.from_dict(data)
+
+
+def _commit(root: Path, record: ExperimentRecord) -> None:
+    path = root / "experiments" / f"{_ID}.json"
+    record.save(path)
+    _git(root, "add", "experiments")
+    _git(root, "commit", "--allow-empty", "-m", "state")
+
+
+@settings(max_examples=25, deadline=None)
+@given(st.lists(st.sampled_from(_RESULTS), min_size=1, max_size=5))
+def test_one_shot_fails_exactly_when_a_committed_result_differs_from_head(
+    tmp_path_factory: pytest.TempPathFactory, results: list[str | None]
+) -> None:
+    root = tmp_path_factory.mktemp("repo")
+    (root / "experiments").mkdir()
+    _git(root, "init")
+    for result in results:
+        _commit(root, _record(result))
+    head = _record(results[-1])
+    committed = {r for r in results if r is not None}
+    differs = any(r != results[-1] for r in committed)
+    if differs:
+        with pytest.raises(HockeyModelError, match="one-shot"):
+            check_one_shot(head, root)
+    else:
+        check_one_shot(head, root)
+
+
+# One replacement value for each frozen field except the id, which names the record itself.
+_CHANGED = {
+    "title": "Another title",
+    "hypothesis": "Another hypothesis.",
+    "cohort": "exploration",
+    "data_cutoff": "2026-11-30",
+    "primary_metric": "brier",
+    "baseline": {"fit_id": 2, "commit": "def456"},
+    "selection_folds": [[20152016, 20162017]],
+    "min_games": 11,
+    "expected_effect": -0.5,
+    "promotion_criterion": "another criterion",
+    "failure_outcome": "another outcome",
+    "candidate_features": ["rest"],
+    "look_number": 2,
+}
+
+
+def test_the_frozen_field_list_is_fully_exercised() -> None:
+    """A new frozen field must get a replacement value above, or this test fails."""
+    assert set(_CHANGED) | {"id"} == set(IMMUTABLE_FIELDS)
+
+
+@settings(max_examples=20, deadline=None)
+@given(changed=st.sets(st.sampled_from(sorted(_CHANGED))), status=st.booleans())
+def test_immutable_fields_fail_exactly_when_a_frozen_field_changed(
+    tmp_path_factory: pytest.TempPathFactory, changed: set[str], status: bool
+) -> None:
+    root = tmp_path_factory.mktemp("repo")
+    (root / "experiments").mkdir()
+    _git(root, "init")
+    _commit(root, _record())
+    commit = registration_commit(_ID, root)
+    assert commit is not None
+    # The status and the result are not frozen, so they change with no effect on the check.
+    current = _record("a" if status else None, **{name: _CHANGED[name] for name in changed})
+    if changed:
+        with pytest.raises(HockeyModelError, match="immutable") as caught:
+            check_immutable_fields(current, commit, root)
+        assert all(name in str(caught.value) for name in changed)
+    else:
+        check_immutable_fields(current, commit, root)

@@ -11,7 +11,12 @@ import pytest
 
 from hockey_model.sources.nhl import parse_boxscore, parse_score_day
 from hockey_model.store.db import connect
-from hockey_model.store.nhl_writes import games_missing_boxscore, write_boxscore, write_games
+from hockey_model.store.nhl_writes import (
+    game_is_missing_boxscore,
+    games_missing_boxscore,
+    write_boxscore,
+    write_games,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "nhl"
 T0 = datetime(2026, 1, 11, 12, 0, tzinfo=UTC)
@@ -197,3 +202,14 @@ def test_repairing_a_partial_game_keeps_the_original_rows(conn: sqlite3.Connecti
         "SELECT COUNT(*) FROM skater_games WHERE game_id = ? AND team = ?", (game_id, rows.home)
     ).fetchone()
     assert home_rows == len(_one_side(rows, rows.home).skaters)
+
+
+def test_games_missing_boxscore_can_be_limited_to_one_game(conn: sqlite3.Connection) -> None:
+    write_games(conn, day_rows(), T0)
+    assert games_missing_boxscore(conn, game_id=2025020709) == [2025020709]
+    assert games_missing_boxscore(conn, game_id=1) == []
+    assert game_is_missing_boxscore(conn, 2025020709)
+    rows = parse_boxscore(json.loads((FIXTURES / "boxscore_2025020709.json").read_text()))
+    write_boxscore(conn, 2025020709, rows, T0)
+    assert not game_is_missing_boxscore(conn, 2025020709)
+    assert game_is_missing_boxscore(conn, 2025020697)

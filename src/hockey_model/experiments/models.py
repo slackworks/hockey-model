@@ -105,6 +105,7 @@ class ExperimentRecord:
     title: str
     hypothesis: str
     cohort: str
+    # The last day of data the candidate used. Meaning: docs/design/promotion-bar.md
     data_cutoff: str
     primary_metric: str
     baseline: _Baseline

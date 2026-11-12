@@ -22,7 +22,7 @@ from hockey_model.store.moneypuck_writes import (
     write_team_games,
 )
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
-from hockey_model.store.source_reads import ESPN_INJURIES, abandoned_urls, last_ok_read
+from hockey_model.store.source_reads import ESPN_INJURIES, last_ok_read
 from hockey_model.store.starter_writes import write_starter_reads
 
 MONEYPUCK = "moneypuck"
@@ -59,12 +59,44 @@ def _note_credit(run: RefreshRun, rows_written: int) -> int:
     return rows_written
 
 
+def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
+    """Return True, with a note, once the time budget is spent and a file was tried.
+
+    A download that has begun cannot stop, so the check comes before each file. The first file
+    of a run is always tried, so a run that the NHL steps left no time still makes progress.
+    ``tried`` counts files that were read, so a run of failed files can pass the deadline by
+    at most MAX_UNIT_FAILURES files.
+    A backfill that reached this step is not complete while a file is waiting.
+    """
+    if tried == 0 or not run.out_of_time():
+        return False
+    run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    _mark_incomplete(run)
+    return True
+
+
+def _mark_incomplete(run: RefreshRun) -> None:
+    """Say that a backfill stopped before it read every file."""
+    if run.backfill_complete:
+        run.backfill_complete = False
+
+
+def _note_gaps(run: RefreshRun) -> frozenset[str]:
+    """Return the goalie files that earlier reads left as known gaps, and note them."""
+    gaps = run.skipped(MONEYPUCK) - {TEAM_GAMES_URL}
+    if gaps:
+        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+    return gaps
+
+
 def moneypuck(run: RefreshRun) -> None:
     """Read the team file and each goalie file that is missing or, for the team file and the
     current season, older than a week. A finished season is read once."""
     current = season_start_year(run.now.date())
+    tried = 0
     if _stale(run, TEAM_GAMES_URL):
-        run.attempt(
+        # Only a file that was read counts, so a failing team file does not hold back the rest.
+        tried += run.attempt(
             MONEYPUCK,
             TEAM_GAMES_URL,
             lambda stamp: _note_credit(
@@ -72,9 +104,7 @@ def moneypuck(run: RefreshRun) -> None:
             ),
         )
     failures = 0
-    gaps = abandoned_urls(run.conn, MONEYPUCK) - {TEAM_GAMES_URL}
-    if gaps:
-        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+    gaps = _note_gaps(run)
     for season in range(FIRST_SEASON, current + 1):
         url = goalie_games_url(season)
         if url in gaps:
@@ -83,15 +113,20 @@ def moneypuck(run: RefreshRun) -> None:
             run.notes.append(
                 f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried"
             )
+            _mark_incomplete(run)
             break
         if not _goalie_file_stale(run, season, current):
             continue
+        if _stop_for_time(run, f"the goalie file of season {season}", tried):
+            break
 
         def unit(stamp: datetime, season: int = season) -> int:
             rows = fetch_goalie_games(run.client, season)
             return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
 
-        failures = 0 if run.attempt(MONEYPUCK, url, unit) else failures + 1
+        ok = run.attempt(MONEYPUCK, url, unit)
+        tried += ok
+        failures = 0 if ok else failures + 1
 
 
 def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stamp: datetime) -> int:
@@ -104,6 +139,8 @@ def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stam
     return result.written
 
 
+# The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
+# and the live goalie reads must run even when a backfill spent its time (#136).
 def espn_starters(run: RefreshRun) -> None:
     """Read the ESPN probable goalies for today and tomorrow, as game days in Eastern time."""
     today = game_day_of(run.now)

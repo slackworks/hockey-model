@@ -18,8 +18,6 @@ MIN_BLOCK_LENGTH = 16
 # A resample of fewer independent blocks than this repeats a few blocks, so its interval is
 # narrow for lack of data, not for lack of risk. A series this short has no usable interval.
 MIN_INDEPENDENT_BLOCKS = 10
-_LOW_PERCENTILE = 0.05
-_HIGH_PERCENTILE = 0.95
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +102,35 @@ def bootstrap_problem(count: int) -> str | None:
     )
 
 
-def block_bootstrap_mean_ci(values: Sequence[float]) -> tuple[float, float]:
-    """Return the 5th and 95th percentile of the mean over block resamples.
+def _cut(tail: float, count: int) -> int:
+    """Return how many means each end leaves outside, or raise when that names no interval."""
+    cut = round(tail * count) if math.isfinite(tail) else 0
+    if not 1 <= cut < count / 2:
+        raise ValueError(
+            f"bootstrap the mean: tail {tail} cuts {cut} of {count} resamples from each end; "
+            "pass a tail that cuts at least one and fewer than half"
+        )
+    return cut
+
+
+def interval_ends(sorted_means: Sequence[float], tail: float) -> tuple[float, float]:
+    """Return the ends of the interval that leaves ``round(tail * N)`` means outside each end."""
+    cut = _cut(tail, len(sorted_means))
+    return sorted_means[cut], sorted_means[len(sorted_means) - 1 - cut]
+
+
+def block_bootstrap_mean_ci(values: Sequence[float], tail: float) -> tuple[float, float]:
+    """Return the ``tail`` and ``1 - tail`` percentile of the mean over block resamples.
+
+    Each end leaves the same count of resamples outside the interval. A ``tail`` that cuts no
+    resample, or half or more of them, raises, because it names no interval.
 
     ``values`` must be in game start order. Blocks are runs of consecutive games, because
     games on one night share teams and goalies. A list with fewer than
     ``MIN_INDEPENDENT_BLOCKS`` blocks raises, because its resamples would repeat one or two
     blocks and show a false certainty.
     """
+    _cut(tail, BOOTSTRAP_RESAMPLES)
     if not values:
         raise ValueError("bootstrap the mean: the list is empty; pass at least one value")
     problem = bootstrap_problem(len(values))
@@ -134,6 +153,4 @@ def block_bootstrap_mean_ci(values: Sequence[float]) -> tuple[float, float]:
             taken += len(piece)
         means.append(total / count)
     means.sort()
-    return means[int(_LOW_PERCENTILE * BOOTSTRAP_RESAMPLES)], means[
-        int(_HIGH_PERCENTILE * BOOTSTRAP_RESAMPLES)
-    ]
+    return interval_ends(means, tail)

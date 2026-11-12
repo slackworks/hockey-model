@@ -7,6 +7,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add a note to the run payload that says why a run is inconclusive when its interval is wider than the expected effect. [feat:experiments]
+- Fail a confirmation run, before it writes any file, when the games scored differ from the cohort count or the run has no interval. [feat:experiments]
+- Add `hockey-model refresh --retry-skipped`, which reads again the score days, boxscores, and MoneyPuck files that earlier reads skipped as known gaps. [feat:store]
+- Stop the MoneyPuck reads of a refresh when the time budget is spent, after the first file of the run, and say so in the notes. [feat:store]
+- Name a boxscore game that a write leaves listed as missing, and read one game at most once in a refresh. [feat:store]
+- Scale the promotion bar of a confirmation record with its look number: look `k` promotes only when the upper end of the interval from the `BASE_TAIL / k` tail lies below zero, and a confirmation record must set `look_number` to one more than the earlier confirmation records. [feat:experiments]
+- Add a note to the run payload when the confirmation season floor moves the first scored season. [feat:experiments]
 - Add a TLA+ model of the daily prepare backfill, checked by TLC in a `tla` CI job and by `scripts/tlc.sh`. [feat:store]
 - Add `hockey-model refresh --reread-moneypuck`, which reads the MoneyPuck files even when they are fresh. [feat:store]
 - Add the typed player, roster, projection, matchup, playoff, and JSON CLI APIs. [feat:types]
@@ -24,6 +31,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add backtest scores: log loss, Brier score, a ten-bin calibration table, and a block bootstrap interval for a mean. [feat:backtest]
 - Add `hockey-model backtest`, a walk-forward backtest that refits before each scored season, tests all features together against the results-only Elo, and writes per-game predictions with `--games-out`. [feat:backtest]
 - Add mutation testing with mutmut: `uv run mutmut run` mutates the parsers and the rate math, and an advisory CI job reports the survivors without failing the build. [chore:test]
+- Add a `smoke` CI job and `scripts/smoke_wheel.py`, which build the wheel, install it alone in a clean venv, and predict one game from a seeded store. [chore:ci]
+- Add zizmor to the prek hooks and to a `zizmor` CI job, both at v1.32.0, to scan the workflows. [chore:ci]
 - Python project skeleton: uv, ruff, ty, pytest with coverage and a per-module floor, editorconfig, prek hooks, and CI validation, test, and editorconfig jobs.
 - Certify each logistic fit by the gradient of the penalized loss and save its diagnostics (iterations, objective, gradient, conditioning, penalty, scaling, stop reason) with the fit. A clipped step no longer counts as convergence. [feat:model]
 - Add the November 2026 backtest report. The joint test passed with expected-goals form and rest, and the guess run vetoed goalie goals saved above expected. [docs:backtest]
@@ -35,6 +44,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
+- Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
 - The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
@@ -47,6 +58,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Leave the same count of bootstrap means outside each end of the interval. The upper end moved one rank lower, so a promotion needs a slightly stricter result. [fix:backtest]
 - Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
 - Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
 - Publish the first daily report of a game day even when the run starts after the first puck drop, with a `late` gate reason and a warning. Before this, a late trigger published nothing. [fix:report]

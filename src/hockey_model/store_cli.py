@@ -8,7 +8,8 @@ from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from hockey_model.backtest.runner import run_backtest, write_game_records
+from hockey_model.backtest.game_records import write_game_records
+from hockey_model.backtest.runner import run_backtest
 from hockey_model.daily_report import build_report, model_identity, report_tag, write_report
 from hockey_model.game import game_win_probability
 from hockey_model.game_day import game_day_of, game_day_window
@@ -23,6 +24,7 @@ from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.game_model.seasons import FIT_FIRST, season_of
 from hockey_model.game_model.training import game_input, training_rows
+from hockey_model.report_gate import decide, warning
 from hockey_model.report_trigger import first_puck_drop, puck_drop_ahead
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow, fetch_score_day
@@ -35,7 +37,17 @@ from hockey_model.store.upgrade import add_store_group, run_store_group
 from hockey_model.types import HockeyModelError
 
 STORE_COMMANDS = frozenset(
-    {"refresh", "fit", "game", "backtest", "experiments", "daily", "report-due", "store"}
+    {
+        "refresh",
+        "fit",
+        "game",
+        "backtest",
+        "experiments",
+        "daily",
+        "report-due",
+        "report-decide",
+        "store",
+    }
 )
 _CANDIDATE_SETS = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
 
@@ -54,6 +66,13 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         "--reread-moneypuck",
         action="store_true",
         help="read the MoneyPuck files even when they are fresh",
+    )
+    parser.add_argument(
+        "--retry-skipped",
+        action="store_true",
+        help="read again the score days, boxscores, and MoneyPuck files that earlier reads"
+        " skipped as known gaps; one good read clears a gap. A boxscore whose last read failed"
+        " less than a day ago still waits",
     )
     parser.add_argument(
         "--budget-seconds",
@@ -132,6 +151,28 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         help="Eastern game day to check; default is the game day that holds now",
     )
     due.add_argument("--force", action="store_true", help="publish even outside the trigger")
+    decide_parser = add_parser(
+        "report-decide", help="decide the publish step of a trigger from the facts the gate read"
+    )
+    decide_parser.add_argument("--due", choices=("true", "false"), required=True)
+    decide_parser.add_argument("--games", type=int, required=True)
+    decide_parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        required=True,
+        metavar="YYYY-MM-DD",
+    )
+    decide_parser.add_argument("--first-puck-drop", default="", metavar="ISO")
+    decide_parser.add_argument("--margin-seconds", type=int, default=0)
+    decide_parser.add_argument("--force", action="store_true")
+    decide_parser.add_argument("--dry-run", action="store_true")
+    decide_parser.add_argument(
+        "--published",
+        choices=("true", "false", "unknown"),
+        default="unknown",
+        help="whether the day has a release. With unknown, check lookup_needed in the answer:"
+        " when it is true, read the release and ask again",
+    )
     due.add_argument(
         "--margin-seconds",
         type=int,
@@ -178,6 +219,7 @@ def _refresh(args: argparse.Namespace) -> tuple[object, int]:
                 backfill_from=args.backfill_from,
                 clock=lambda: datetime.now(UTC),
                 reread_moneypuck=args.reread_moneypuck,
+                retry_skipped=args.retry_skipped,
                 budget=None
                 if args.budget_seconds is None
                 else timedelta(seconds=args.budget_seconds),
@@ -300,6 +342,24 @@ def _game_day_games(day: date, closes: datetime) -> list[GameRow]:
     return games
 
 
+def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
+    published = None if args.published == "unknown" else args.published == "true"
+    decision = decide(
+        due=args.due == "true",
+        force=args.force,
+        dry_run=args.dry_run,
+        games=args.games,
+        published=published,
+    )
+    note = warning(
+        decision,
+        day=args.date.isoformat(),
+        first_drop=args.first_puck_drop,
+        margin_seconds=args.margin_seconds,
+    )
+    return {**asdict(decision), "warning": note}, 0
+
+
 def _report_due(args: argparse.Namespace) -> tuple[object, int]:
     now = datetime.now(UTC)
     day = args.date if args.date is not None else game_day_of(now)
@@ -361,6 +421,7 @@ _HANDLERS = {
     "experiments": _experiments,
     "daily": _daily,
     "report-due": _report_due,
+    "report-decide": _report_decide,
     "store": _store,
 }
 

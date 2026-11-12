@@ -18,7 +18,13 @@ PLAN = SeasonPlan(
 GOALIE = {"TOR": 11, "BOS": 21}
 
 
-def seed(store: sqlite3.Connection, seasons: range, *, short: frozenset[int] = frozenset()) -> None:
+def seed(
+    store: sqlite3.Connection,
+    seasons: range,
+    *,
+    short: frozenset[int] = frozenset(),
+    goalie_form: bool = True,
+) -> None:
     game_id = 0
     for season in seasons:
         # A short season has few games, so the first game of each team is a large share.
@@ -41,7 +47,8 @@ def seed(store: sqlite3.Connection, seasons: range, *, short: frozenset[int] = f
             add_team_form(store, game_id, away, 2.5, 2.6)
             for team, nhl_id in ((home, GOALIE[home]), (away, GOALIE[away])):
                 add_goalie(store, game_id, team, nhl_id, f"Goalie {team}")
-                add_goalie_form(store, game_id, nhl_id, 2.5, 2)
+                if goalie_form:
+                    add_goalie_form(store, game_id, nhl_id, 2.5, 2)
 
 
 def test_the_report_from_a_small_store(store: sqlite3.Connection) -> None:
@@ -93,3 +100,21 @@ def test_a_candidate_over_the_limit_only_in_a_walk_forward_window_is_vetoed(
     report, _ = run_backtest(store, plan, candidates=FEATURES)
     assert {"xg_form", "rest"} <= set(report.vetoed)
     assert not {"xg_form", "rest"} & set(report.tested_features)
+
+
+def test_a_candidate_imputed_in_every_training_row_is_vetoed_and_the_elo_is_unchanged(
+    store: sqlite3.Connection,
+) -> None:
+    # No goalie has any MoneyPuck row, so goalie_gsax is imputed in every training row.
+    seed(store, range(1, 8), goalie_form=False)
+    report, _ = run_backtest(store, PLAN, candidates=FEATURES)
+    assert "goalie_gsax" in report.vetoed
+    assert "goalie_gsax" not in report.tested_features
+    assert "elo+goalie_gsax" not in report.validation
+    assert "goalie_gsax" not in report.live_features
+    # The run goes on with the other candidates.
+    assert {"elo+xg_form", "elo+rest"} <= set(report.validation)
+    # The Elo run does not depend on which candidates were refused.
+    elo = next(run for run in report.runs if run.name == "elo")
+    only_rest, _ = run_backtest(store, PLAN, candidates=("rest",))
+    assert next(run for run in only_rest.runs if run.name == "elo") == elo

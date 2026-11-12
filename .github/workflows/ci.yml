@@ -17,6 +17,7 @@ concurrency:
 jobs:
   validation:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,6 +30,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: validation
     steps:
       # The registry checker reads the git history of each record.
@@ -55,6 +57,7 @@ jobs:
 
   editorconfig:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,3 +74,42 @@ jobs:
           echo "${EC_SHA256}  $archive" | sha256sum -c -
           tar -xzf "$archive" -C /usr/local/bin editorconfig-checker
       - run: editorconfig-checker
+
+  # Builds the wheel and runs it from a clean venv, so a missing package-data file or entry point
+  # fails here. The source-tree jobs above cannot see that.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv run --no-project python3 scripts/smoke_wheel.py
+      # The probe drops one file from the wheel. The smoke test must then fail at a check, which
+      # is exit 1. Exit 2 is a setup failure, and exit 0 is a test that missed the gap.
+      - name: Smoke test fails when a package-data file or the entry point is missing
+        run: |
+          for name in schema.sql views.sql entry_points.txt; do
+            code=0
+            uv run --no-project python3 scripts/smoke_wheel.py --drop "$name" || code=$?
+            if [ "$code" -ne 1 ]; then
+              echo "probe $name: expected exit 1 from a failed check, got $code" >&2
+              exit 1
+            fi
+          done
+
+  # Keep ZIZMOR_VERSION equal to the zizmor hook rev in .pre-commit-config.yaml.
+  # The job gets no token, so zizmor runs offline as the local hook does. An unhashed PyPI
+  # download then never sees a credential.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ZIZMOR_VERSION: 1.32.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uvx "zizmor==${ZIZMOR_VERSION}" --no-progress .github/workflows

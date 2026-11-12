@@ -433,7 +433,7 @@ pytest and hypothesis for tests.
   - `def log_loss(probs: Sequence[float], wins: Sequence[bool]) -> float`, `def brier(probs, wins) -> float`.
   - `CALIBRATION_BINS = 10`; `@dataclass(frozen=True) class CalibrationBin`: `low: float`, `high: float`, `count: int`, `mean_prob: float`, `win_rate: float`; `def calibration(probs, wins) -> tuple[CalibrationBin, ...]` (empty bins have `count=0` and `nan` means).
   - `BOOTSTRAP_RESAMPLES = 1000`, `BOOTSTRAP_SEED = 0`, `BLOCK_LENGTH`: copy the block length used by sportsbettr `harness/bootstrap_ci.py` `block_bootstrap_log_growth_ci`.
-  - `def block_bootstrap_mean_ci(values: Sequence[float]) -> tuple[float, float]`: the 5th and 95th percentile of the mean of contiguous-block resamples, in game start order. Port the resample loop from sportsbettr `harness/bootstrap_ci.py`.
+  - `def block_bootstrap_mean_ci(values: Sequence[float], tail: float) -> tuple[float, float]`: the 5th and 95th percentile of the mean of contiguous-block resamples, in game start order. Port the resample loop from sportsbettr `harness/bootstrap_ci.py`.
 - [ ] **Step 1: Write the failing tests**: `log_loss([0.5], [True]) == log(2)`, `brier([1.0], [True]) == 0.0`, a probability of 0.0 on a win gives a finite log loss, length mismatch raises `ValueError`, the calibration of 0.05 and 0.95 lands in bins 0 and 9, `block_bootstrap_mean_ci` of a constant list is `(c, c)`, the same input and seed give the same interval, an empty list raises `ValueError`, and a hypothesis test that `low <= high` for any non-empty list of finite floats.
 - [ ] **Step 2: Run** the tests. Expected: FAIL.
 - [ ] **Step 3: Implement** `metrics.py`.
