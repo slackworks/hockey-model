@@ -1,6 +1,7 @@
 """Properties of the publish decision of one report trigger."""
 
-from dataclasses import asdict
+import argparse
+from datetime import date
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -14,9 +15,9 @@ from hockey_model.report_gate import (
     REASONS,
     GateDecision,
     decide,
-    lookup_needed,
     warning,
 )
+from hockey_model.store_cli import _report_decide
 
 _FACTS = {
     "due": st.booleans(),
@@ -28,12 +29,24 @@ _FACTS = {
 
 
 @given(**_FACTS)
-def test_the_decision_always_holds_the_same_four_fields_and_a_known_reason(
+def test_the_command_always_prints_the_same_five_keys_and_a_known_reason(
     due: bool, force: bool, dry_run: bool, games: int, published: bool | None
 ) -> None:
-    decision = decide(due=due, force=force, dry_run=dry_run, games=games, published=published)
-    assert set(asdict(decision)) == {"due", "publish", "reason", "lookup_needed"}
-    assert decision.reason in REASONS
+    args = argparse.Namespace(
+        due=str(due).lower(),
+        force=force,
+        dry_run=dry_run,
+        games=games,
+        published="unknown" if published is None else str(published).lower(),
+        date=date(2026, 11, 4),
+        first_puck_drop="",
+        margin_seconds=0,
+    )
+    payload, code = _report_decide(args)
+    assert code == 0
+    assert isinstance(payload, dict)
+    assert set(payload) == {"due", "publish", "reason", "lookup_needed", "warning"}
+    assert payload["reason"] in REASONS
 
 
 @given(**_FACTS)
@@ -42,7 +55,7 @@ def test_a_dry_run_never_publishes_and_never_needs_the_release(
 ) -> None:
     decision = decide(due=due, force=force, dry_run=True, games=games, published=published)
     assert decision == GateDecision(due, False, REASON_DRY_RUN)
-    assert not lookup_needed(dry_run=True, games=games)
+    assert not decision.lookup_needed
 
 
 @given(**_FACTS)
@@ -91,9 +104,8 @@ def test_the_release_is_asked_for_exactly_when_it_decides_the_answer(
     due: bool, force: bool, dry_run: bool, games: int, published: bool | None
 ) -> None:
     decision = decide(due=due, force=force, dry_run=dry_run, games=games, published=published)
-    assert decision.lookup_needed == (
-        published is None and lookup_needed(dry_run=dry_run, games=games)
-    )
+    expected = published is None and not dry_run and games > 0
+    assert decision.lookup_needed == expected
 
 
 @given(
@@ -111,3 +123,7 @@ def test_only_a_late_run_and_an_empty_day_warn(
     assert (note is not None) == (reason in {REASON_LATE, REASON_NO_GAMES})
     if note is not None:
         assert note.startswith("::warning::") and day in note
+    if reason == REASON_LATE:
+        assert note is not None
+        assert str(margin) in note
+        assert first_drop in note

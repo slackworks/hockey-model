@@ -156,7 +156,12 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
     )
     decide_parser.add_argument("--due", choices=("true", "false"), required=True)
     decide_parser.add_argument("--games", type=int, required=True)
-    decide_parser.add_argument("--date", required=True, metavar="YYYY-MM-DD")
+    decide_parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        required=True,
+        metavar="YYYY-MM-DD",
+    )
     decide_parser.add_argument("--first-puck-drop", default="", metavar="ISO")
     decide_parser.add_argument("--margin-seconds", type=int, default=0)
     decide_parser.add_argument("--force", action="store_true")
@@ -165,7 +170,8 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         "--published",
         choices=("true", "false", "unknown"),
         default="unknown",
-        help="whether the day has a release; unknown until the caller has read it",
+        help="whether the day has a release. With unknown, check lookup_needed in the answer:"
+        " when it is true, read the release and ask again",
     )
     due.add_argument(
         "--margin-seconds",
@@ -346,7 +352,10 @@ def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
         published=published,
     )
     note = warning(
-        decision, day=args.date, first_drop=args.first_puck_drop, margin_seconds=args.margin_seconds
+        decision,
+        day=args.date.isoformat(),
+        first_drop=args.first_puck_drop,
+        margin_seconds=args.margin_seconds,
     )
     return {**asdict(decision), "warning": note}, 0
 

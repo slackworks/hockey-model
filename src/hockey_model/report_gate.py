@@ -34,11 +34,6 @@ class GateDecision:
     lookup_needed: bool = False
 
 
-def lookup_needed(*, dry_run: bool, games: int) -> bool:
-    """Return True when the answer depends on whether the day has a release."""
-    return not dry_run and games > 0
-
-
 def decide(
     *, due: bool, force: bool, dry_run: bool, games: int, published: bool | None
 ) -> GateDecision:
@@ -53,6 +48,7 @@ def decide(
     if games == 0:
         return GateDecision(False, False, REASON_NO_GAMES)
     if published is None:
+        # The release state decides the answer, and the caller has not read it yet.
         return GateDecision(due, False, REASON_DUE, lookup_needed=True)
     if published and due and not force:
         return GateDecision(True, True, REASON_REPLACE)

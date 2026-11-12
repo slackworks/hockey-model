@@ -22,7 +22,8 @@
 #   already-published   the day has a release and this run does not replace it
 #   no-games            the schedule lists no games, so nothing publishes
 #   dry-run             the report is built and not published
-# Exits non-zero when the schedule payload is malformed or the release lookup fails.
+# Exits non-zero when the schedule payload is malformed, the release lookup fails, or the
+# decision step fails or prints a payload that lacks a field.
 set -euo pipefail
 
 day=""
@@ -112,10 +113,22 @@ dry_flag=()
 [[ "$force" == true ]] && force_flag=(--force)
 [[ "$dry_run" == true ]] && dry_flag=(--dry-run)
 
-decision="$(decide unknown)" || {
-  echo "report-gate: report-decide failed; its error is above" >&2
-  exit 1
+decided() {
+  local out
+  out="$(decide "$1")" || {
+    echo "report-gate: report-decide failed; its error is above" >&2
+    return 1
+  }
+  local fields='(.due | type == "boolean") and (.publish | type == "boolean")'
+  fields+=' and (.reason | type == "string") and (.lookup_needed | type == "boolean")'
+  if ! jq -e "$fields" <<<"$out" >/dev/null 2>&1; then
+    echo "report-gate: report-decide payload lacks due, publish, reason, or lookup_needed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
 }
+
+decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
   # Ask for the one tag. "release not found" means the day is not published yet; any
   # other failure (auth, network) stops the run. check-daily-report.sh has the same
@@ -125,10 +138,7 @@ if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
     echo "report-gate: gh release view $tag failed: $view_err" >&2
     exit 1
   fi
-  decision="$(decide "$published")" || {
-    echo "report-gate: report-decide failed; its error is above" >&2
-    exit 1
-  }
+  decision="$(decided "$published")" || exit 1
 fi
 warning="$(jq -r '.warning // ""' <<<"$decision")"
 if [[ -n "$warning" ]]; then
