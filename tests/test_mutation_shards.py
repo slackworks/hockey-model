@@ -183,3 +183,27 @@ def test_union_keeps_every_key_and_a_null_never_wins(part: dict[str, object]) ->
     union = shards._union_results(Path("a.meta"), "exit_code_by_key", [part, {}])
     assert set(union) == set(part)
     assert all(union[key] == value for key, value in part.items() if value is not None)
+
+
+_MODULES = st.sampled_from([f"pkg.mod{n}" for n in range(8)])
+
+
+@given(
+    table=st.lists(st.lists(_MODULES, max_size=4).map(tuple), max_size=5).map(tuple),
+    covered=st.sets(_MODULES),
+)
+def test_check_partition_fails_exactly_for_a_missing_unknown_or_repeated_module(
+    table: tuple[tuple[str, ...], ...], covered: set[str]
+) -> None:
+    listed = [module for shard in table for module in shard]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shards, "SHARDS", table)
+        problems = shards.check_partition(covered)
+    expected = (
+        {f"{m} is covered but in no shard" for m in covered - set(listed)}
+        | {f"{m} is in a shard but not covered" for m in set(listed) - covered}
+        | {f"{m} is in more than one shard" for m in set(listed) if listed.count(m) > 1}
+    )
+    assert set(problems) == expected
+    assert len(problems) == len(expected)
+    assert (problems == []) == (sorted(set(listed)) == sorted(listed) and set(listed) == covered)
