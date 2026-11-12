@@ -3,16 +3,27 @@
 import copy
 import json
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
-from itertools import count as count_from
 from pathlib import Path
 
 import pytest
+from refresh_support import (
+    BOX_URL,
+    ESPN,
+    MAIN_GAME,
+    NOW,
+    SCORE_TEAMS,
+    SCORE_URL,
+    FakeClient,
+    failing_days,
+    fixture,
+    minute_clock,
+    score_requests,
+)
 from seeding import add_game, utc
 
 from hockey_model.sources.errors import SourceError
-from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT, TEAM_GAMES_URL, goalie_games_url
 from hockey_model.sources.nhl import score_day_url
 from hockey_model.store.db import connect
@@ -21,92 +32,6 @@ from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_nhl import MAX_UNRESOLVED_DAYS, UNRESOLVED_RETRY_AFTER
 from hockey_model.store.source_reads import record_read
 from hockey_model.types import HockeyModelError
-
-FIXTURES = Path(__file__).parent.parent / "fixtures"
-NOW = datetime(2026, 1, 10, 10, 0, tzinfo=UTC)
-SCORE_URL = "https://api-web.nhle.com/v1/score/"
-BOX_URL = "https://api-web.nhle.com/v1/gamecenter/"
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
-
-
-def fixture(name: str) -> bytes:
-    return (FIXTURES / name).read_bytes()
-
-
-MAIN_GAME = 2025020697
-SCORE_TEAMS = {
-    game["id"]: (game["homeTeam"]["abbrev"], game["awayTeam"]["abbrev"])
-    for game in json.loads(fixture("nhl/score_2026-01-10.json"))["games"]
-}
-
-
-class FakeClient(HttpClient):
-    """Serve the fixtures by URL and record every request."""
-
-    def __init__(self, overrides: dict[str, bytes | Exception] | None = None) -> None:
-        super().__init__()
-        self.urls: list[str] = []
-        self.overrides = overrides or {}
-
-    def get(self, source: str, url: str) -> bytes:
-        self.urls.append(url)
-        body = self.overrides[url] if url in self.overrides else self._fixture_for(source, url)
-        if isinstance(body, Exception):
-            raise body
-        return body
-
-    def _fixture_for(self, source: str, url: str) -> bytes:
-        if url.startswith(SCORE_URL):
-            return self._score_day(url)
-        if url.startswith(BOX_URL):
-            return self._boxscore(int(url.split("/")[-2]))
-        if url == TEAM_GAMES_URL:
-            return fixture("moneypuck/all_teams_sample.csv")
-        if "seasonPlayersSummary" in url:
-            return fixture("moneypuck/goalies_2025_sample.zip")
-        if "scoreboard" in url:
-            return scoreboard(url.endswith("20260110")).encode()
-        if url == f"{ESPN}/injuries":
-            return fixture("espn/injuries.json")
-        if "dailyfaceoff" in url:
-            return fixture("daily_faceoff/starting_goalies.html")
-        raise SourceError(source, url, "HTTP 404")
-
-    @staticmethod
-    def _boxscore(game_id: int) -> bytes:
-        """The fixture boxscore, with the teams of the stored game as a real response has.
-
-        Each game but the main one gets its own players, because one player is on one team
-        in one read.
-        """
-        payload = json.loads(fixture("nhl/boxscore_2025020709.json"))
-        payload["id"] = game_id
-        if game_id in SCORE_TEAMS:
-            payload["homeTeam"]["abbrev"], payload["awayTeam"]["abbrev"] = SCORE_TEAMS[game_id]
-        if game_id != MAIN_GAME:
-            for side in payload["playerByGameStats"].values():
-                for group in side.values():
-                    for entry in group:
-                        entry["playerId"] += (game_id % 1000) * 100_000_000
-                        entry["name"]["default"] += f" {game_id}"
-        return json.dumps(payload).encode()
-
-    @staticmethod
-    def _score_day(url: str) -> bytes:
-        if url.endswith("2026-01-10"):
-            return fixture("nhl/score_2026-01-10.json")
-        return b'{"games": []}'
-
-
-def scoreboard(with_game: bool) -> str:
-    """One ESPN game that matches stored game 2025020697: NYR at BOS, 2026-01-10 18:00Z."""
-    payload = json.loads(fixture("espn/scoreboard_20261103.json"))
-    event = copy.deepcopy(payload["events"][0])
-    event["date"] = "2026-01-10T18:00Z"
-    away, home = event["competitions"][0]["competitors"][0:2]
-    away["team"]["abbreviation"], home["team"]["abbreviation"] = "NYR", "BOS"
-    payload["events"] = [event] if with_game else []
-    return json.dumps(payload)
 
 
 @pytest.fixture
@@ -340,11 +265,6 @@ def test_a_finished_backfill_says_it_is_complete(conn: sqlite3.Connection) -> No
     assert refresh(conn, FakeClient(), now=NOW).backfill_complete is None
 
 
-def _minute_clock(origin: datetime = NOW) -> Callable[[], datetime]:
-    ticks = count_from(0)
-    return lambda: origin + timedelta(minutes=next(ticks))
-
-
 def test_a_backfill_that_spends_its_budget_stops_and_the_next_run_continues(
     conn: sqlite3.Connection,
 ) -> None:
@@ -355,19 +275,19 @@ def test_a_backfill_that_spends_its_budget_stops_and_the_next_run_continues(
         first,
         now=NOW,
         backfill_from=start,
-        clock=_minute_clock(),
+        clock=minute_clock(),
         budget=timedelta(minutes=5),
     )
     assert report.backfill_complete is False
     assert report.errors == ()
     assert any("time ran out" in n for n in report.notes)
     assert any("backfill: stopped in the window" in n for n in report.notes)
-    assert "2024-06-01" not in _score_requests(first)
+    assert "2024-06-01" not in score_requests(first)
 
     second = FakeClient()
     done = refresh(conn, second, now=NOW + timedelta(hours=1), backfill_from=start)
     assert done.backfill_complete is True
-    assert "2024-06-01" in _score_requests(second)
+    assert "2024-06-01" in score_requests(second)
 
 
 def test_a_budget_stop_with_no_new_unit_is_an_error_that_names_the_budget(
@@ -380,7 +300,7 @@ def test_a_budget_stop_with_no_new_unit_is_an_error_that_names_the_budget(
         FakeClient(),
         now=NOW,
         backfill_from=start,
-        clock=_minute_clock(),
+        clock=minute_clock(),
         budget=timedelta(minutes=1),
     )
     assert report.backfill_complete is False
@@ -401,10 +321,10 @@ def test_a_day_that_closed_since_the_last_run_does_not_count_as_progress(
         second,
         now=next_day,
         backfill_from=start,
-        clock=_minute_clock(next_day),
+        clock=minute_clock(next_day),
         budget=timedelta(minutes=1),
     )
-    assert "2026-01-09" in _score_requests(second)
+    assert "2026-01-09" in score_requests(second)
     assert report.backfill_complete is False
     assert any("--budget-seconds" in str(e) for e in report.errors)
 
@@ -419,7 +339,7 @@ def test_a_recently_failed_boxscore_does_not_stop_the_older_windows(
     client = FakeClient(failing)
     report = refresh(conn, client, now=NOW + timedelta(hours=2), backfill_from=start)
     assert report.backfill_complete is False
-    assert "2024-06-01" in _score_requests(client)
+    assert "2024-06-01" in score_requests(client)
     assert any("some days or games are unread" in n for n in report.notes)
 
 
@@ -436,7 +356,7 @@ def test_a_budget_needs_a_clock(conn: sqlite3.Connection) -> None:
 def test_a_backfill_with_a_failed_day_is_not_complete(conn: sqlite3.Connection) -> None:
     report = refresh(
         conn,
-        FakeClient(_failing_days("2026-01-05")),
+        FakeClient(failing_days("2026-01-05")),
         now=NOW,
         backfill_from=date(2026, 1, 1),
     )
@@ -466,43 +386,35 @@ def test_skipped_boxscores_are_counted_in_the_notes(conn: sqlite3.Connection) ->
     assert any("nhl_boxscores: 1 skipped" in n for n in report.notes)
 
 
-def _failing_days(*days: str) -> dict[str, bytes | Exception]:
-    return {f"{SCORE_URL}{day}": SourceError("nhl", "u", "HTTP 503") for day in days}
-
-
-def _score_requests(client: FakeClient) -> list[str]:
-    return [u[len(SCORE_URL) :] for u in client.urls if u.startswith(SCORE_URL)]
-
-
 def test_a_failed_score_day_is_read_again_by_the_next_refresh(conn: sqlite3.Connection) -> None:
-    refresh(conn, FakeClient(_failing_days("2026-01-07")), now=NOW, backfill_from=date(2026, 1, 6))
+    refresh(conn, FakeClient(failing_days("2026-01-07")), now=NOW, backfill_from=date(2026, 1, 6))
     client = FakeClient()
     report = refresh(conn, client, now=NOW + timedelta(hours=1))
-    assert "2026-01-07" in _score_requests(client)
+    assert "2026-01-07" in score_requests(client)
     assert report.errors == ()
 
 
 def test_a_score_day_that_worked_is_not_read_again_for_an_old_failure(
     conn: sqlite3.Connection,
 ) -> None:
-    refresh(conn, FakeClient(_failing_days("2026-01-07")), now=NOW, backfill_from=date(2026, 1, 6))
+    refresh(conn, FakeClient(failing_days("2026-01-07")), now=NOW, backfill_from=date(2026, 1, 6))
     refresh(conn, FakeClient(), now=NOW + timedelta(hours=1))
     client = FakeClient()
     refresh(conn, client, now=NOW + timedelta(hours=2))
-    assert "2026-01-07" not in _score_requests(client)
+    assert "2026-01-07" not in score_requests(client)
 
 
 def test_a_failed_score_day_older_than_the_window_is_left_alone(conn: sqlite3.Connection) -> None:
-    refresh(conn, FakeClient(_failing_days("2025-11-01")), now=NOW, backfill_from=date(2025, 11, 1))
+    refresh(conn, FakeClient(failing_days("2025-11-01")), now=NOW, backfill_from=date(2025, 11, 1))
     client = FakeClient()
     refresh(conn, client, now=NOW + timedelta(hours=1))
-    assert "2025-11-01" not in _score_requests(client)
+    assert "2025-11-01" not in score_requests(client)
 
 
 def test_a_score_day_that_failed_in_two_reads_is_skipped_and_named(
     conn: sqlite3.Connection,
 ) -> None:
-    failing = _failing_days("2025-11-01")
+    failing = failing_days("2025-11-01")
     for days in (0, 1):
         report = refresh(
             conn,
@@ -513,7 +425,7 @@ def test_a_score_day_that_failed_in_two_reads_is_skipped_and_named(
         assert len(report.errors) == 1
     client = FakeClient(failing)
     report = refresh(conn, client, now=NOW + timedelta(days=2), backfill_from=date(2025, 11, 1))
-    assert "2025-11-01" not in _score_requests(client)
+    assert "2025-11-01" not in score_requests(client)
     assert report.errors == ()
     assert any("nhl_scores: skipped 2025-11-01, which failed" in n for n in report.notes)
 
@@ -521,10 +433,10 @@ def test_a_score_day_that_failed_in_two_reads_is_skipped_and_named(
 def test_a_score_day_with_one_failed_read_is_still_read_in_a_backfill(
     conn: sqlite3.Connection,
 ) -> None:
-    refresh(conn, FakeClient(_failing_days("2025-11-01")), now=NOW, backfill_from=date(2025, 11, 1))
+    refresh(conn, FakeClient(failing_days("2025-11-01")), now=NOW, backfill_from=date(2025, 11, 1))
     client = FakeClient()
     report = refresh(conn, client, now=NOW + timedelta(hours=1), backfill_from=date(2025, 11, 1))
-    assert "2025-11-01" in _score_requests(client)
+    assert "2025-11-01" in score_requests(client)
     assert report.errors == ()
 
 
@@ -544,10 +456,10 @@ def test_a_boxscore_that_failed_in_two_reads_does_not_stop_the_later_games(
 
 def test_failed_days_apart_do_not_stop_the_refresh_before_today(conn: sqlite3.Connection) -> None:
     days = ("2026-01-02", "2026-01-04", "2026-01-06")
-    refresh(conn, FakeClient(_failing_days(*days)), now=NOW, backfill_from=date(2026, 1, 1))
-    client = FakeClient(_failing_days(*days))
+    refresh(conn, FakeClient(failing_days(*days)), now=NOW, backfill_from=date(2026, 1, 1))
+    client = FakeClient(failing_days(*days))
     refresh(conn, client, now=NOW + timedelta(hours=1))
-    assert "2026-01-10" in _score_requests(client)
+    assert "2026-01-10" in score_requests(client)
 
 
 def _fresh_moneypuck(conn: sqlite3.Connection, now: datetime, last_season: int) -> None:
