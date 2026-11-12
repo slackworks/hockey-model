@@ -115,6 +115,14 @@ def test_gate_due_and_not_published_publishes(fakes: Path, tmp_path: Path) -> No
     }
 
 
+@pytest.mark.parametrize("bad", ["20261031", "2026-W44-6", "2026-02-30", "0000-01-01"])
+def test_gate_refuses_an_invalid_date(fakes: Path, tmp_path: Path, bad: str) -> None:
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", bad)
+    assert result.returncode == 2
+    assert "not a real date YYYY-MM-DD" in result.stderr
+    assert _calls(tmp_path) == []
+
+
 def test_gate_skips_a_day_that_is_already_published(fakes: Path, tmp_path: Path) -> None:
     # After the puck drop, a published day is skipped and never replaced.
     not_due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3})
@@ -301,12 +309,12 @@ def test_gate_help_names_every_option(fakes: Path, tmp_path: Path) -> None:
 # --- publish ------------------------------------------------------------------
 
 
-def _write_report(report_dir: Path) -> None:
+def _write_report(report_dir: Path, day: str = DAY) -> None:
     report_dir.mkdir()
-    (report_dir / f"report-{DAY}.md").write_text("# report\n", encoding="utf-8")
-    (report_dir / f"report-{DAY}.json").write_text("{}\n", encoding="utf-8")
-    (report_dir / f"backtest-{DAY}.json").write_text("{}\n", encoding="utf-8")
-    (report_dir / f"backtest-games-{DAY}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
+    (report_dir / f"report-{day}.md").write_text("# report\n", encoding="utf-8")
+    (report_dir / f"report-{day}.json").write_text("{}\n", encoding="utf-8")
+    (report_dir / f"backtest-{day}.json").write_text("{}\n", encoding="utf-8")
+    (report_dir / f"backtest-games-{day}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
 
 
 def _publish(fakes: Path, tmp_path: Path, **extra: str) -> subprocess.CompletedProcess[str]:
@@ -322,6 +330,22 @@ def test_publish_creates_the_release_at_the_build_commit(fakes: Path, tmp_path: 
     assert create and f" {TAG} " in create[0]
     assert f"--target {SHA}" in create[0]
     assert create[0].count("backtest") == 2
+
+
+def test_publish_accepts_a_leap_day(fakes: Path, tmp_path: Path) -> None:
+    day = "2024-02-29"
+    report_dir = tmp_path / "report"
+    _write_report(report_dir, day)
+    result = _run(
+        "publish-daily-report.sh",
+        _env(fakes, tmp_path),
+        "--date",
+        day,
+        "--report-dir",
+        str(report_dir),
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(f"gh release create reports-{day} " in call for call in _calls(tmp_path))
 
 
 def test_publish_replaces_the_files_of_an_existing_release(fakes: Path, tmp_path: Path) -> None:
@@ -356,13 +380,15 @@ def test_publish_needs_the_build_commit(fakes: Path, tmp_path: Path) -> None:
     assert "GITHUB_SHA" in result.stderr
 
 
-@pytest.mark.parametrize("bad", ["../2026-11-04", "2026-11-04 extra", "2026-1-4", "tomorrow"])
+@pytest.mark.parametrize(
+    "bad", ["../2026-11-04", "2026-11-04 extra", "2026-1-4", "tomorrow", "2026-02-30", "0000-01-01"]
+)
 def test_publish_refuses_a_malformed_date(fakes: Path, tmp_path: Path, bad: str) -> None:
     _write_report(tmp_path / "report")
     args = ("--date", bad, "--report-dir", str(tmp_path / "report"))
     result = _run("publish-daily-report.sh", _env(fakes, tmp_path), *args)
     assert result.returncode == 2
-    assert "must be YYYY-MM-DD" in result.stderr
+    assert "not a real date YYYY-MM-DD" in result.stderr
     assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
 
 
@@ -457,7 +483,16 @@ def test_prepare_prints_the_refresh_report_when_the_refresh_fails(
     assert not (tmp_path / "store" / "store.db.backfilled").exists()
 
 
-BAD_DAYS = ["../2026-11-04", "2026-13-45", "2026-02-30", "2025-02-29", "2026-00-10", "2026-4-5"]
+BAD_DAYS = [
+    "../2026-11-04",
+    "2026-13-45",
+    "2026-02-30",
+    "2025-02-29",
+    "2026-00-10",
+    "2026-4-5",
+    "0000-01-01",
+    "0000-02-29",
+]
 
 
 @pytest.mark.parametrize("bad", BAD_DAYS)

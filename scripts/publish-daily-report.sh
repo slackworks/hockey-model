@@ -51,9 +51,10 @@ if [[ -z "$day" || -z "$report_dir" ]]; then
   echo "publish-daily-report: --date and --report-dir are required; see --help" >&2
   exit 2
 fi
-# The date goes into a tag and a path, so it must have exactly the calendar shape.
-if [[ ! "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-  echo "publish-daily-report: --date must be YYYY-MM-DD, got '$day'" >&2
+# shellcheck source=scripts/valid-day.sh
+source "$(dirname "$0")/valid-day.sh"
+if ! is_valid_day "$day"; then
+  echo "publish-daily-report: --date '$day' is not a real date YYYY-MM-DD" >&2
   exit 2
 fi
 if [[ -z "${GITHUB_SHA:-}" ]]; then

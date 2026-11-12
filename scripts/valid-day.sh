@@ -11,7 +11,7 @@ is_valid_day() {
   [[ "$text" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]] || return 1
   # Meaning: the month and the day exist in that year. 10# stops bash from reading 08 as octal.
   local year=$((10#${BASH_REMATCH[1]})) month=$((10#${BASH_REMATCH[2]})) day=$((10#${BASH_REMATCH[3]}))
-  ((month >= 1 && month <= 12 && day >= 1)) || return 1
+  ((year >= 1 && month >= 1 && month <= 12 && day >= 1)) || return 1
   local last=31
   case "$month" in
     4 | 6 | 9 | 11) last=30 ;;
