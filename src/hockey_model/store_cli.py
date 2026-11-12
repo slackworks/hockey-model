@@ -57,6 +57,13 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         help="read the MoneyPuck files even when they are fresh",
     )
     parser.add_argument(
+        "--retry-skipped",
+        action="store_true",
+        help="read again the score days, boxscores, and MoneyPuck files that earlier reads"
+        " skipped as known gaps; one good read clears a gap. A boxscore whose last read failed"
+        " less than a day ago still waits",
+    )
+    parser.add_argument(
         "--budget-seconds",
         type=int,
         default=None,
@@ -179,6 +186,7 @@ def _refresh(args: argparse.Namespace) -> tuple[object, int]:
                 backfill_from=args.backfill_from,
                 clock=lambda: datetime.now(UTC),
                 reread_moneypuck=args.reread_moneypuck,
+                retry_skipped=args.retry_skipped,
                 budget=None
                 if args.budget_seconds is None
                 else timedelta(seconds=args.budget_seconds),

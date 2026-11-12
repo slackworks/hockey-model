@@ -258,6 +258,8 @@ EndNhl ==
                    stopped, exitCode>>
 
 \* MoneyPuck, ESPN, and Daily Faceoff run after the NHL steps. A failure sets refresh exit 1.
+\* The MoneyPuck time stop (#136) is not modeled. It reads one file in each run, so it adds no
+\* run that fails to make progress.
 OtherSources ==
     /\ phase = "other"
     /\ \E e \in (IF calm /\ ~OtherBroken THEN {FALSE}

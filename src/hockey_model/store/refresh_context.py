@@ -10,7 +10,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.db import StoreError
-from hockey_model.store.source_reads import record_read
+from hockey_model.store.source_reads import abandoned_urls, record_read
 from hockey_model.types import HockeyModelError
 
 # Errors that a bad source response or a bad stored schedule cause. Other errors are bugs.
@@ -48,7 +48,11 @@ class RefreshRun:
     # Read the MoneyPuck files even when they are fresh. The upgrade needs this so the
     # attempt counts arrive at once, instead of after the weekly refresh.
     reread_moneypuck: bool = False
+    # Read a unit again that earlier reads left as a known gap. One good read clears the gap.
+    retry_skipped: bool = False
     credits: list[str] = field(default_factory=list)
+    # The boxscores this refresh already read, so one game costs one request per refresh.
+    boxscores_read: set[int] = field(default_factory=set)
 
     def stamp(self) -> datetime:
         """Return the time to store with a read: the clock when one is set, else ``now``."""
@@ -57,6 +61,10 @@ class RefreshRun:
     def out_of_time(self) -> bool:
         """Return True once the time budget of this refresh is spent."""
         return self.deadline is not None and self.stamp() >= self.deadline
+
+    def skipped(self, source: str) -> frozenset[str]:
+        """Return the URLs of ``source`` that this refresh skips as known gaps."""
+        return frozenset() if self.retry_skipped else abandoned_urls(self.conn, source)
 
     def attempt(self, source: str, url: str, unit: Callable[[datetime], int]) -> bool:
         """Run one unit of work in one transaction. Return False when it failed.
