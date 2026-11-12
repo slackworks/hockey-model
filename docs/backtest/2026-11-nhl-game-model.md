@@ -54,6 +54,7 @@ The goalie features read no starter, so the actual run and the guess run give th
 
 The interval comes from a block bootstrap with 16-game blocks.
 The success test needs the 95th percentile of the difference below zero.
+This report is a first look. A later look at the same games uses a smaller tail (see `docs/design/promotion-bar.md`).
 The interval of `model_actual` is fully below zero, so the test passed.
 The rows `model_actual` and `model_guess` are equal because neither live feature reads the starting goalie.
 The equal scores do not show that a wrong goalie costs nothing.

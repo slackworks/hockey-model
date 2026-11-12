@@ -40,7 +40,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Read `data_cutoff` of a confirmation record as "data through this day", so games that start on the cutoff day are no longer in the cohort. [fix:experiments]
-- Fail a confirmation run, before it saves, when the games scored differ from the cohort count. [fix:experiments]
+- Fail a confirmation run, before it writes any file, when the games scored differ from the cohort count or the run has no interval. [fix:experiments]
+- Add a note to the run payload that says why a run is inconclusive when its interval is wider than the expected effect. [feat:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
 - The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
@@ -53,6 +54,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Leave the same count of bootstrap means outside each end of the interval. The upper end moved one rank lower, so a promotion needs a slightly stricter result. [fix:backtest]
 - Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
 - Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
 - Publish the first daily report of a game day even when the run starts after the first puck drop, with a `late` gate reason and a warning. Before this, a late trigger published nothing. [fix:report]
