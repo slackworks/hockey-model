@@ -73,6 +73,13 @@ while (($# > 0)); do
   esac
 done
 
+# shellcheck source=scripts/valid-day.sh
+source "$(dirname "$0")/valid-day.sh"
+if [[ -n "$day" ]] && ! is_valid_day "$day"; then
+  echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
+  exit 2
+fi
+
 # The schedule read is one HTTP request. Each run then makes one release lookup, so a
 # run after the puck drop is still answered from the release state.
 # Without --date, report-due picks the Eastern game day that holds now.
