@@ -6,10 +6,11 @@ Design: docs/design/promotion-bar.md
 import re
 import sqlite3
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, timedelta
 
 from hockey_model.experiments.looks import promotion_tail
 from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.game_day import game_day_of, game_day_window
 from hockey_model.game_model.seasons import SeasonPlan, confirmation_plan, in_cohort, season_of
 from hockey_model.store.reads import LATEST_GAME, final_games_before
 from hockey_model.types import HockeyModelError
@@ -21,9 +22,9 @@ _CUTOFF_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 def cutoff_instant(record: ExperimentRecord) -> datetime:
     """Return the instant after which games are in the cohort.
 
-    ``data_cutoff`` means "data through this day": the candidate may have used any game that
-    started on that day. The instant is the last microsecond of that day in UTC, and the cohort
-    holds the games that start after it. Game starts are stored in UTC.
+    ``data_cutoff`` means "data through this day": the candidate may have used any game of that
+    Eastern game day (see game_day.py). The instant is the last microsecond of that game day,
+    and the cohort holds the games that start after it. Game starts are stored in UTC.
     """
     problem = (
         f"experiment {record.id!r}: data_cutoff {record.data_cutoff!r} is not a YYYY-MM-DD date"
@@ -31,7 +32,8 @@ def cutoff_instant(record: ExperimentRecord) -> datetime:
     if not _CUTOFF_SHAPE.fullmatch(record.data_cutoff):
         raise HockeyModelError(problem)
     try:
-        return datetime.combine(date.fromisoformat(record.data_cutoff), time.max, tzinfo=UTC)
+        closes = game_day_window(date.fromisoformat(record.data_cutoff))[1]
+        return closes - timedelta(microseconds=1)
     except ValueError as exc:
         raise HockeyModelError(problem) from exc
 
@@ -45,7 +47,7 @@ def plan_for(record: ExperimentRecord) -> SeasonPlan:
 def floor_notes(record: ExperimentRecord, plan: SeasonPlan) -> list[str]:
     """Say so when the confirmation floor moved the first scored season."""
     cutoff = plan.cutoff
-    natural = season_of(cutoff.date()) if cutoff is not None else plan.scored[0]
+    natural = season_of(game_day_of(cutoff)) if cutoff is not None else plan.scored[0]
     if natural == plan.scored[0]:
         return []
     return [

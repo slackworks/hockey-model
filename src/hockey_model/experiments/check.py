@@ -33,7 +33,7 @@ from hockey_model.experiments.history import (
     deleted_record_ids,
     registration_commit,
 )
-from hockey_model.experiments.looks import look_problem
+from hockey_model.experiments.looks import CONFIRMATION, look_problem
 from hockey_model.experiments.models import (
     STATUS_INCONCLUSIVE,
     STATUS_PROMOTED,
@@ -151,7 +151,7 @@ def run_experiment(
 
     cohort_games = 0
     plan_notes: list[str] = []
-    if record.cohort == "confirmation":
+    if record.cohort == CONFIRMATION:
         _check_confirmation_can_run(record)
         _check_look(record, root)
         plan = plan_for(record)
@@ -162,13 +162,13 @@ def run_experiment(
 
     report, game_records = run_backtest(conn, plan, candidates=record.candidate_features)
     # The checks come before any write, so a refused run leaves no file behind.
-    if record.cohort == "confirmation":
+    if record.cohort == CONFIRMATION:
         require_scored_cohort(record, _require_interval(record, report).games, cohort_games)
     # The caller's export goes first. A write failure then leaves the look unspent.
     if games_out is not None:
         write_game_records(games_out, game_records)
 
-    if record.cohort == "confirmation":
+    if record.cohort == CONFIRMATION:
         csv_path = results_dir(root) / f"{record.id}-games.csv"
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         write_game_records(csv_path, game_records)

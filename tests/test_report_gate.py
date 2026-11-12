@@ -9,16 +9,24 @@ from hypothesis import strategies as st
 from hockey_model.report_gate import (
     REASON_ALREADY_PUBLISHED,
     REASON_DRY_RUN,
+    REASON_DUE,
     REASON_LATE,
     REASON_NO_GAMES,
     REASON_REPLACE,
-    REASONS,
     GateDecision,
     decide,
     warning,
 )
 from hockey_model.store_cli import _report_decide
 
+REASONS = (
+    REASON_DRY_RUN,
+    REASON_NO_GAMES,
+    REASON_REPLACE,
+    REASON_ALREADY_PUBLISHED,
+    REASON_DUE,
+    REASON_LATE,
+)
 _FACTS = {
     "due": st.booleans(),
     "force": st.booleans(),

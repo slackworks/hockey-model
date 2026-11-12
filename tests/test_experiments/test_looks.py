@@ -100,3 +100,8 @@ def test_look_problem_accepts_exactly_the_count_of_earlier_confirmations_plus_on
     else:
         assert problem is not None
         assert f"expected {expected}" in problem
+
+
+def test_the_first_look_keeps_the_registered_95th_percentile_bar() -> None:
+    """Record 0001 registered the 95th percentile. A new default must not move that bar."""
+    assert BASE_TAIL == 0.05

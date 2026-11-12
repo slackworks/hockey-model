@@ -14,14 +14,6 @@ REASON_REPLACE = "replace"
 REASON_ALREADY_PUBLISHED = "already-published"
 REASON_DUE = "due"
 REASON_LATE = "late"
-REASONS = (
-    REASON_DRY_RUN,
-    REASON_NO_GAMES,
-    REASON_REPLACE,
-    REASON_ALREADY_PUBLISHED,
-    REASON_DUE,
-    REASON_LATE,
-)
 
 
 @dataclass(frozen=True, slots=True)

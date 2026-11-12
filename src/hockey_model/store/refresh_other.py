@@ -64,6 +64,8 @@ def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
 
     A download that has begun cannot stop, so the check comes before each file. The first file
     of a run is always tried, so a run that the NHL steps left no time still makes progress.
+    ``tried`` counts files that were read, so a run of failed files can pass the deadline by
+    at most MAX_UNIT_FAILURES files.
     A backfill that reached this step is not complete while a file is waiting.
     """
     if tried == 0 or not run.out_of_time():
