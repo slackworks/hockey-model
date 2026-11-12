@@ -16,18 +16,24 @@ import hashlib
 import json
 import sqlite3
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
 from hockey_model.backtest.game_records import GameRecord, write_game_records
-from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, run_backtest
+from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun, run_backtest
+from hockey_model.experiments.cohort import (
+    floor_notes,
+    plan_for,
+    require_cohort_size,
+    require_scored_cohort,
+)
 from hockey_model.experiments.history import (
     check_immutable_fields,
     check_one_shot,
     deleted_record_ids,
     registration_commit,
 )
+from hockey_model.experiments.looks import look_problem
 from hockey_model.experiments.models import (
     STATUS_INCONCLUSIVE,
     STATUS_PROMOTED,
@@ -47,14 +53,7 @@ from hockey_model.experiments.registry import (
 )
 from hockey_model.experiments.schemas import CHECK_OUTPUT_SCHEMA, EXPERIMENT_SCHEMA
 from hockey_model.game_model.features import feature_name_problem
-from hockey_model.game_model.seasons import (
-    SeasonPlan,
-    confirmation_plan,
-    exploration_plan,
-    in_cohort,
-    scored_label,
-)
-from hockey_model.store.reads import LATEST_GAME, final_games_before
+from hockey_model.game_model.seasons import exploration_plan, scored_label
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.types import HockeyModelError
 
@@ -150,14 +149,21 @@ def run_experiment(
     record = get_record(record_id, root)
     validate_against_schema(record, EXPERIMENT_SCHEMA)
 
+    cohort_games = 0
+    plan_notes: list[str] = []
     if record.cohort == "confirmation":
         _check_confirmation_can_run(record)
-        plan = confirmation_plan(_cutoff_instant(record))
-        _require_cohort_size(conn, record, plan)
+        _check_look(record, root)
+        plan = plan_for(record)
+        plan_notes = floor_notes(record, plan)
+        cohort_games = require_cohort_size(conn, record, plan)
     else:
         plan = exploration_plan()
 
     report, game_records = run_backtest(conn, plan, candidates=record.candidate_features)
+    model = _model_run(report)
+    if record.cohort == "confirmation" and model is not None:
+        require_scored_cohort(record, model.games, cohort_games)
     # The caller's export goes first. A write failure then leaves the look unspent.
     if games_out is not None:
         write_game_records(games_out, game_records)
@@ -168,7 +174,7 @@ def run_experiment(
         write_game_records(csv_path, game_records)
         updated = record_with_result(record, report, csv_path, root)
         updated.save(registry_dir(root) / f"{updated.id}.json")
-        notes = report.notes
+        notes = report.notes + tuple(plan_notes)
     else:
         updated = record
         notes = report.notes + ("This run is exploratory: it cannot promote a feature.",)
@@ -209,6 +215,7 @@ def _check_one(record_id: str, repo_root: Path) -> CheckEntry:
             "rename the file or restore the id"
         )
     validate_against_schema(record, EXPERIMENT_SCHEMA)
+    _check_look(record, repo_root)
     _check_features_known(record)
     _check_status_matches_result(record)
     entry: CheckEntry = {"id": record.id, "status": record.status, "valid": True}
@@ -292,41 +299,31 @@ def _check_confirmation_can_run(record: ExperimentRecord) -> None:
         )
 
 
-def _cutoff_instant(record: ExperimentRecord) -> datetime:
-    """Return the instant the candidate was frozen, from the record's data_cutoff.
-
-    Game starts are stored in UTC, so a bare date cutoff needs a UTC zone to compare.
-    """
-    try:
-        cutoff = datetime.fromisoformat(record.data_cutoff)
-    except ValueError as exc:
-        raise HockeyModelError(
-            f"experiment {record.id!r}: data_cutoff {record.data_cutoff!r} is not a YYYY-MM-DD date"
-        ) from exc
-    return cutoff if cutoff.tzinfo is not None else cutoff.replace(tzinfo=UTC)
+def _model_run(report: BacktestReport) -> ScoredRun | None:
+    """Return the scored run of the model with the goalie who started, or None."""
+    return next((run for run in report.runs if run.name == MODEL_ACTUAL), None)
 
 
-def _require_cohort_size(
-    conn: sqlite3.Connection, record: ExperimentRecord, plan: SeasonPlan
-) -> None:
-    """Refuse a confirmation run before the cohort holds enough games."""
-    games = [g for g in final_games_before(conn, LATEST_GAME) if in_cohort(g, plan)]
-    if len(games) < record.min_games:
-        raise HockeyModelError(
-            f"experiment {record.id!r}: the confirmation cohort has {len(games)} games, "
-            f"below the registered minimum of {record.min_games}; run "
-            "`hockey-model refresh` and try again after more cohort games finish"
-        )
+def _check_look(record: ExperimentRecord, repo_root: Path) -> None:
+    """Raise when the look number of a confirmation record breaks the registry rule."""
+    number = record.id[:4]
+    earlier = [
+        get_record(other, repo_root) for other in list_records(repo_root) if other[:4] < number
+    ]
+    problem = look_problem(record, earlier)
+    if problem is not None:
+        raise HockeyModelError(f"experiment {record.id!r}: {problem}")
 
 
 def _confirmation_status(record: ExperimentRecord, report: BacktestReport) -> str:
     """Return the status a confirmation run earns.
 
-    Promotion needs the whole 95th-percentile interval below zero. A run whose
+    Promotion needs the upper end of the interval below zero. The interval tail shrinks with
+    the look number (docs/design/promotion-bar.md). A run whose
     interval is wider than the effect the record expects is underpowered, so it is
     inconclusive rather than rejected.
     """
-    model = next((run for run in report.runs if run.name == MODEL_ACTUAL), None)
+    model = _model_run(report)
     if model is None or model.diff_vs_elo_ci is None:
         return STATUS_INCONCLUSIVE
     low, high = model.diff_vs_elo_ci
@@ -343,7 +340,7 @@ def record_with_result(
     A run with no interval has no result to record. The run then fails before it
     saves, so the look is not spent on a run that scored nothing.
     """
-    model = next((run for run in report.runs if run.name == MODEL_ACTUAL), None)
+    model = _model_run(report)
     if model is None or model.diff_vs_elo_ci is None:
         why = "; ".join(report.ineligible_reasons) or "the model run is missing"
         raise HockeyModelError(
