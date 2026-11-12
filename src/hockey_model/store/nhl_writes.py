@@ -96,6 +96,14 @@ def write_boxscore(
 BOXSCORE_TABLES = ("skater_games", "goalie_games")
 
 
+# True for a game that has a skater line and a goalie line for the home and the away team.
+_STORED_BOTH_SIDES = " AND ".join(
+    f"EXISTS (SELECT 1 FROM {table} t WHERE t.game_id = g.game_id AND t.team = g.{side})"
+    for side in ("home", "away")
+    for table in BOXSCORE_TABLES
+)
+
+
 def _stored_teams(conn: sqlite3.Connection, table: str, game_id: int) -> set[str]:
     """Return the teams that already have rows in ``table`` for the game."""
     if table not in BOXSCORE_TABLES:
@@ -104,6 +112,17 @@ def _stored_teams(conn: sqlite3.Connection, table: str, game_id: int) -> set[str
         )
     cursor = conn.execute(f"SELECT DISTINCT team FROM {table} WHERE game_id = ?", (game_id,))
     return {team for (team,) in cursor}
+
+
+def game_is_missing_boxscore(conn: sqlite3.Connection, game_id: int) -> bool:
+    """Return True when the final game ``game_id`` lacks a stored boxscore side."""
+    marks = ",".join("?" for _ in FINAL_STATES)
+    row = conn.execute(
+        "SELECT 1 FROM games g"
+        f" WHERE g.game_id = ? AND g.state IN ({marks}) AND NOT ({_STORED_BOTH_SIDES})",
+        [game_id, *sorted(FINAL_STATES)],
+    ).fetchone()
+    return row is not None
 
 
 def games_missing_boxscore(
@@ -116,17 +135,12 @@ def games_missing_boxscore(
     ``last_day`` are Eastern game days, both included. Either may be None.
     """
     marks = ",".join("?" for _ in FINAL_STATES)
-    stored = " AND ".join(
-        f"EXISTS (SELECT 1 FROM {table} t WHERE t.game_id = g.game_id AND t.team = g.{side})"
-        for side in ("home", "away")
-        for table in BOXSCORE_TABLES
-    )
     low = None if first_day is None else iso_utc(game_day_window(first_day)[0])
     high = None if last_day is None else iso_utc(game_day_window(last_day)[1])
     cursor = conn.execute(
         "SELECT DISTINCT g.game_id FROM games g"
         f" WHERE g.state IN ({marks})"
-        f" AND NOT ({stored})"
+        f" AND NOT ({_STORED_BOTH_SIDES})"
         " AND (? IS NULL OR g.start_utc >= ?) AND (? IS NULL OR g.start_utc < ?)"
         " ORDER BY g.start_utc, g.game_id",
         [*sorted(FINAL_STATES), low, low, high, high],

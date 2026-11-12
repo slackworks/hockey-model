@@ -22,7 +22,7 @@ from hockey_model.store.moneypuck_writes import (
     write_team_games,
 )
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
-from hockey_model.store.source_reads import ESPN_INJURIES, abandoned_urls, last_ok_read
+from hockey_model.store.source_reads import ESPN_INJURIES, last_ok_read
 from hockey_model.store.starter_writes import write_starter_reads
 
 MONEYPUCK = "moneypuck"
@@ -59,11 +59,36 @@ def _note_credit(run: RefreshRun, rows_written: int) -> int:
     return rows_written
 
 
+def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
+    """Return True, with a note, once the time budget is spent and a file was tried.
+
+    A download that has begun cannot stop, so the check comes before each file. The first file
+    of a run is always tried, so a run that the NHL steps left no time still makes progress.
+    A backfill that reached this step is not complete while a file is waiting.
+    """
+    if tried == 0 or not run.out_of_time():
+        return False
+    run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    if run.backfill_complete:
+        run.backfill_complete = False
+    return True
+
+
+def _note_gaps(run: RefreshRun) -> frozenset[str]:
+    """Return the goalie files that earlier reads left as known gaps, and note them."""
+    gaps = run.skipped(MONEYPUCK) - {TEAM_GAMES_URL}
+    if gaps:
+        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+    return gaps
+
+
 def moneypuck(run: RefreshRun) -> None:
     """Read the team file and each goalie file that is missing or, for the team file and the
     current season, older than a week. A finished season is read once."""
     current = season_start_year(run.now.date())
+    tried = 0
     if _stale(run, TEAM_GAMES_URL):
+        tried += 1
         run.attempt(
             MONEYPUCK,
             TEAM_GAMES_URL,
@@ -72,9 +97,7 @@ def moneypuck(run: RefreshRun) -> None:
             ),
         )
     failures = 0
-    gaps = abandoned_urls(run.conn, MONEYPUCK) - {TEAM_GAMES_URL}
-    if gaps:
-        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+    gaps = _note_gaps(run)
     for season in range(FIRST_SEASON, current + 1):
         url = goalie_games_url(season)
         if url in gaps:
@@ -86,6 +109,9 @@ def moneypuck(run: RefreshRun) -> None:
             break
         if not _goalie_file_stale(run, season, current):
             continue
+        if _stop_for_time(run, f"the goalie file of season {season}", tried):
+            break
+        tried += 1
 
         def unit(stamp: datetime, season: int = season) -> int:
             rows = fetch_goalie_games(run.client, season)

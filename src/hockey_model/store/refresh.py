@@ -35,19 +35,28 @@ def refresh(
     clock: Callable[[], datetime] | None = None,
     budget: timedelta | None = None,
     reread_moneypuck: bool = False,
+    retry_skipped: bool = False,
 ) -> RefreshReport:
     """Read every source in order, and report what was written and what failed.
 
     Each source runs even when an earlier one failed. A failed unit of work writes nothing.
     ``clock`` stamps each read with its own fetch time. Without it, every read gets ``now``.
     ``budget`` is how long the NHL steps may read, counted from ``now``. A backfill that
-    spends it stops, and the report says the backfill is not complete.
+    spends it stops, and the report says the backfill is not complete. ``retry_skipped`` reads
+    the units that earlier reads left as known gaps, once more.
     """
     if budget is not None and clock is None:
         raise ValueError("refresh: a budget needs a clock; pass clock to count the time spent")
     deadline = None if budget is None else now + budget
     run = RefreshRun(
-        conn, client, now, backfill_from, clock, deadline, reread_moneypuck=reread_moneypuck
+        conn,
+        client,
+        now,
+        backfill_from,
+        clock,
+        deadline,
+        reread_moneypuck=reread_moneypuck,
+        retry_skipped=retry_skipped,
     )
     return _run(run, _STEPS)
 
