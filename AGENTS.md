@@ -10,6 +10,7 @@ Hockey player stat and game prediction library. Python 3.14, managed with uv.
 - Lint and format: `uv run ruff check .` and `uv run ruff format --check .`
 - Model check: bash scripts/tlc.sh (TLC on specs/daily_prepare.tla; needs Java 11 or later)
 - Type check: `uv run ty check`
+- Language server: `uv run ty server`. `ty` is also the type checker, so the editor and `uv run ty check` agree. Do not add Pyright.
 - Wheel smoke test: `uv run python3 scripts/smoke_wheel.py`. It builds the wheel, installs it alone in a clean venv, and predicts one game from a seeded store. CI runs it in the `smoke` job. `--drop NAME` removes a file from the wheel, and the test must then fail.
 - Workflow scan: `prek run zizmor --all-files`. CI runs the same version in the `zizmor` job. Keep the hook rev and `ZIZMOR_VERSION` in `ci.yml` equal.
 - Mutation testing (advisory, slow): `uv run mutmut run`, then `uv run mutmut results`. It mutates the parsers and the rate math listed in `[tool.mutmut]`. CI runs it weekly in `.github/workflows/mutation.yml`, in shards listed in `scripts/mutation_shards.py`. Each module in `[tool.mutmut]` must sit in exactly one shard. `uv run python3 scripts/mutation_shards.py check` verifies that.
