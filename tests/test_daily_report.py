@@ -259,3 +259,24 @@ def test_json_lists_the_degraded_inputs_of_a_prediction() -> None:
         {"feature": "xg_form", "kind": "xg_form", "teams": ["TOR"]}
     ]
     assert games[1]["degraded_inputs"] == []
+
+
+def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
+    gap = "nhl_scores: https://x/score/2017-09-19 failed in every read; its day cannot change"
+    report = DailyReport(
+        date(2026, 11, 13),
+        utc("2026-11-13T12:00"),
+        0.8,
+        (),
+        footer_gaps=(gap,),
+    )
+    markdown = report_markdown(report)
+    assert markdown.count(gap) == 1
+    assert "Training-day gaps (no game row; no prediction changes):" in markdown
+    assert report_json(report)["training_gaps"] == [gap]
+
+
+def test_no_training_gap_leaves_the_footer_unchanged() -> None:
+    report = DailyReport(date(2026, 11, 13), utc("2026-11-13T12:00"), 0.8, ())
+    assert "Training-day gaps" not in report_markdown(report)
+    assert report_json(report)["training_gaps"] == []

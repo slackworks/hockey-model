@@ -3,7 +3,7 @@
 import sqlite3
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,13 +16,15 @@ from hockey_model.sources.nhl import score_day_url
 from hockey_model.store.db import connect
 from hockey_model.store.reads import injury_reads_before
 from hockey_model.store.source_reads import (
+    ABANDON_AFTER_FAILED_READS,
+    ABANDON_MIN_SPAN_DAYS,
     ACTIVE_FAILURE_WINDOW,
     KNOWN_SOURCES,
     LIVE_FEED_MAX_AGE,
     MONEYPUCK_MAX_AGE,
     record_read,
 )
-from hockey_model.store.staleness import stale_sources
+from hockey_model.store.staleness import stale_sources, training_gaps
 from hockey_model.store.timestamps import iso_utc
 
 AS_OF = utc("2026-01-19T16:00")
@@ -277,3 +279,63 @@ def test_a_newer_good_read_of_a_url_clears_every_failure_of_it(
             assert [r for s, r in _reasons(conn) if s == "daily_faceoff"] == []
         finally:
             conn.close()
+
+
+def _fresh_score_read(conn: sqlite3.Connection) -> None:
+    """One recent good read of the score feed, so the source has worked and is current."""
+    record_read(conn, "nhl_scores", "https://x/score/fresh", utc("2026-11-13T11:00"))
+    conn.commit()
+
+
+def _abandon(conn: sqlite3.Connection, url: str, end: datetime) -> None:
+    """Record enough failed reads of ``url`` over its span that a refresh gives up on it."""
+    count = ABANDON_AFTER_FAILED_READS
+    for k in range(count):
+        when = end - ABANDON_MIN_SPAN_DAYS * (count - 1 - k) / (count - 1) * timedelta(days=1)
+        record_read(conn, "nhl_scores", url, when, error="HTTP 500")
+    conn.commit()
+
+
+def test_an_abandoned_training_day_is_not_on_any_game_row(store: sqlite3.Connection) -> None:
+    # 2017-09-19 is in a training season, so the gap cannot change a prediction (#90, #194).
+    url = score_day_url(date(2017, 9, 19))
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2026-11-01T12:00"))
+    assert [r for r in stale_sources(store, utc("2026-11-13T12:00")) if r[0] == "nhl_scores"] == []
+
+
+def test_an_abandoned_training_day_is_listed_once_in_the_footer(store: sqlite3.Connection) -> None:
+    url = score_day_url(date(2017, 9, 19))
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2026-11-01T12:00"))
+    gaps = training_gaps(store, utc("2026-11-13T12:00"))
+    assert gaps == [f"nhl_scores: {url} failed in every read; its day cannot change a prediction"]
+
+
+def test_an_abandoned_scored_season_day_still_reports_on_game_rows(
+    store: sqlite3.Connection,
+) -> None:
+    url = score_day_url(date(2025, 1, 10))
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2025-02-01T12:00"))
+    reasons = stale_sources(store, utc("2026-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {url} failed") in reasons
+    assert training_gaps(store, utc("2026-11-13T12:00")) == []
+
+
+def test_an_abandoned_current_season_day_still_reports_on_game_rows(
+    store: sqlite3.Connection,
+) -> None:
+    url = score_day_url(date(2026, 10, 20))
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2026-11-05T12:00"))
+    reasons = stale_sources(store, utc("2026-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {url} failed") in reasons
+
+
+def test_an_abandoned_url_with_no_date_always_reports(store: sqlite3.Connection) -> None:
+    url = "https://x/boxscore"
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2026-11-01T12:00"))
+    reasons = stale_sources(store, utc("2026-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {url} failed") in reasons

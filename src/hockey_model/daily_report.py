@@ -19,6 +19,7 @@ from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
+from hockey_model.store.staleness import training_gaps
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.utc import require_utc
 
@@ -50,6 +51,8 @@ class DailyReport:
     level: float
     lines: tuple[DailyLine, ...]
     model: ModelIdentity | None = None
+    # Source gaps in older training days. They change no prediction, so they sit in the footer.
+    footer_gaps: tuple[str, ...] = ()
 
 
 def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
@@ -94,7 +97,8 @@ def build_report(
     """Predict every game that starts on ``day``. Raise on the first game that fails."""
     require_utc(now, "daily report now")
     lines = tuple(_predict_line(row, model, now, level) for row in games_on_day(conn, day))
-    return DailyReport(day, now.astimezone(UTC), level, lines)
+    gaps = tuple(training_gaps(conn, now))
+    return DailyReport(day, now.astimezone(UTC), level, lines, footer_gaps=gaps)
 
 
 def _credits(report: DailyReport) -> list[str]:
@@ -151,6 +155,7 @@ def report_json(report: DailyReport) -> dict[str, Any]:
         "games": [_line_json(line) for line in report.lines],
         "credits": _credits(report),
         "model": _model_json(report.model),
+        "training_gaps": list(report.footer_gaps),
     }
 
 
@@ -214,6 +219,10 @@ def report_markdown(report: DailyReport) -> str:
     credits = _credits(report)
     if credits:
         out.append("Sources: " + " ".join(credits))
+        out.append("")
+    if report.footer_gaps:
+        out.append("Training-day gaps (no game row; no prediction changes):")
+        out.extend(f"- {gap}" for gap in report.footer_gaps)
         out.append("")
     return "\n".join(out)
 
