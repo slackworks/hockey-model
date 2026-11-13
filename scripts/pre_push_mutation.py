@@ -9,10 +9,12 @@ branch, or with the remote default branch on a first push. It maps each changed 
 covered source file (``[tool.mutmut] only_mutate``) to the top-level function or class
 method that holds it, and runs mutmut on those functions only.
 
-A surviving mutant, or an incomplete result such as a timeout, fails the push only when its
-mutated line is a changed line. An incomplete result off the changed line is logged as a note,
-because a hang on code the push does not touch says nothing about the push. A push that
-changes no covered function, such as a docs-only or a test-only push, runs no mutants.
+A surviving mutant fails the push when its mutated line is a changed line. A mutant that hangs
+(status timeout) is gated the same way. A hang on a line that the push does not change is
+listed in the output and does not fail the push. The check works line by line, so a change can
+make a distant line hang, and the weekly run still counts every such mutant. Any other
+incomplete result fails the push. So does a mutant whose mutated line the check cannot find.
+A push that changes no covered function, such as a docs-only or a test-only push, runs no mutants.
 A deleted file selects nothing, because its mutants no longer exist.
 A renamed file counts as added at its new path.
 
@@ -42,6 +44,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 PYPROJECT = "pyproject.toml"
 MUTANTS_DIR = "mutants"
@@ -52,11 +55,16 @@ MUTMUT_COMMAND = ("uv", "run", "mutmut")
 MUTANTS_OUTPUT_NAMES = frozenset(
     {"mutmut-stats.json", "pyproject.toml", "src", "tests", "uv.lock", ".hypothesis"}
 )
-# Statuses that a surviving mutant can carry. Only these are gated by the changed lines.
+# Statuses that a mutant can carry when the tests do not kill it. The changed lines gate them.
 SURVIVING = frozenset({"survived", "no tests"})
-# Statuses that show the test run did not finish. They fail the push only on a changed line.
-INCOMPLETE = frozenset({"timeout", "suspicious", "not checked", "skipped"})
-PASSING = frozenset({"killed"})
+# A mutant that ran past its limit. The changed lines gate it like a survivor.
+HUNG = frozenset({"timeout"})
+# Statuses that show the test run did not finish. These always fail the push.
+INCOMPLETE = frozenset(
+    {"suspicious", "not checked", "skipped", "segfault", "check was interrupted by user"}
+)
+# mutmut counts a mutant that the type check rejects as detected.
+PASSING = frozenset({"killed", "caught by type check"})
 # mutmut joins the parts of a method name with this character and prefixes "x".
 METHOD_SEPARATOR = "ǁ"
 HUNK_NEW = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -80,12 +88,11 @@ class FileChange:
 class Target:
     """A function or method that holds a changed line.
 
-    ``def_line`` is the ``def`` line. mutmut numbers the lines of a mutant from it.
-    ``first_line`` is the first decorator line, or ``def_line`` when there is none.
+    ``first_line`` is the first decorator line, or the ``def`` line when there is none.
+    mutmut numbers the lines of a mutant from it.
     """
 
     qualname: str
-    def_line: int
     first_line: int
     last_line: int
 
@@ -230,7 +237,7 @@ def _targets_in(node: ast.stmt, prefix: str, lines: set[int], out: list[Target])
     first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
     last = node.end_lineno or node.lineno
     if lines & set(range(first, last + 1)):
-        out.append(Target(f"{prefix}{node.name}", node.lineno, first, last))
+        out.append(Target(f"{prefix}{node.name}", first, last))
 
 
 def targets_at(source: str, lines: set[int]) -> list[Target]:
@@ -319,7 +326,7 @@ def run_mutmut(repo: Path, args: list[str]) -> str:
             "with a reason."
         ) from exc
     if proc.returncode != 0:
-        raise PushCheckError(f"mutmut {args[0]} exited {proc.returncode}: {stderr.strip()}")
+        raise PushCheckError(f"mutmut {' '.join(args)} exited {proc.returncode}: {stderr.strip()}")
     return stdout
 
 
@@ -393,47 +400,57 @@ def missing_mutants(globs: list[str], statuses: dict[str, str]) -> list[str]:
     ]
 
 
-def survives_on_changed_line(repo: Path, name: str, owner: tuple[str, Target, set[int]]) -> bool:
-    """Return True when the surviving mutant ``name`` mutates a changed line."""
+def mutates_changed_line(repo: Path, name: str, owner: tuple[str, Target, set[int]]) -> bool:
+    """Return True when the mutant ``name`` mutates a changed line.
+
+    Raise when ``mutmut show`` names no removed line. The mutation then has no place, and a
+    quiet False would let a hang or a survivor pass the push.
+    """
     _, target, lines = owner
     relative = mutated_original_lines(run_mutmut(repo, ["show", name]))
-    absolute = {target.def_line + offset - 1 for offset in relative}
+    if not relative:
+        raise PushCheckError(
+            f"mutmut show {name} names no removed line, so the mutation has no place. "
+            "Run that command by hand and read the diff."
+        )
+    absolute = {target.first_line + offset - 1 for offset in relative}
     return bool(absolute & lines)
 
 
-def gate_one(repo: Path, name: str, status: str, owner: tuple[str, Target, set[int]]) -> str | None:
-    """Return the failure line for one mutant that is not killed, or None when it passes.
+class Verdict(NamedTuple):
+    """The result for one mutant: a failure line, or ``ignored`` for a hang off the changes."""
 
-    A mutant that mutates no changed line passes, whatever its status. Its result does not
-    depend on the push, so a hang or a survivor there is logged and left alone.
-    """
-    if status not in SURVIVING | INCOMPLETE:
-        return f"{name}: unknown status {status!r}"
-    if not survives_on_changed_line(repo, name, owner):
-        if status in INCOMPLETE:
-            print(
-                f"pre-push mutation: note: {name}: {status} off the changed lines",
-                file=sys.stderr,
-            )
-        return None
+    failure: str | None = None
+    ignored: bool = False
+
+
+def gate_one(repo: Path, name: str, status: str, owner: tuple[str, Target, set[int]]) -> Verdict:
+    """Return the verdict for one mutant that the tests did not kill."""
     if status in INCOMPLETE:
-        return f"{name}: {status} on a changed line; the run did not finish"
-    return f"{name}: survived on a changed line"
+        return Verdict(f"{name}: {status}; the run did not finish")
+    if status not in SURVIVING | HUNG:
+        return Verdict(f"{name}: unknown status {status!r}")
+    if mutates_changed_line(repo, name, owner):
+        return Verdict(f"{name}: {status} on a changed line")
+    return Verdict(ignored=status in HUNG)
 
 
 def gate(
     repo: Path, statuses: dict[str, str], found: list[tuple[str, Target, set[int]]]
-) -> list[str]:
-    """Return one failure line per mutant that fails the push."""
+) -> tuple[list[str], list[str]]:
+    """Return one failure line per mutant that fails the push, and the hangs left alone."""
     failures: list[str] = []
+    ignored: list[str] = []
     for name, status in sorted(statuses.items()):
         owner = owner_of(name, found)
         if owner is None or status in PASSING:
             continue
-        failure = gate_one(repo, name, status, owner)
-        if failure is not None:
-            failures.append(failure)
-    return failures
+        verdict = gate_one(repo, name, status, owner)
+        if verdict.failure is not None:
+            failures.append(verdict.failure)
+        if verdict.ignored:
+            ignored.append(name)
+    return failures, ignored
 
 
 def run_check(repo: Path) -> int:
@@ -455,8 +472,15 @@ def run_check(repo: Path) -> int:
     clear_generated_mutants(repo)
     run_mutmut(repo, ["run", *globs])
     statuses = parse_results(run_mutmut(repo, ["results"]))
-    failures = missing_mutants(globs, statuses) + gate(repo, statuses, found)
+    gate_failures, ignored = gate(repo, statuses, found)
+    failures = missing_mutants(globs, statuses) + gate_failures
     elapsed = time.monotonic() - started
+    if ignored:
+        print(
+            f"pre-push mutation: ignored {len(ignored)} hung mutants off the changed lines: "
+            + ", ".join(ignored),
+            file=sys.stderr,
+        )
     for failure in failures:
         print(f"pre-push mutation: {failure}", file=sys.stderr)
     if failures:
