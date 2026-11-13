@@ -101,13 +101,22 @@ def test_bootstrap_is_repeatable() -> None:
 
 
 def test_bootstrap_rejects_an_empty_list() -> None:
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(ValueError) as caught:
         block_bootstrap_mean_ci([], INTERVAL_TAIL)
+    assert str(caught.value) == "bootstrap the mean: the list is empty; pass at least one value"
 
 
 def test_bootstrap_rejects_a_non_finite_value() -> None:
-    with pytest.raises(ValueError, match="not finite"):
+    with pytest.raises(ValueError) as caught:
         block_bootstrap_mean_ci([0.1] * 200 + [float("nan")], INTERVAL_TAIL)
+    assert str(caught.value) == "bootstrap the mean: a value is not finite; check the scores"
+
+
+def test_bootstrap_of_a_fixed_series_gives_a_fixed_interval() -> None:
+    # The seed is fixed, so the interval is exact. A change to the block draws moves it, and
+    # the experiment registry cites this function, so the move must be a decision.
+    low, high = block_bootstrap_mean_ci([math.sin(i) for i in range(200)], INTERVAL_TAIL)
+    assert (low, high) == pytest.approx((-0.042398835274335654, 0.04588514889638138), rel=1e-9)
 
 
 def test_bootstrap_interval_contains_the_mean_of_a_large_sample() -> None:
