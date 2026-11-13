@@ -29,20 +29,20 @@ def _load_report() -> ModuleType:
 
 report = _load_report()
 
-GOOD_COUNTS = {"killed": 1898, "survived": 500, "timeout": 2, "total": 2400}
+GOOD_COUNTS = {"killed": 1898, "survived": 500, "timeout": 2, "no_tests": 0, "total": 2400}
 
 
 def _counts(**changes: int) -> dict[str, int]:
     """Return counts whose total is the sum of the outcomes, unless a change names the total."""
     counts = {**GOOD_COUNTS, **changes}
     if "total" not in changes:
-        counts["total"] = counts["killed"] + counts["survived"] + counts["timeout"]
+        counts["total"] = sum(counts[k] for k in ("killed", "survived", "timeout", "no_tests"))
     return counts
 
 
 def _write_stats(path: Path, **overrides: object) -> Path:
     """Write a stats file with the good counts, overridden by keyword."""
-    data: dict[str, object] = {**GOOD_COUNTS, "no_tests": 0, "skipped": 0}
+    data: dict[str, object] = {**GOOD_COUNTS, "skipped": 0, "suspicious": 0, "segfault": 0}
     data.update(overrides)
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
@@ -54,7 +54,7 @@ def test_read_stats_returns_the_counts(tmp_path: Path) -> None:
     assert stats.interrupted is False
 
 
-@pytest.mark.parametrize("field", ["killed", "survived", "timeout", "total"])
+@pytest.mark.parametrize("field", ["killed", "survived", "timeout", "no_tests", "total"])
 def test_read_stats_rejects_a_missing_count(tmp_path: Path, field: str) -> None:
     path = tmp_path / "stats.json"
     data = {k: v for k, v in GOOD_COUNTS.items() if k != field}
@@ -228,23 +228,12 @@ def test_find_open_report_returns_the_number_it_was_given(number: int) -> None:
     assert report.find_open_report(json.dumps(issues)) == number
 
 
-@pytest.mark.parametrize("unfinished", [1, 3, 40])
-def test_decide_fails_when_mutants_did_not_finish(unfinished: int) -> None:
-    # Not checked, suspicious, skipped, or a status mutmut adds later: all leave the total
-    # above the outcome counts, so the run is incomplete and never clean.
-    stats = report.Stats(counts=_counts(total=2400 + unfinished), interrupted=False)
+@pytest.mark.parametrize("delta", [1, 3, 40, -1])
+def test_decide_fails_when_the_total_and_the_outcomes_disagree(delta: int) -> None:
+    # A positive delta is a mutant that did not finish. A negative one means the outcome counts
+    # exceed the total. Either way the counts are not trusted.
+    stats = report.Stats(counts=_counts(total=2400 + delta), interrupted=False)
     assert report.decide(stats, "success", 10_000) == report.STATUS_FAILED
-
-
-def test_decide_fails_when_the_outcomes_exceed_the_total() -> None:
-    stats = report.Stats(counts=_counts(total=2399), interrupted=False)
-    assert report.decide(stats, "success", 10_000) == report.STATUS_FAILED
-
-
-@given(extra=st.integers(min_value=1, max_value=10_000))
-def test_decide_never_calls_a_run_with_unfinished_mutants_clean(extra: int) -> None:
-    stats = report.Stats(counts=_counts(total=2400 + extra), interrupted=False)
-    assert report.decide(stats, "success", 10_000) != report.STATUS_CLEAN
 
 
 def test_a_stats_file_with_unfinished_mutants_fails_the_run(tmp_path: Path) -> None:
@@ -253,6 +242,38 @@ def test_a_stats_file_with_unfinished_mutants_fails_the_run(tmp_path: Path) -> N
     assert report.decide(stats, "success", 524) == report.STATUS_FAILED
 
 
-def test_a_clean_run_with_every_mutant_finished_stays_clean() -> None:
-    stats = report.Stats(counts=_counts(survived=524), interrupted=False)
+def test_a_real_export_with_no_unfinished_mutants_stays_clean(tmp_path: Path) -> None:
+    # Every key that mutmut 3.8 writes to its CI stats file, with no unfinished mutant.
+    export = {
+        "killed": 400,
+        "survived": 100,
+        "timeout": 5,
+        "no_tests": 5,
+        "skipped": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "total": 510,
+        "check_was_interrupted_by_user": False,
+    }
+    path = tmp_path / "stats.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+    stats = report.read_stats(path)
     assert report.decide(stats, "success", 524) == report.STATUS_CLEAN
+
+
+def test_a_real_export_with_a_suspicious_mutant_fails_the_run(tmp_path: Path) -> None:
+    export = {
+        "killed": 400,
+        "survived": 100,
+        "timeout": 5,
+        "no_tests": 5,
+        "skipped": 3,
+        "suspicious": 1,
+        "segfault": 0,
+        "total": 514,
+        "check_was_interrupted_by_user": False,
+    }
+    path = tmp_path / "stats.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+    stats = report.read_stats(path)
+    assert report.decide(stats, "success", 524) == report.STATUS_FAILED
