@@ -9,10 +9,12 @@ branch, or with the remote default branch on a first push. It maps each changed 
 covered source file (``[tool.mutmut] only_mutate``) to the top-level function or class
 method that holds it, and runs mutmut on those functions only.
 
-A surviving mutant fails the push when its mutated line is a changed line. A timeout, a
-crash, or an incomplete result always fails the push. A push that changes no covered
-function, such as a docs-only or a test-only push, runs no mutants. A deleted file selects
-nothing, because its mutants no longer exist. A renamed file counts as added at its new path.
+A surviving mutant, or an incomplete result such as a timeout, fails the push only when its
+mutated line is a changed line. An incomplete result off the changed line is logged as a note,
+because a hang on code the push does not touch says nothing about the push. A push that
+changes no covered function, such as a docs-only or a test-only push, runs no mutants.
+A deleted file selects nothing, because its mutants no longer exist.
+A renamed file counts as added at its new path.
 
 The check gates HEAD against its tracking branch. It ignores the refs that git passes on
 stdin, so it is right for one checkout that pushes its own branch. A push of another
@@ -52,7 +54,7 @@ MUTANTS_OUTPUT_NAMES = frozenset(
 )
 # Statuses that a surviving mutant can carry. Only these are gated by the changed lines.
 SURVIVING = frozenset({"survived", "no tests"})
-# Statuses that show the test run did not finish. These always fail the push.
+# Statuses that show the test run did not finish. They fail the push only on a changed line.
 INCOMPLETE = frozenset({"timeout", "suspicious", "not checked", "skipped"})
 PASSING = frozenset({"killed"})
 # mutmut joins the parts of a method name with this character and prefixes "x".
@@ -399,6 +401,26 @@ def survives_on_changed_line(repo: Path, name: str, owner: tuple[str, Target, se
     return bool(absolute & lines)
 
 
+def gate_one(repo: Path, name: str, status: str, owner: tuple[str, Target, set[int]]) -> str | None:
+    """Return the failure line for one mutant that is not killed, or None when it passes.
+
+    A mutant that mutates no changed line passes, whatever its status. Its result does not
+    depend on the push, so a hang or a survivor there is logged and left alone.
+    """
+    if status not in SURVIVING | INCOMPLETE:
+        return f"{name}: unknown status {status!r}"
+    if not survives_on_changed_line(repo, name, owner):
+        if status in INCOMPLETE:
+            print(
+                f"pre-push mutation: note: {name}: {status} off the changed lines",
+                file=sys.stderr,
+            )
+        return None
+    if status in INCOMPLETE:
+        return f"{name}: {status} on a changed line; the run did not finish"
+    return f"{name}: survived on a changed line"
+
+
 def gate(
     repo: Path, statuses: dict[str, str], found: list[tuple[str, Target, set[int]]]
 ) -> list[str]:
@@ -408,12 +430,9 @@ def gate(
         owner = owner_of(name, found)
         if owner is None or status in PASSING:
             continue
-        if status in INCOMPLETE:
-            failures.append(f"{name}: {status}; the run did not finish")
-        elif status not in SURVIVING:
-            failures.append(f"{name}: unknown status {status!r}")
-        elif survives_on_changed_line(repo, name, owner):
-            failures.append(f"{name}: survived on a changed line")
+        failure = gate_one(repo, name, status, owner)
+        if failure is not None:
+            failures.append(failure)
     return failures
 
 

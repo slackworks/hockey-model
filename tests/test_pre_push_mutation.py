@@ -245,12 +245,41 @@ def test_a_survivor_off_the_changed_line_passes(
     assert mod.run_check(repo) == 0
 
 
-@pytest.mark.parametrize("status", ["timeout", "not checked", "skipped", "weird"])
-def test_an_incomplete_or_unknown_status_fails(
+INCOMPLETE_STATUSES = ["timeout", "not checked", "skipped", "suspicious"]
+
+
+@pytest.mark.parametrize("status", INCOMPLETE_STATUSES)
+def test_an_incomplete_result_on_a_changed_line_fails(
     mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     _changed_top(repo)
     monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: {status}\n")
+    monkeypatch.setenv("FAKE_SHOW", SURVIVED_ON_LINE)
+    assert mod.run_check(repo) == 1
+
+
+@pytest.mark.parametrize("status", INCOMPLETE_STATUSES)
+def test_an_incomplete_result_off_the_changed_line_passes_with_a_note(
+    mod: ModuleType,
+    repo: Path,
+    fake_mutmut: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    status: str,
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: {status}\n")
+    monkeypatch.setenv("FAKE_SHOW", GROW_SURVIVED_OFF_LINE)
+    assert mod.run_check(repo) == 0
+    assert f"{TOP}: {status} off the changed lines" in capsys.readouterr().err
+
+
+def test_an_unknown_status_fails_even_off_the_changed_line(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: weird\n")
+    monkeypatch.setenv("FAKE_SHOW", GROW_SURVIVED_OFF_LINE)
     assert mod.run_check(repo) == 1
 
 
