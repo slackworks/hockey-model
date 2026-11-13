@@ -262,7 +262,10 @@ def test_json_lists_the_degraded_inputs_of_a_prediction() -> None:
 
 
 def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
-    gap = "nhl_scores: https://x/score/2017-09-19 failed in every read; its day cannot change"
+    gap = (
+        "nhl_scores: https://x/score/2017-09-19 failed in every read; "
+        "its day is outside the scored and current seasons"
+    )
     report = DailyReport(
         date(2026, 11, 13),
         utc("2026-11-13T12:00"),
@@ -272,7 +275,10 @@ def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
     )
     markdown = report_markdown(report)
     assert markdown.count(gap) == 1
-    assert "Training-day gaps (no game row; no prediction changes):" in markdown
+    assert (
+        "Gaps outside the scored and current seasons (no game row; Elo effect not measured):"
+        in markdown
+    )
     assert report_json(report)["training_gaps"] == [gap]
 
 

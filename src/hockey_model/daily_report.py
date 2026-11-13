@@ -221,7 +221,9 @@ def report_markdown(report: DailyReport) -> str:
         out.append("Sources: " + " ".join(credits))
         out.append("")
     if report.footer_gaps:
-        out.append("Training-day gaps (no game row; no prediction changes):")
+        out.append(
+            "Gaps outside the scored and current seasons (no game row; Elo effect not measured):"
+        )
         out.extend(f"- {gap}" for gap in report.footer_gaps)
         out.append("")
     return "\n".join(out)

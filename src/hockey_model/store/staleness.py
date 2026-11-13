@@ -82,19 +82,25 @@ def _age_limit(source: str, url: str, as_of: datetime) -> timedelta | None:
     return None
 
 
-_DATED_URL = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_DATED_URL = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 
 def _changes_prediction(url: str, as_of: datetime) -> bool:
-    """Return whether a failed read of ``url`` can change a prediction at ``as_of``.
+    """Return whether a gap in the dated ``url`` is in a season the report scores.
 
-    A dated URL can change one only when its day is in a scored season or in the current
-    season. A URL with no date has no day to test, so it always counts.
+    A dated URL is in scope when its day is in a scored season or in the current season.
+    A URL with no date has no day to test, so it always counts.
     """
+    # Training-day games also feed the Elo replay, so such a gap can move a rating. This rule
+    # follows the owner decision in #194. It does not measure that effect.
     found = _DATED_URL.search(url)
     if found is None:
         return True
-    season = season_of(date.fromisoformat(found.group()))
+    try:
+        day = date.fromisoformat(found.group())
+    except ValueError as error:
+        raise ValueError(f"cannot read the day in the source URL {url}: {error}") from error
+    season = season_of(day)
     return SCORED[0] <= season <= SCORED[1] or season == season_of(as_of.date())
 
 
@@ -108,14 +114,16 @@ def _url_problem(
     """Return why one URL is stale at ``as_of``, or ``None``."""
     limit = _age_limit(source, url, as_of)
     if not last.attempt_ok:
-        # A failed dated resource is retired once it is old. A refresh that gave up on it
-        # reports it only when its day can change a prediction; older gaps go in the footer
-        # (see training_gaps). A current feed always counts.
-        recent = as_of - last.attempt_at <= ACTIVE_FAILURE_WINDOW
-        gave_up = url in abandoned and _changes_prediction(url, as_of)
-        if limit is not None or recent or gave_up:
-            return f"the newest read of {url} failed"
-        return None
+        # A current feed always counts. A dated resource that a refresh gave up on counts only
+        # in a scored or current season; older gaps go in the footer (see training_gaps). Any
+        # other failed dated resource counts while its failure is recent.
+        if limit is not None:
+            counts = True
+        elif url in abandoned:
+            counts = _changes_prediction(url, as_of)
+        else:
+            counts = as_of - last.attempt_at <= ACTIVE_FAILURE_WINDOW
+        return f"the newest read of {url} failed" if counts else None
     if limit is not None and last.good_at is not None and as_of - last.good_at > limit:
         return (
             f"the newest good read of {url} is {_hours(as_of - last.good_at)} old; "
@@ -167,7 +175,7 @@ def stale_sources(conn: sqlite3.Connection, as_of: datetime) -> list[tuple[str, 
 
 
 def training_gaps(conn: sqlite3.Connection, as_of: datetime) -> list[str]:
-    """Return one line per abandoned URL whose day cannot change a prediction at ``as_of``.
+    """Return one line per abandoned URL whose day is outside the scored and current seasons.
 
     These gaps are not on any game row. The daily report lists them once, in its footer.
     """
@@ -176,6 +184,7 @@ def training_gaps(conn: sqlite3.Connection, as_of: datetime) -> list[str]:
         for url in sorted(abandoned_urls(conn, source)):
             if not _changes_prediction(url, as_of):
                 gaps.append(
-                    f"{source}: {url} failed in every read; its day cannot change a prediction"
+                    f"{source}: {url} failed in every read; "
+                    "its day is outside the scored and current seasons"
                 )
     return gaps

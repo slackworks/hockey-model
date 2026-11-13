@@ -309,7 +309,9 @@ def test_an_abandoned_training_day_is_listed_once_in_the_footer(store: sqlite3.C
     _fresh_score_read(store)
     _abandon(store, url, utc("2026-11-01T12:00"))
     gaps = training_gaps(store, utc("2026-11-13T12:00"))
-    assert gaps == [f"nhl_scores: {url} failed in every read; its day cannot change a prediction"]
+    assert gaps == [
+        f"nhl_scores: {url} failed in every read; its day is outside the scored and current seasons"
+    ]
 
 
 def test_an_abandoned_scored_season_day_still_reports_on_game_rows(
@@ -339,3 +341,14 @@ def test_an_abandoned_url_with_no_date_always_reports(store: sqlite3.Connection)
     _abandon(store, url, utc("2026-11-01T12:00"))
     reasons = stale_sources(store, utc("2026-11-13T12:00"))
     assert ("nhl_scores", f"the newest read of {url} failed") in reasons
+
+
+def test_an_abandoned_training_day_with_a_recent_failure_is_not_on_any_game_row(
+    store: sqlite3.Connection,
+) -> None:
+    # The last failure is one day old, inside ACTIVE_FAILURE_WINDOW. The gap is still a training
+    # day, so the recent failure must not put it on a game row.
+    url = score_day_url(date(2017, 9, 19))
+    _fresh_score_read(store)
+    _abandon(store, url, utc("2026-11-12T12:00"))
+    assert [r for r in stale_sources(store, utc("2026-11-13T12:00")) if r[0] == "nhl_scores"] == []
