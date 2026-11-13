@@ -53,3 +53,7 @@ only_mutate = [
     "src/hockey_model/sources/*.py",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
+# mutmut stops a hung mutant at a CPU time limit of (test time + 1) * multiplier * 2 seconds.
+# A low multiplier keeps a changed function that hangs under MUTMUT_TIMEOUT_S in
+# scripts/pre_push_mutation.py (#175, #210). A loaded host can show a slow mutant as a timeout.
+timeout_multiplier = 3.0

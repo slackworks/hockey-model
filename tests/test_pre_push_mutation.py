@@ -129,13 +129,13 @@ def test_targets_are_top_level_functions_and_methods_only(mod: ModuleType) -> No
     lines = {2, 9}
     targets = mod.targets_at(BASE_SOURCE, lines)
     assert [t.qualname for t in targets] == ["top", "Box.grow"]
-    assert targets[1].def_line == 8
+    assert targets[1].first_line == 8
 
 
 def test_a_decorator_line_belongs_to_its_function(mod: ModuleType) -> None:
     source = "@staticmethod\ndef f():\n    return 1\n"
     (target,) = mod.targets_at(source, {1})
-    assert (target.qualname, target.def_line, target.first_line) == ("f", 2, 1)
+    assert (target.qualname, target.first_line, target.last_line) == ("f", 1, 3)
 
 
 def test_a_class_attribute_line_selects_nothing(mod: ModuleType) -> None:
@@ -245,13 +245,98 @@ def test_a_survivor_off_the_changed_line_passes(
     assert mod.run_check(repo) == 0
 
 
-@pytest.mark.parametrize("status", ["timeout", "not checked", "skipped", "weird"])
-def test_an_incomplete_or_unknown_status_fails(
+def test_a_timeout_on_a_changed_line_fails(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: timeout\n")
+    monkeypatch.setenv("FAKE_SHOW", SURVIVED_ON_LINE)
+    assert mod.run_check(repo) == 1
+
+
+def test_a_timeout_off_the_changed_line_passes_and_is_listed(
+    mod: ModuleType,
+    repo: Path,
+    fake_mutmut: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: timeout\n")
+    monkeypatch.setenv("FAKE_SHOW", GROW_SURVIVED_OFF_LINE)
+    assert mod.run_check(repo) == 0
+    assert f"ignored 1 hung mutants off the changed lines: {TOP}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["not checked", "skipped", "suspicious", "segfault", "check was interrupted by user", "weird"],
+)
+def test_any_other_status_fails_even_off_the_changed_line(
     mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
     _changed_top(repo)
     monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: {status}\n")
+    monkeypatch.setenv("FAKE_SHOW", GROW_SURVIVED_OFF_LINE)
     assert mod.run_check(repo) == 1
+
+
+def test_a_mutant_caught_by_the_type_check_passes(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: caught by type check\n")
+    assert mod.run_check(repo) == 0
+
+
+NO_REMOVED_LINE = [
+    "",
+    f"# {TOP}: timeout\n",
+    "# x\n--- a.py\n+++ a.py\n@@ -1,1 +1,2 @@\n def top(x):\n+    pass\n",
+]
+
+
+@pytest.mark.parametrize("show", NO_REMOVED_LINE)
+@pytest.mark.parametrize("status", ["timeout", "survived"])
+def test_a_mutant_with_no_removed_line_fails_closed(
+    mod: ModuleType,
+    repo: Path,
+    fake_mutmut: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    show: str,
+) -> None:
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RESULTS", f"    {TOP}: {status}\n")
+    monkeypatch.setenv("FAKE_SHOW", show)
+    with pytest.raises(mod.PushCheckError, match="names no removed line"):
+        mod.run_check(repo)
+
+
+# Output of `mutmut show` 3.8.1 for a decorated classmethod. The text starts at the decorator.
+DECORATED_SHOW = (
+    "# hockey_model.experiments.models.xǁExperimentRecordǁfrom_dict__mutmut_1: survived\n"
+    "--- src/hockey_model/experiments/models.py\n"
+    "+++ src/hockey_model/experiments/models.py\n"
+    "@@ -6,6 +6,6 @@\n"
+    "         the wrong shape, so a bad record never escapes as a bare ``TypeError``.\n"
+    '         """\n'
+    "     try:\n"
+    "-        return cls(**_typed_fields(data))\n"
+    "+        return cls(**_typed_fields(None))\n"
+    "     except (TypeError, ValueError) as exc:\n"
+    '         raise HockeyModelError(f"cannot build a record") from exc\n'
+)
+
+
+def test_a_decorated_function_numbers_the_show_lines_from_its_decorator(
+    mod: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The decorator is line 126 and the mutated `return` is line 134 of the real source.
+    target = mod.Target("ExperimentRecord.from_dict", 126, 137)
+    monkeypatch.setattr(mod, "run_mutmut", lambda repo, args: DECORATED_SHOW)
+    assert mod.mutates_changed_line(Path("."), "m", ("p.py", target, {134}))
+    assert not mod.mutates_changed_line(Path("."), "m", ("p.py", target, {135}))
 
 
 def test_no_mutant_for_a_changed_function_fails(

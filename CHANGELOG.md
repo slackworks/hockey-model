@@ -39,11 +39,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `hockey-model backtest --candidates attempt`, which replaces the expected-goals form with a shot-attempt form for the leak test. [feat:backtest]
 - Add the experiment registry: records in `experiments/`, `hockey-model experiments check`, and `hockey-model experiments run`. A confirmation record scores only games after its data cutoff in the 2026-27 regular season and later, runs once, and refuses a cohort smaller than its minimum. An exploration record scores the seasons through 2025-26 and may run again. The checker validates every schema keyword, compares immutable fields with the commit that registered the record, ties `status` to `result`, and fails a record whose committed result was removed or replaced. [feat:experiments]
 - Add `hockey-model store upgrade`, which moves a version 1 store to the current schema. It keeps every row and fit ID, writes a backup first, and runs in one transaction. [feat:store]
-- Add a pre-push mutation check. It runs mutmut on the functions that a push changes, and it fails on a survivor on a changed line, a timeout, or an incomplete result. [chore:test]
+- Add a pre-push mutation check. It runs mutmut on the functions that a push changes, and it fails on a survivor or a timeout on a changed line, on any other incomplete result, and on a mutant whose line it cannot find. A timeout off the changed lines is listed and does not fail the push. [chore:test]
 - Add a scheduled check that alerts when a game day with games has no `reports-DATE` release, or when every game row of its report was made after the start. A day with no games raises no alert. [feat:report]
 
 ### Changed
 
+- Lower `timeout_multiplier` for mutmut, so a hung mutant of `block_bootstrap_mean_ci` stops sooner and the pre-push mutation check finishes inside its limit. [chore:test]
 - Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]

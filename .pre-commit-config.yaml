@@ -47,5 +47,7 @@ repos:
         entry: uv run python3 scripts/pre_push_mutation.py run
         language: system
         pass_filenames: false
+        # A passing push lists the hung mutants that it ignored. Without this flag, prek hides that.
+        verbose: true
         stages: [pre-push]
         types: [python]
