@@ -27,6 +27,11 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      - id: shfmt
+        name: shfmt scripts
+        entry: shfmt -d
+        language: system
+        types: [shell]
       - id: ty
         name: ty check
         entry: uv run ty check

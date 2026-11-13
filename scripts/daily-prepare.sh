@@ -24,22 +24,22 @@ usage() {
 
 while (($# > 0)); do
   case "$1" in
-    --date)
-      if (($# < 2)); then
-        echo "daily-prepare: --date needs a value YYYY-MM-DD; see --help" >&2
-        exit 2
-      fi
-      day="$2"
-      shift 2
-      ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "daily-prepare: unknown argument '$1'; see --help" >&2
+  --date)
+    if (($# < 2)); then
+      echo "daily-prepare: --date needs a value YYYY-MM-DD; see --help" >&2
       exit 2
-      ;;
+    fi
+    day="$2"
+    shift 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "daily-prepare: unknown argument '$1'; see --help" >&2
+    exit 2
+    ;;
   esac
 done
 
@@ -81,15 +81,15 @@ if [[ ! -f "$marker" ]]; then
     exit 1
   }
   case "$complete" in
-    true) ;;
-    false)
-      echo "daily-prepare: the backfill stopped before it reached 2014-10-01; run it again." >&2
-      exit 75
-      ;;
-    *)
-      echo "daily-prepare: $report has no backfill_complete flag; the marker needs it" >&2
-      exit 1
-      ;;
+  true) ;;
+  false)
+    echo "daily-prepare: the backfill stopped before it reached 2014-10-01; run it again." >&2
+    exit 75
+    ;;
+  *)
+    echo "daily-prepare: $report has no backfill_complete flag; the marker needs it" >&2
+    exit 1
+    ;;
   esac
   touch "$marker"
 else

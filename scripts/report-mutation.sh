@@ -16,26 +16,26 @@ EXECUTION=""
 RUN_URL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stats)
-      STATS="${2:-}"
-      shift 2
-      ;;
-    --execution)
-      EXECUTION="${2:-}"
-      shift 2
-      ;;
-    --run-url)
-      RUN_URL="${2:-}"
-      shift 2
-      ;;
-    --help | -h)
-      sed -n '2,11p' "$0"
-      exit 0
-      ;;
-    *)
-      echo "report-mutation: unknown argument: $1" >&2
-      exit 2
-      ;;
+  --stats)
+    STATS="${2:-}"
+    shift 2
+    ;;
+  --execution)
+    EXECUTION="${2:-}"
+    shift 2
+    ;;
+  --run-url)
+    RUN_URL="${2:-}"
+    shift 2
+    ;;
+  --help | -h)
+    sed -n '2,11p' "$0"
+    exit 0
+    ;;
+  *)
+    echo "report-mutation: unknown argument: $1" >&2
+    exit 2
+    ;;
   esac
 done
 
