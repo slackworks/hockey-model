@@ -9,7 +9,7 @@ A run has one of three statuses:
 - ``clean``: the survivor count is at or below the baseline.
 - ``regression``: the survivor count is above the baseline.
 - ``execution_failed``: the stats are missing, malformed, or marked interrupted,
-    or a shard did not finish.
+    a shard did not finish, or a mutant did not finish. The outcome counts must sum to the total.
 
 The baseline is provisional. It is the survivor count from the first pass in #31.
 Replace it when #31 publishes a machine-readable baseline.
@@ -88,13 +88,24 @@ def read_stats(path: Path) -> Stats:
     return Stats(counts=counts, interrupted=data.get("check_was_interrupted_by_user") is True)
 
 
+def unaccounted(counts: dict[str, int]) -> int:
+    """Return the mutants that are in the total but in no killed, survived, or timeout count.
+
+    Those mutants did not finish: not checked, suspicious, skipped, or a status that mutmut
+    adds later. A negative value means the counts disagree, so the run is not trusted either.
+    """
+    return counts["total"] - counts["killed"] - counts["survived"] - counts["timeout"]
+
+
 def decide(stats: Stats | None, execution: str, baseline: int) -> str:
     """Return the status for one run.
 
-    An interrupted run or a failed execution is never clean, even when its counts
-    look fine, because the counts may be partial.
+    An interrupted run, a failed execution, or a count that does not add up is never clean,
+    even when its survivor count looks fine, because the counts may be partial.
     """
     if execution != "success" or stats is None or stats.interrupted:
+        return STATUS_FAILED
+    if unaccounted(stats.counts) != 0:
         return STATUS_FAILED
     if stats.counts["survived"] > baseline:
         return STATUS_REGRESSION

@@ -29,7 +29,15 @@ def _load_report() -> ModuleType:
 
 report = _load_report()
 
-GOOD_COUNTS = {"killed": 1900, "survived": 500, "timeout": 2, "total": 2400}
+GOOD_COUNTS = {"killed": 1898, "survived": 500, "timeout": 2, "total": 2400}
+
+
+def _counts(**changes: int) -> dict[str, int]:
+    """Return counts whose total is the sum of the outcomes, unless a change names the total."""
+    counts = {**GOOD_COUNTS, **changes}
+    if "total" not in changes:
+        counts["total"] = counts["killed"] + counts["survived"] + counts["timeout"]
+    return counts
 
 
 def _write_stats(path: Path, **overrides: object) -> Path:
@@ -93,17 +101,17 @@ def test_read_stats_marks_an_interrupted_run(tmp_path: Path) -> None:
 
 
 def test_decide_is_clean_at_the_baseline() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 524}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=524), interrupted=False)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_CLEAN
 
 
 def test_decide_is_a_regression_above_the_baseline() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 525}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=525), interrupted=False)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_REGRESSION
 
 
 def test_decide_fails_when_a_shard_failed_even_with_clean_counts() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 1}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=1), interrupted=False)
     assert report.decide(stats, "failure", baseline=524) == report.STATUS_FAILED
 
 
@@ -112,22 +120,22 @@ def test_decide_fails_when_there_are_no_stats() -> None:
 
 
 def test_decide_fails_when_the_run_was_interrupted() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 1}, interrupted=True)
+    stats = report.Stats(counts=_counts(survived=1), interrupted=True)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_FAILED
 
 
 @given(survived=st.integers(min_value=0, max_value=10_000), baseline=st.integers(0, 10_000))
 def test_decide_matches_the_baseline_for_every_count(survived: int, baseline: int) -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": survived}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=survived), interrupted=False)
     expected = report.STATUS_CLEAN if survived <= baseline else report.STATUS_REGRESSION
     assert report.decide(stats, "success", baseline) == expected
 
 
 def test_build_body_starts_with_the_marker_and_shows_the_difference() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 600}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=600), interrupted=False)
     body = report.build_body(report.STATUS_REGRESSION, stats, 524, "https://example.test/run/1")
     assert body.startswith(report.MARKER)
-    assert "| 1900 | 600 | 2 | 2400 | 524 | +76 |" in body
+    assert "| 1898 | 600 | 2 | 2500 | 524 | +76 |" in body
     assert "https://example.test/run/1" in body
 
 
@@ -218,3 +226,33 @@ def test_find_open_report_rejects_a_malformed_list(payload: str) -> None:
 def test_find_open_report_returns_the_number_it_was_given(number: int) -> None:
     issues = [{"number": number, "body": report.MARKER, "author": BOT}]
     assert report.find_open_report(json.dumps(issues)) == number
+
+
+@pytest.mark.parametrize("unfinished", [1, 3, 40])
+def test_decide_fails_when_mutants_did_not_finish(unfinished: int) -> None:
+    # Not checked, suspicious, skipped, or a status mutmut adds later: all leave the total
+    # above the outcome counts, so the run is incomplete and never clean.
+    stats = report.Stats(counts=_counts(total=2400 + unfinished), interrupted=False)
+    assert report.decide(stats, "success", 10_000) == report.STATUS_FAILED
+
+
+def test_decide_fails_when_the_outcomes_exceed_the_total() -> None:
+    stats = report.Stats(counts=_counts(total=2399), interrupted=False)
+    assert report.decide(stats, "success", 10_000) == report.STATUS_FAILED
+
+
+@given(extra=st.integers(min_value=1, max_value=10_000))
+def test_decide_never_calls_a_run_with_unfinished_mutants_clean(extra: int) -> None:
+    stats = report.Stats(counts=_counts(total=2400 + extra), interrupted=False)
+    assert report.decide(stats, "success", 10_000) != report.STATUS_CLEAN
+
+
+def test_a_stats_file_with_unfinished_mutants_fails_the_run(tmp_path: Path) -> None:
+    path = _write_stats(tmp_path / "stats.json", total=2405)
+    stats = report.read_stats(path)
+    assert report.decide(stats, "success", 524) == report.STATUS_FAILED
+
+
+def test_a_clean_run_with_every_mutant_finished_stays_clean() -> None:
+    stats = report.Stats(counts=_counts(survived=524), interrupted=False)
+    assert report.decide(stats, "success", 524) == report.STATUS_CLEAN
