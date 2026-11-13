@@ -53,3 +53,6 @@ only_mutate = [
     "src/hockey_model/sources/*.py",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]
+# A hung mutant runs for (test time + 1) * multiplier * 2 seconds. The default of 15 let each
+# block_bootstrap_mean_ci hang run 1371 s (#175, #210).
+timeout_multiplier = 3.0
