@@ -15,7 +15,7 @@ The deliverable is a feasibility report. No code reads licensed data before the 
 
 ## Steps
 
-1. Write to the All Three Zones owner and ask for written terms: may the data be stored in a private store, used in a model, and shown in a public report as aggregates? Record the answer in the issue. Do not subscribe or download before the owner of this project approves the cost and the answer.
+1. The project owner asks the All Three Zones owner for written terms: may the data be stored in a private store, used in a model, and shown in a public report as aggregates? Record the answer in the issue. Do not subscribe or download before the owner of this project approves the cost and the answer.
 2. If the terms allow use: list the seasons, the share of games tracked in each season, the teams tracked (tracked games are not a random sample), and the time between a game and its data.
 3. Write the report with a go or no-go.
 
@@ -29,6 +29,6 @@ The deliverable is a feasibility report. No code reads licensed data before the 
 
 A clear no-go is a complete result for this issue.
 
-## Open question for the owner
+## Status (2026-11-13)
 
-Do you approve the cost and contact with the All Three Zones owner to ask for terms?
+On hold. The owner talks to the All Three Zones owner first. Do not subscribe, download, or write to the source until the owner records the result in #63.

@@ -24,7 +24,7 @@ A design is a snapshot. When the code must differ for a correctness reason, chan
 | #41 | [strength-rates.md](strength-rates.md) | H2, H3, MoneyPuck situations | phase 1 after MoneyPuck situations | none |
 | #42 | [scoring-environment.md](scoring-environment.md) | H1, H4 | yes | none |
 | #43 | [team-ratings.md](team-ratings.md) | H2, H3 | yes | none |
-| #44 | [playoff-calibration.md](playoff-calibration.md) | H1, H4 | yes | which future postseason confirms |
+| #44 | [playoff-calibration.md](playoff-calibration.md) | H1, H4 | yes | which future postseason confirms (no answer yet; promotion waits) |
 | #45 | [goalie-shrinkage.md](goalie-shrinkage.md) | H2, H3 | yes | none |
 | #46 | [goalie-team-confounding.md](goalie-team-confounding.md) | #45 | yes | none |
 | #47 | [rebound-control.md](rebound-control.md) | #45, MoneyPuck situations, #37 | phase 1 after MoneyPuck situations | none |
@@ -34,7 +34,7 @@ A design is a snapshot. When the code must differ for a correctness reason, chan
 | #51 | [shooter-finishing.md](shooter-finishing.md) | #50, #42 | after #50 | none |
 | #52 | [predictive-distributions.md](predictive-distributions.md) | H1, H4, #83; part B needs #53 | part A yes | none |
 | #53 | [player-forecasts.md](player-forecasts.md) | H1, H4 | yes | none |
-| #54 | [aging-adjustments.md](aging-adjustments.md) | #53 | no birth dates | approve the NHL player landing endpoint |
+| #54 | [aging-adjustments.md](aging-adjustments.md) | #53 | no birth dates; endpoint approved 2026-11-13 | none |
 | #55 | [toi-forecast.md](toi-forecast.md) | #53 | phase 1 yes | none |
 | #56 | [assist-forecasts.md](assist-forecasts.md) | #35, #53 | after #35 | none |
 | #57 | [penalties.md](penalties.md) | #35 | after #35 | none |
@@ -42,8 +42,8 @@ A design is a snapshot. When the code must differ for a correctness reason, chan
 | #59 | [lineup-effects.md](lineup-effects.md) | #35, #53, #55 | after #35 | none |
 | #60 | [season-simulation.md](season-simulation.md) | H1 | yes | none |
 | #61 | [bracket-simulation.md](bracket-simulation.md) | #60 | yes | none |
-| #62 | [edge-feasibility.md](edge-feasibility.md) | none | no | approve the EDGE endpoints and a daily snapshot |
-| #63 | [licensed-tracking-feasibility.md](licensed-tracking-feasibility.md) | none | no | approve the cost and the contact for terms |
+| #62 | [edge-feasibility.md](edge-feasibility.md) | none | no; source and daily snapshot approved 2026-11-13 | none |
+| #63 | [licensed-tracking-feasibility.md](licensed-tracking-feasibility.md) | none | no | on hold until the owner talks to the source owner |
 | #78 | [next-model-round.md](next-model-round.md) | H2, H3, the research results | not applicable | none |
 | #80 | [consumer-api.md](consumer-api.md) | none | yes | none |
 | #82 | [payload-archive.md](payload-archive.md) | MoneyPuck situations (schema order) | yes | none |

@@ -59,4 +59,4 @@ This issue ends with the exploration report and that open question.
 
 ## Open question for the owner
 
-Which future postseason may confirm a playoff layer, and with what minimum count of games?
+Which future postseason may confirm a playoff layer, and with what minimum count of games? No answer yet (2026-11-13). The exploration report can proceed. Promotion waits for the answer.

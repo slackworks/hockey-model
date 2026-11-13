@@ -11,9 +11,7 @@ Estimate how a skater's goal and assist rates change with age, with players who 
 
 The store has no birth date.
 The NHL player landing endpoint (`https://api-web.nhle.com/v1/player/{player_id}/landing`) returns `birthDate`, on the host the store already reads.
-It is a new endpoint, so the owner MUST approve it first. This is the open question below.
-
-When approved:
+The owner approved this endpoint on 2026-11-13.
 
 - New source `nhl_player` in `sources/nhl.py`: parse `birthDate` (ISO date) and `position`. A missing or malformed date raises `SourceParseError` with the full message.
 - New table `player_bio (nhl_id, birth_date, position, fetched_at)` through `store upgrade`. One read per player that has a `skater_games` row and no `player_bio` row: about 3,000 requests once, then a few per week.
@@ -41,10 +39,6 @@ The #53 decay already discounts old seasons. Report the result with and without 
 - A missing birth date gives the no-age forecast and a note.
 - A simulated league with a known age curve and attrition of weak old players: the main fit is biased, and the bounds hold the true curve.
 - Future-invariance (H5).
-
-## Open question for the owner
-
-May the store read the NHL player landing endpoint for birth dates?
 
 ## Calls made
 
