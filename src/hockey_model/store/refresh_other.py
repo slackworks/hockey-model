@@ -89,7 +89,10 @@ def _note_gaps(run: RefreshRun) -> frozenset[str]:
     """
     gaps = run.skipped(MONEYPUCK)
     if gaps:
-        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+        run.notes.append(
+            f"{MONEYPUCK}: {len(gaps)} files skipped after repeated failed reads; "
+            "retry with --retry-skipped"
+        )
     return gaps
 
 
