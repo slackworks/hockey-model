@@ -1,6 +1,7 @@
 """Tests for the trigger that decides when the daily report runs."""
 
 from datetime import UTC, date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from hypothesis import given
@@ -141,10 +142,32 @@ def test_prep_is_too_early_only_more_than_the_prep_window_before_the_puck_drop(
 
 
 def test_prep_window_matches_the_prepare_job_timeout() -> None:
-    # daily-prepare.yml sets timeout-minutes: 180. A prep that starts at its cron can run that long.
-    assert PREP_WINDOW == timedelta(minutes=180)
+    # The prep job timeout in daily-prepare.yml is the window the prep can use.
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "daily-prepare.yml").read_text(encoding="utf-8")
+    assert f"timeout-minutes: {PREP_WINDOW // timedelta(minutes=1)}" in workflow
 
 
 def test_prep_too_early_rejects_a_naive_time() -> None:
     with pytest.raises(HockeyModelError):
         prep_too_early(datetime(2026, 11, 13, 7, 24), at("2026-11-13T23:00"))
+
+
+@given(
+    now=_UTC_TIMES,
+    extra=st.timedeltas(min_value=timedelta(seconds=1), max_value=timedelta(days=3)),
+)
+def test_prep_too_early_turns_true_exactly_past_the_window(now: datetime, extra: timedelta) -> None:
+    assert prep_too_early(now, now + PREP_WINDOW + extra) is True
+    assert prep_too_early(now, now + PREP_WINDOW) is False
+
+
+@given(
+    now=_UTC_TIMES,
+    margin=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=6)),
+    gap=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=12)),
+)
+def test_puck_drop_ahead_counts_the_margin_before_the_puck_drop(
+    now: datetime, margin: timedelta, gap: timedelta
+) -> None:
+    assert puck_drop_ahead(now, now + gap, margin) is (now + margin < now + gap)
