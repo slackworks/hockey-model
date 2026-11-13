@@ -20,23 +20,32 @@ New module `src/hockey_model/consumer.py`, exported from `hockey_model/__init__.
 ```python
 def open_store(path: Path, *, fit: FitRef) -> ConsumerStore: ...
 
+
 @dataclass(frozen=True, slots=True)
 class FitRef:
-    fit_id: int | None = None     # exactly one of the two fields is set
-    label: str | None = None      # such as "live"
+    fit_id: int | None = None  # exactly one of the two fields is set
+    label: str | None = None  # such as "live"
 
-class ConsumerStore:               # a context manager; close() ends the read transaction
-    fit: FitInfo                   # pinned when the store opens; never changes for this object
+
+class ConsumerStore:  # a context manager; close() ends the read transaction
+    fit: FitInfo  # pinned when the store opens; never changes for this object
+
     def game(self, game_id: int) -> GameInfo: ...
-    def games_on_day(self, day: date) -> tuple[GameInfo, ...]: ...      # Eastern game day
+    def games_on_day(self, day: date) -> tuple[GameInfo, ...]: ...  # Eastern game day
     def skater_games(self, game_id: int) -> tuple[SkaterLine, ...]: ...
     def goalie_games(self, game_id: int) -> tuple[GoalieLine, ...]: ...
-    def team_xg_games(self, team: str, *, before: datetime, count: int) -> tuple[TeamXgLine, ...]: ...
-    def goalie_xg_games(self, nhl_id: int, *, before: datetime, count: int) -> tuple[GoalieXgLine, ...]: ...
+    def team_xg_games(
+        self, team: str, *, before: datetime, count: int
+    ) -> tuple[TeamXgLine, ...]: ...
+    def goalie_xg_games(
+        self, nhl_id: int, *, before: datetime, count: int
+    ) -> tuple[GoalieXgLine, ...]: ...
     def injuries(self, *, as_of: datetime) -> tuple[InjuryLine, ...]: ...
     def starter(self, game_id: int, team: str, *, as_of: datetime) -> StarterInfo: ...
-    def predict(self, game_id: int, *, as_of: datetime, level: float = 0.8) -> ConsumerPrediction: ...
-    def refresh_snapshot(self) -> None: ...   # end the read transaction and start a new one
+    def predict(
+        self, game_id: int, *, as_of: datetime, level: float = 0.8
+    ) -> ConsumerPrediction: ...
+    def refresh_snapshot(self) -> None: ...  # end the read transaction and start a new one
 ```
 
 Every returned type is a frozen dataclass in a new module `src/hockey_model/consumer_types.py`.

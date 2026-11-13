@@ -36,16 +36,20 @@ class GameDraws:
     as_of: datetime
     fit_id: int
     seed: int
-    home_regulation: numpy.ndarray     # int, shape (n,): goals in the first 60 minutes
+    home_regulation: numpy.ndarray  # int, shape (n,): goals in the first 60 minutes
     away_regulation: numpy.ndarray
-    decided_in: numpy.ndarray          # str codes, shape (n,): "REG", "OT", "SO"
-    home_wins: numpy.ndarray           # bool, shape (n,): the final winner
+    decided_in: numpy.ndarray  # str codes, shape (n,): "REG", "OT", "SO"
+    home_wins: numpy.ndarray  # bool, shape (n,): the final winner
     missing: tuple[MissingInput, ...]
 
     @property
-    def home_on_ice(self) -> numpy.ndarray: ...     # regulation goals plus an OT goal; no shootout goal
+    def home_on_ice(
+        self,
+    ) -> numpy.ndarray: ...  # regulation goals plus an OT goal; no shootout goal
     @property
-    def home_final_score(self) -> numpy.ndarray: ... # the official score: plus 1 for the shootout winner
+    def home_final_score(
+        self,
+    ) -> numpy.ndarray: ...  # the official score: plus 1 for the shootout winner
 ```
 
 Rules:

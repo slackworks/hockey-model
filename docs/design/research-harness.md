@@ -50,18 +50,20 @@ class FeatureContext:
     conn: sqlite3.Connection
     game: Game
     as_of: datetime
-    cutoff: datetime          # min(as_of, game.start)
+    cutoff: datetime  # min(as_of, game.start)
     goalie_mode: GoalieMode
     catalog: Catalog
-    starters: Mapping[str, GoalieStart | None]   # resolved once per game, by team
-    replay: Mapping[str, object]                 # replay states, by feature name
+    starters: Mapping[str, GoalieStart | None]  # resolved once per game, by team
+    replay: Mapping[str, object]  # replay states, by feature name
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureValue:
-    value: float                         # home minus away, or NEUTRAL_FORM
+    value: float  # home minus away, or NEUTRAL_FORM
     missing: tuple[MissingInput, ...]
-    imputed: DegradedInput | None        # set when value is a stand-in
+    imputed: DegradedInput | None  # set when value is a stand-in
     used_moneypuck: bool
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
@@ -69,10 +71,11 @@ class FeatureSpec:
     compute: Callable[[FeatureContext], FeatureValue]
     reads_moneypuck: bool
     reads_goalie: bool
-    replay: Callable[[], ReplayState] | None = None   # see below
+    replay: Callable[[], ReplayState] | None = None  # see below
+
 
 class ReplayState(Protocol):
-    def update(self, game: GameRow) -> None: ...      # called after each final game, in start order
+    def update(self, game: GameRow) -> None: ...  # called after each final game, in start order
 ```
 
 Rules:

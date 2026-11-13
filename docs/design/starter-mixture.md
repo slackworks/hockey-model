@@ -21,11 +21,13 @@ New module `game_model/starter_odds.py`:
 ```python
 @dataclass(frozen=True, slots=True)
 class StarterCandidate:
-    start: GoalieStart          # status UNKNOWN or LIKELY, source MODEL_GUESS or the read
+    start: GoalieStart  # status UNKNOWN or LIKELY, source MODEL_GUESS or the read
     probability: float
 
-def starter_candidates(conn, game: Game, team: str, as_of: datetime, *, use_reads: bool,
-                       catalog: Catalog) -> tuple[tuple[StarterCandidate, ...], tuple[MissingInput, ...]]: ...
+
+def starter_candidates(
+    conn, game: Game, team: str, as_of: datetime, *, use_reads: bool, catalog: Catalog
+) -> tuple[tuple[StarterCandidate, ...], tuple[MissingInput, ...]]: ...
 ```
 
 Rules, in order:

@@ -47,9 +47,10 @@ New module `game_model/goalie_rates.py`:
 class GoaliePosterior:
     mean: float
     variance: float
-    exposure: float       # X
+    exposure: float  # X
     games: int
-    prior: str            # "new" or "known"
+    prior: str  # "new" or "known"
+
 
 def goalie_posterior(conn, nhl_id: int, cutoff: datetime) -> GoaliePosterior: ...
 ```
