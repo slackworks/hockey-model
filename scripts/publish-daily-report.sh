@@ -6,9 +6,9 @@
 #   --report-dir  Directory with report-DATE.md, report-DATE.json, backtest-DATE.json,
 #                 and backtest-games-DATE.csv.
 #
-# The release target is GITHUB_SHA, the commit that built the first report of the day. A later
-# build for the same day replaces the release files and notes, so the release can change until
-# the first puck drop. The notes say so.
+# The release target is GITHUB_SHA, the commit that built the first report of the day. Each build
+# adds its report as report-DATE-HHMMSSZ files, named by its generated_at time. A published
+# version is never replaced. The report-DATE files and the backtest files move to the newest build.
 set -euo pipefail
 
 day=""
@@ -84,22 +84,58 @@ if [[ "$(head -n 1 "$backtest_games")" != *,* ]]; then
 fi
 
 tag="reports-$day"
-# The notes say the report can change until the first puck drop, and they name this build.
+# generated_at comes from report_json as ISO 8601 UTC with microseconds. The regex proves the
+# shape, so the fixed columns of HHMMSS are safe to read.
+generated="$(jq -r '.generated_at // empty' "$json")"
+if [[ ! "$generated" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00$ ]]; then
+  echo "publish-daily-report: $json has no generated_at as ISO 8601 UTC; the report was not published" >&2
+  exit 1
+fi
+stamp="${generated:11:2}${generated:14:2}${generated:17:2}Z"
+version_md="$report_dir/report-$day-$stamp.md"
+version_json="$report_dir/report-$day-$stamp.json"
+cp "$md" "$version_md"
+cp "$json" "$version_json"
+latest=("$md" "$json" "$backtest" "$backtest_games")
 notes="$report_dir/release-notes-$day.md"
 {
-  echo "This report can be replaced by a later build until the first puck drop of the game day."
-  echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC."
+  echo "Every build's report is kept. Each report-$day-HHMMSSZ file set is one build, named by its"
+  echo "generated_at time (UTC). The report-$day files and the backtest files are the newest build."
+  echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC, report-$day-$stamp."
   echo
   cat "$md"
 } >"$notes"
-assets=("$md" "$json" "$backtest" "$backtest_games")
+
+# A version name is its build's generated_at, so the same name is the same build. A retry of
+# that build finds its bytes already on the release and skips the upload. Other bytes under the
+# same name are a collision, and the script stops, because a published version is never replaced.
+publish_version() {
+  local file="$1" name
+  name="$(basename "$file")"
+  if ! grep -qxF "$name" <<<"$existing_assets"; then
+    gh release upload "$tag" "$file"
+    return 0
+  fi
+  gh release download "$tag" --pattern "$name" --dir "$check_dir"
+  if cmp -s "$file" "$check_dir/$name"; then
+    echo "publish-daily-report: $name is already on $tag with the same bytes; skipped." >&2
+    return 0
+  fi
+  echo "publish-daily-report: $name is already on $tag with other bytes; a version is never replaced. Two builds share one second. Find the second build and publish it again." >&2
+  exit 1
+}
+
 if view_err="$(gh release view "$tag" 2>&1 >/dev/null)"; then
-  # The release exists, so this build replaces its files and notes. The target commit of the
-  # release stays the one that created it.
-  gh release upload "$tag" "${assets[@]}" --clobber
+  # The release exists. The alias and the backtest files move to this build with --clobber.
+  existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+  check_dir="$report_dir/published-check"
+  mkdir -p "$check_dir"
+  publish_version "$version_md"
+  publish_version "$version_json"
+  gh release upload "$tag" "${latest[@]}" --clobber
   gh release edit "$tag" --notes-file "$notes"
 elif [[ "$view_err" == *"release not found"* ]]; then
-  gh release create "$tag" "${assets[@]}" \
+  gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
     --notes-file "$notes"

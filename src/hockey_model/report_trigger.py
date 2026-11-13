@@ -31,6 +31,22 @@ def first_puck_drop(day_closes: datetime, starts: list[datetime]) -> datetime:
     return min(starts) if starts else day_closes
 
 
+# The morning prep job times out at 180 minutes (daily-prepare.yml). Until a prep can have run
+# its full window, a missing prep marker means "not yet", not "broken".
+PREP_WINDOW = timedelta(minutes=180)
+
+
+def prep_too_early(now: datetime, first_start: datetime) -> bool:
+    """Return True when the first puck drop is more than ``PREP_WINDOW`` away.
+
+    A run this early that finds no prep marker is not an error. Inside the window the same
+    missing marker means the prep failed, and a person has to act.
+    """
+    require_utc(now, "report trigger now")
+    require_utc(first_start, "first puck drop")
+    return first_start - now > PREP_WINDOW
+
+
 def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | None = None) -> bool:
     """Return True while a run that starts at ``now`` can publish before the puck drop.
 

@@ -1,117 +1,15 @@
-"""Tests for the report shell scripts, with fake `gh` and `uv` commands on PATH."""
+"""Tests for the report gate, the prepare script, and the daily report script."""
 
 import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+from report_script_support import DAY, LIVE, TAG, _calls, _env, _run
 
 # The mutation run copies src and tests only, so the scripts are not there to test.
 if "mutants" in Path(__file__).resolve().parts:
     pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
-
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-LIVE = ["xg_form", "rest"]
-DAY = "2026-11-04"
-TAG = f"reports-{DAY}"
-SHA = "0123456789abcdef0123456789abcdef01234567"
-REAL_UV = shutil.which("uv") or ""
-
-
-@pytest.fixture
-def fakes(tmp_path: Path) -> Path:
-    """Write fake `gh` and `uv` commands. Each records its arguments in calls.log.
-
-    `gh release view TAG` succeeds for a tag in FAKE_RELEASES and otherwise prints
-    "release not found", as the real command does. `gh release create` refuses a tag that
-    already exists. FAKE_GH_FAIL makes every gh call fail with an auth error.
-    """
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    gh = bin_dir / "gh"
-    gh.write_text(
-        "#!/usr/bin/env bash\n"
-        'echo "gh $*" >> "$FAKE_CALLS"\n'
-        'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
-        'tag="${3:-}"\n'
-        'if [[ "$1 $2" == "release view" ]]; then\n'
-        '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then exit 0; fi\n'
-        '  echo "release not found" >&2\n'
-        "  exit 1\n"
-        "fi\n"
-        'if [[ "$1 $2" == "release create" ]]; then\n'
-        '  if grep -qxF "$3" <<<"${FAKE_RELEASES:-}"; then\n'
-        '    echo "a release with the same tag name already exists" >&2\n'
-        "    exit 1\n"
-        "  fi\n"
-        "fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    uv = bin_dir / "uv"
-    uv.write_text(
-        '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
-        'if [[ "$*" == "run hockey-model refresh --backfill-from"* ]]; then\n'
-        '  if [[ -n "${FAKE_REFRESH_FAIL:-}" ]]; then\n'
-        '    printf "{\\"errors\\": [\\"boom\\"]}"; exit 1\n'
-        "  fi\n"
-        '  printf "{\\"backfill_complete\\": %s}" "${FAKE_BACKFILL_COMPLETE:-true}"\n'
-        "fi\n"
-        'if [[ "$*" == "run hockey-model report-due"* ]]; then\n'
-        '  if [[ -n "${FAKE_UV_FAIL:-}" ]]; then echo "uv boom" >&2; exit 3; fi\n'
-        '  printf "%s" "$FAKE_DUE_JSON"\n'
-        "fi\n"
-        'if [[ "$*" == "run hockey-model report-decide"* ]]; then\n'
-        '  case "${FAKE_DECIDE_MODE:-}" in\n'
-        '  fail) echo "decide boom" >&2; exit 3 ;;\n'
-        "  empty) exit 0 ;;\n"
-        '  partial) printf "{\\"due\\": true}"; exit 0 ;;\n'
-        "  esac\n"
-        '  exec "$FAKE_REAL_UV" "$@"\n'
-        "fi\n"
-        'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
-        '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'
-        "fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    for command in (gh, uv):
-        command.chmod(0o755)
-    return bin_dir
-
-
-def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
-    env = {
-        "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
-        "FAKE_CALLS": str(tmp_path / "calls.log"),
-        "FAKE_RELEASES": "",
-        "FAKE_DUE_JSON": json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3}),
-        "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
-        "GITHUB_SHA": SHA,
-        # report-decide is the real command: it holds the decision the gate script prints.
-        "FAKE_REAL_UV": REAL_UV,
-    }
-    env.update(extra)
-    return env
-
-
-def _calls(tmp_path: Path) -> list[str]:
-    log = tmp_path / "calls.log"
-    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-
-
-def _run(script: str, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["bash", str(SCRIPTS / script), *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
 # --- gate ---------------------------------------------------------------------
 
 
@@ -316,132 +214,6 @@ def test_gate_help_names_every_option(fakes: Path, tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "--date" in result.stdout and "--force" in result.stdout
     assert "set -euo" not in result.stdout
-
-
-# --- publish ------------------------------------------------------------------
-
-
-def _write_report(report_dir: Path, day: str = DAY) -> None:
-    report_dir.mkdir()
-    (report_dir / f"report-{day}.md").write_text("# report\n", encoding="utf-8")
-    (report_dir / f"report-{day}.json").write_text("{}\n", encoding="utf-8")
-    (report_dir / f"backtest-{day}.json").write_text("{}\n", encoding="utf-8")
-    (report_dir / f"backtest-games-{day}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
-
-
-def _publish(fakes: Path, tmp_path: Path, **extra: str) -> subprocess.CompletedProcess[str]:
-    args = ("--date", DAY, "--report-dir", str(tmp_path / "report"))
-    return _run("publish-daily-report.sh", _env(fakes, tmp_path, **extra), *args)
-
-
-def test_publish_creates_the_release_at_the_build_commit(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 0, result.stderr
-    create = [line for line in _calls(tmp_path) if line.startswith("gh release create")]
-    assert create and f" {TAG} " in create[0]
-    assert f"--target {SHA}" in create[0]
-    assert create[0].count("backtest") == 2
-
-
-def test_publish_accepts_a_leap_day(fakes: Path, tmp_path: Path) -> None:
-    day = "2024-02-29"
-    report_dir = tmp_path / "report"
-    _write_report(report_dir, day)
-    result = _run(
-        "publish-daily-report.sh",
-        _env(fakes, tmp_path),
-        "--date",
-        day,
-        "--report-dir",
-        str(report_dir),
-    )
-    assert result.returncode == 0, result.stderr
-    assert any(f"gh release create reports-{day} " in call for call in _calls(tmp_path))
-
-
-def test_publish_replaces_the_files_of_an_existing_release(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
-    assert result.returncode == 0, result.stderr
-    calls = _calls(tmp_path)
-    upload = [line for line in calls if line.startswith("gh release upload")]
-    assert upload and "--clobber" in upload[0] and f" {TAG} " in upload[0]
-    assert any(line.startswith("gh release edit") for line in calls)
-    assert not any(line.startswith("gh release create") for line in calls)
-
-
-def test_publish_notes_say_the_release_can_change_before_puck_drop(
-    fakes: Path, tmp_path: Path
-) -> None:
-    _write_report(tmp_path / "report")
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 0, result.stderr
-    notes = (tmp_path / "report" / f"release-notes-{DAY}.md").read_text(encoding="utf-8")
-    assert "can be replaced by a later build until the first puck drop" in notes
-    assert f"commit {SHA}" in notes
-
-
-def test_publish_needs_the_build_commit(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    env = _env(fakes, tmp_path)
-    del env["GITHUB_SHA"]
-    args = ("--date", DAY, "--report-dir", str(tmp_path / "report"))
-    result = _run("publish-daily-report.sh", env, *args)
-    assert result.returncode == 2
-    assert "GITHUB_SHA" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "bad", ["../2026-11-04", "2026-11-04 extra", "2026-1-4", "tomorrow", "2026-02-30", "0000-01-01"]
-)
-def test_publish_refuses_a_malformed_date(fakes: Path, tmp_path: Path, bad: str) -> None:
-    _write_report(tmp_path / "report")
-    args = ("--date", bad, "--report-dir", str(tmp_path / "report"))
-    result = _run("publish-daily-report.sh", _env(fakes, tmp_path), *args)
-    assert result.returncode == 2
-    assert "not a real date YYYY-MM-DD" in result.stderr
-    assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
-
-
-def test_publish_refuses_a_missing_report(fakes: Path, tmp_path: Path) -> None:
-    (tmp_path / "report").mkdir()
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 1
-    assert "missing or empty" in result.stderr
-    assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
-
-
-def test_publish_refuses_an_empty_report(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    (tmp_path / "report" / f"report-{DAY}.json").write_text("", encoding="utf-8")
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 1
-    assert "missing or empty" in result.stderr
-
-
-def test_publish_refuses_invalid_json(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    (tmp_path / "report" / f"backtest-{DAY}.json").write_text("<html>", encoding="utf-8")
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 1
-    assert "is not valid JSON" in result.stderr
-    assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
-
-
-def test_publish_refuses_a_csv_without_a_header(fakes: Path, tmp_path: Path) -> None:
-    _write_report(tmp_path / "report")
-    (tmp_path / "report" / f"backtest-games-{DAY}.csv").write_text("Not Found\n", encoding="utf-8")
-    result = _publish(fakes, tmp_path)
-    assert result.returncode == 1
-    assert "no CSV header" in result.stderr
-
-
-def test_publish_help_names_the_delete_first_step(fakes: Path, tmp_path: Path) -> None:
-    result = _run("publish-daily-report.sh", _env(fakes, tmp_path), "--help")
-    assert result.returncode == 0
-    assert "replaces the release files" in result.stdout
-    assert "--report-dir" in result.stdout
 
 
 # --- prepare and daily run ----------------------------------------------------
@@ -651,8 +423,29 @@ def test_daily_run_without_the_morning_fails_and_runs_nothing(fakes: Path, tmp_p
     assert f"no preparation for {DAY}" in result.stderr
     assert f"daily-prepare workflow with date {DAY}" in result.stderr
     assert "came back from the cache" in result.stderr
-    assert _calls(tmp_path) == []
+    assert not any(" refresh " in line or " daily " in line for line in _calls(tmp_path))
     assert not (out / f"backtest-{DAY}.json").exists()
+
+
+def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
+    fakes: Path, tmp_path: Path
+) -> None:
+    # The prep has not had its window yet, so a missing marker is not an error.
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+        ),
+    )
+    out = tmp_path / "out"
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
+    assert result.returncode == 0, result.stderr
+    assert "::notice::" in result.stderr
+    assert f"no preparation for {DAY} yet" in result.stderr
+    assert not any(" refresh " in line or " daily " in line for line in _calls(tmp_path))
+    assert not (out / "complete").exists()
 
 
 def test_prepare_and_daily_help_document_the_split(fakes: Path, tmp_path: Path) -> None:
@@ -830,3 +623,43 @@ def test_gate_stops_when_the_decision_step_fails_or_prints_a_bad_payload(
     assert result.returncode == 1
     assert message in result.stderr
     assert result.stdout == ""
+
+
+def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_path: Path) -> None:
+    # A string "true" would otherwise skip the run, so the payload shape is checked first.
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": "true"}
+        ),
+    )
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 1
+    assert "prep_too_early" in result.stderr
+
+
+def test_daily_run_fails_when_report_due_fails_without_a_marker(
+    fakes: Path, tmp_path: Path
+) -> None:
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), FAKE_UV_FAIL="1")
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 1
+    assert "report-due failed" in result.stderr
+
+
+def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        GITHUB_STEP_SUMMARY=str(summary),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+        ),
+    )
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 0, result.stderr
+    assert "This run skips." in summary.read_text(encoding="utf-8")

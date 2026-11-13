@@ -56,6 +56,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Require `--features` in `hockey-model fit`. The old default fitted every candidate, including `goalie_gsax`, which the backtest vetoed, and the daily report served that fit. `scripts/daily-prepare.sh` now runs the backtest first and fits on its `live_features`, so a failed joint test serves the Elo alone. [fix:cli]
 - Name the feed games that fall outside a game day's window in the `report-due` output, instead of dropping them without a word. [refactor:report]
 - Replace the daily report's release files and notes with each later build before the first puck drop. The release can therefore change until then, and its notes say so. [feat:report]
+- Keep each daily report build as its own `report-DATE-HHMMSSZ` file, named by its `generated_at` time, so a rerun no longer replaces a published version. The `report-DATE` files stay as the alias for the newest build. [fix:report]
 
 ### Fixed
 
@@ -96,5 +97,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read a finished score day again only until 7 hours after the Eastern game day closes, which is 12:00 UTC in winter and 11:00 UTC in summer. The old rule read a summer day one hour too long. [fix:store]
 - Set a goalie differential to the neutral value when either starter has no rate, and mark the feature as imputed for that team. The other starter's rate no longer passes through as a measured difference. [fix:model]
 - Refuse a fit, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. A backtest vetoes such a candidate instead of stopping. The `imputation` list in the fit and backtest JSON gives the count and share for each selected feature. [fix:model]
+- Skip a scheduled report run that finds no prep marker more than 180 minutes before the first puck drop, with a notice and exit 0, instead of failing red. The same missing marker inside that window still fails. [fix:report]
 
 [Unreleased]: https://github.com/slackworks/hockey-model/commits/main

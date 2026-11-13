@@ -31,7 +31,9 @@ A game day with no listed trigger before its puck drop gets no report before the
 Every trigger that starts while the first puck drop of the game day is still ahead is due.
 The gate compares the time of the run, plus the report budget, with the first puck drop. A run that cannot finish before the puck drop does not publish.
 The first due run that starts publishes the report.
-A later run before the puck drop builds the report again and replaces the release files and notes, so the report can change until the first puck drop.
+A later run before the puck drop builds the report again and adds its version to the release, so the report can change until the first puck drop.
+Each build keeps its own files, named `report-DATE-HHMMSSZ`, where the time is its `generated_at`, and nothing published is replaced (#196).
+`report-DATE.md` and `report-DATE.json` are the alias for the newest build, and the backtest files hold the newest build too.
 The notes say so, and they name the commit and time of each build.
 After the puck drop, every run skips a day that has a release.
 The release target stays the commit of the first build, so the commit of a replacing build appears only in the notes and in the JSON copy.
@@ -52,6 +54,8 @@ The fit and the backtest each take minutes or more on a full store.
 2. `daily-report.yml` runs at each trigger. When a trigger is due, it refreshes only the schedule, the goalie sources, and the injuries, then predicts and publishes.
 
 When the morning run did not finish, the report run fails and says so.
+A report run more than `PREP_WINDOW` (180 minutes, the prep job timeout) before the first puck drop skips with a notice and exits 0, because the morning run has not had its window yet (#223).
+The same missing marker inside that window still fails, because a person has to act.
 It does not do the morning work itself, because that work is too long to fit before the puck drop and the report run must finish in minutes.
 The operator runs the `daily-prepare` workflow with that date, then runs the report again.
 Both workflows share one concurrency group, because both write the cached store.
