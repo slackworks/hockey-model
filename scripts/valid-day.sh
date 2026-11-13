@@ -14,13 +14,13 @@ is_valid_day() {
   ((year >= 1 && month >= 1 && month <= 12 && day >= 1)) || return 1
   local last=31
   case "$month" in
-    4 | 6 | 9 | 11) last=30 ;;
-    2)
-      last=28
-      if ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))); then
-        last=29
-      fi
-      ;;
+  4 | 6 | 9 | 11) last=30 ;;
+  2)
+    last=28
+    if ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))); then
+      last=29
+    fi
+    ;;
   esac
   ((day <= last))
 }

@@ -81,6 +81,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Name the editorconfig-checker config `.editorconfig-checker.json`, the name the tool loads, and download its archive into `RUNNER_TEMP`. [fix:ci]
 - Check that a flag has a value in the report scripts, so `semgrep` parses them and a missing value gives a usage error. [fix:scripts]
 - Report a `TypeError` from a model as an unexpected failure. Only a JSON encoder `TypeError` is a serialization failure. [fix:cli]
+- Skip an abandoned MoneyPuck team file on later refreshes, as the goalie files are skipped. `refresh --retry-skipped` reads it again. [fix:store]
+- Show a source gap that is outside the scored and current seasons once in the daily report footer, and not on every game row. The JSON report lists the same gaps under `training_gaps`. [fix:report]
 - Use one season boundary (`SEASON_START_MONTH`) and one season id formula for the fit, the cohorts, and the MoneyPuck refresh. [fix:model]
 - Check every projection at each public entry point and refuse a value that is not finite, is out of range, or has an interval that does not hold the point. Goals against average may exceed one. [fix:api]
 - Refuse a boxscore that does not name the stored game's teams in the stored home and away order, or that has no skater rows or no starting goalie for a team. A game with one side stored is queued again and repaired without a change to the old rows. [fix:sources]

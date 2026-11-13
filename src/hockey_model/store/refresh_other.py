@@ -82,10 +82,17 @@ def _mark_incomplete(run: RefreshRun) -> None:
 
 
 def _note_gaps(run: RefreshRun) -> frozenset[str]:
-    """Return the goalie files that earlier reads left as known gaps, and note them."""
-    gaps = run.skipped(MONEYPUCK) - {TEAM_GAMES_URL}
+    """Return the MoneyPuck files that earlier reads left as known gaps, and note them.
+
+    The team file is a gap like any other file. A gap is still reported as stale by
+    ``stale_sources`` while the file is current, so skipping it stays visible.
+    """
+    gaps = run.skipped(MONEYPUCK)
     if gaps:
-        run.notes.append(f"{MONEYPUCK}: {len(gaps)} files skipped, because every read failed")
+        run.notes.append(
+            f"{MONEYPUCK}: {len(gaps)} files skipped after repeated failed reads; "
+            "retry with --retry-skipped"
+        )
     return gaps
 
 
@@ -94,7 +101,8 @@ def moneypuck(run: RefreshRun) -> None:
     current season, older than a week. A finished season is read once."""
     current = season_start_year(run.now.date())
     tried = 0
-    if _stale(run, TEAM_GAMES_URL):
+    gaps = _note_gaps(run)
+    if _stale(run, TEAM_GAMES_URL) and TEAM_GAMES_URL not in gaps:
         # Only a file that was read counts, so a failing team file does not hold back the rest.
         tried += run.attempt(
             MONEYPUCK,
@@ -104,7 +112,6 @@ def moneypuck(run: RefreshRun) -> None:
             ),
         )
     failures = 0
-    gaps = _note_gaps(run)
     for season in range(FIRST_SEASON, current + 1):
         url = goalie_games_url(season)
         if url in gaps:

@@ -270,3 +270,19 @@ def test_the_worklist_drops_repeats_read_games_and_keeps_the_first_order(
         assert work == [g for g in dict.fromkeys(ids) if g not in read]
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(("retry", "expected"), [(False, False), (True, True)])
+def test_an_abandoned_team_file_follows_the_same_skip_rule_as_a_goalie_file(
+    conn: sqlite3.Connection, retry: bool, expected: bool
+) -> None:
+    # #204: the team file had an exemption with no recorded reason, so it was read on every run.
+    for days in (0, 1):
+        record_read(
+            conn, "moneypuck", TEAM_GAMES_URL, NOW - timedelta(days=3 - days), error="HTTP 503"
+        )
+    conn.commit()
+    assert TEAM_GAMES_URL in abandoned_urls(conn, "moneypuck")
+    client = FakeClient()
+    refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=retry)
+    assert (TEAM_GAMES_URL in client.urls) is expected

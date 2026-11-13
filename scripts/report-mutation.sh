@@ -11,31 +11,42 @@
 # Stderr: diagnostics. Exit 0 when the report is filed. Exit 2 on bad arguments.
 set -euo pipefail
 
+# A flag that takes a value must have one. Without this, `shift 2` fails with no message.
+need_value() {
+  if (($# < 2)); then
+    echo "report-mutation: $1 needs a value; see the usage line" >&2
+    exit 2
+  fi
+}
+
 STATS=""
 EXECUTION=""
 RUN_URL=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stats)
-      STATS="${2:-}"
-      shift 2
-      ;;
-    --execution)
-      EXECUTION="${2:-}"
-      shift 2
-      ;;
-    --run-url)
-      RUN_URL="${2:-}"
-      shift 2
-      ;;
-    --help | -h)
-      sed -n '2,11p' "$0"
-      exit 0
-      ;;
-    *)
-      echo "report-mutation: unknown argument: $1" >&2
-      exit 2
-      ;;
+  --stats)
+    need_value "$@"
+    STATS="${2:-}"
+    shift 2
+    ;;
+  --execution)
+    need_value "$@"
+    EXECUTION="${2:-}"
+    shift 2
+    ;;
+  --run-url)
+    need_value "$@"
+    RUN_URL="${2:-}"
+    shift 2
+    ;;
+  --help | -h)
+    sed -n '2,11p' "$0"
+    exit 0
+    ;;
+  *)
+    echo "report-mutation: unknown argument: $1" >&2
+    exit 2
+    ;;
   esac
 done
 

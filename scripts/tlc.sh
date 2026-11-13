@@ -49,15 +49,15 @@ if (($# > 1)); then
   exit 2
 fi
 case "${1:-}" in
-  "") ;;
-  --help)
-    usage
-    exit 0
-    ;;
-  *)
-    echo "tlc.sh: unknown argument '$1'; run with --help for the usage" >&2
-    exit 2
-    ;;
+"") ;;
+--help)
+  usage
+  exit 0
+  ;;
+*)
+  echo "tlc.sh: unknown argument '$1'; run with --help for the usage" >&2
+  exit 2
+  ;;
 esac
 
 if ! command -v java >/dev/null 2>&1; then
@@ -140,16 +140,16 @@ for cfg in specs/daily_prepare_stall.cfg specs/daily_prepare.cfg; do
 done
 
 case "$rc" in
-  0) ;;
-  11) echo "tlc.sh: TLC found a deadlock (exit 11). The trace is above." >&2 ;;
-  12)
-    echo "tlc.sh: TLC found a violated invariant (exit 12)." >&2
-    echo "  The counterexample trace is above." >&2
-    ;;
-  13)
-    echo "tlc.sh: TLC found a violated action or temporal property (exit 13)." >&2
-    echo "  The counterexample trace is above." >&2
-    ;;
-  *) echo "tlc.sh: TLC failed with exit $rc. No counterexample: read the TLC error above." >&2 ;;
+0) ;;
+11) echo "tlc.sh: TLC found a deadlock (exit 11). The trace is above." >&2 ;;
+12)
+  echo "tlc.sh: TLC found a violated invariant (exit 12)." >&2
+  echo "  The counterexample trace is above." >&2
+  ;;
+13)
+  echo "tlc.sh: TLC found a violated action or temporal property (exit 13)." >&2
+  echo "  The counterexample trace is above." >&2
+  ;;
+*) echo "tlc.sh: TLC failed with exit $rc. No counterexample: read the TLC error above." >&2 ;;
 esac
 exit "$rc"

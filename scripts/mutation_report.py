@@ -9,7 +9,7 @@ A run has one of three statuses:
 - ``clean``: the survivor count is at or below the baseline.
 - ``regression``: the survivor count is above the baseline.
 - ``execution_failed``: the stats are missing, malformed, or marked interrupted,
-    or a shard did not finish.
+    a shard did not finish, or a mutant did not finish. The outcome counts must sum to the total.
 
 The baseline is provisional. It is the survivor count from the first pass in #31.
 Replace it when #31 publishes a machine-readable baseline.
@@ -39,7 +39,8 @@ from pathlib import Path
 MARKER = "<!-- hockey-model-mutation-report -->"
 TITLE = "Mutation report: the weekly run needs a look"
 PROVISIONAL_BASELINE = 524
-COUNT_KEYS = ("killed", "survived", "timeout", "total")
+# ``no_tests`` is a finished outcome: the test run reached the mutant and no test covers it.
+COUNT_KEYS = ("killed", "survived", "timeout", "no_tests", "total")
 STATUS_CLEAN = "clean"
 STATUS_REGRESSION = "regression"
 STATUS_FAILED = "execution_failed"
@@ -91,10 +92,18 @@ def read_stats(path: Path) -> Stats:
 def decide(stats: Stats | None, execution: str, baseline: int) -> str:
     """Return the status for one run.
 
-    An interrupted run or a failed execution is never clean, even when its counts
-    look fine, because the counts may be partial.
+    An interrupted run, a failed execution, or a mutant that did not finish is never clean,
+    even when its survivor count looks fine, because the counts may be partial.
+
+    mutmut's total also holds the statuses that the stats file leaves out: not checked, and
+    caught by type check (type-checker mode is off in this repo). Any mutant outside the
+    finished outcomes fails the run, so a status added later cannot pass silently.
     """
     if execution != "success" or stats is None or stats.interrupted:
+        return STATUS_FAILED
+    c = stats.counts
+    finished = c["killed"] + c["survived"] + c["timeout"] + c["no_tests"]
+    if c["total"] != finished:
         return STATUS_FAILED
     if stats.counts["survived"] > baseline:
         return STATUS_REGRESSION

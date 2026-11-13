@@ -29,12 +29,20 @@ def _load_report() -> ModuleType:
 
 report = _load_report()
 
-GOOD_COUNTS = {"killed": 1900, "survived": 500, "timeout": 2, "total": 2400}
+GOOD_COUNTS = {"killed": 1898, "survived": 500, "timeout": 2, "no_tests": 0, "total": 2400}
+
+
+def _counts(**changes: int) -> dict[str, int]:
+    """Return counts whose total is the sum of the outcomes, unless a change names the total."""
+    counts = {**GOOD_COUNTS, **changes}
+    if "total" not in changes:
+        counts["total"] = sum(counts[k] for k in ("killed", "survived", "timeout", "no_tests"))
+    return counts
 
 
 def _write_stats(path: Path, **overrides: object) -> Path:
     """Write a stats file with the good counts, overridden by keyword."""
-    data: dict[str, object] = {**GOOD_COUNTS, "no_tests": 0, "skipped": 0}
+    data: dict[str, object] = {**GOOD_COUNTS, "skipped": 0, "suspicious": 0, "segfault": 0}
     data.update(overrides)
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
@@ -46,7 +54,7 @@ def test_read_stats_returns_the_counts(tmp_path: Path) -> None:
     assert stats.interrupted is False
 
 
-@pytest.mark.parametrize("field", ["killed", "survived", "timeout", "total"])
+@pytest.mark.parametrize("field", ["killed", "survived", "timeout", "no_tests", "total"])
 def test_read_stats_rejects_a_missing_count(tmp_path: Path, field: str) -> None:
     path = tmp_path / "stats.json"
     data = {k: v for k, v in GOOD_COUNTS.items() if k != field}
@@ -93,17 +101,17 @@ def test_read_stats_marks_an_interrupted_run(tmp_path: Path) -> None:
 
 
 def test_decide_is_clean_at_the_baseline() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 524}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=524), interrupted=False)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_CLEAN
 
 
 def test_decide_is_a_regression_above_the_baseline() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 525}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=525), interrupted=False)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_REGRESSION
 
 
 def test_decide_fails_when_a_shard_failed_even_with_clean_counts() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 1}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=1), interrupted=False)
     assert report.decide(stats, "failure", baseline=524) == report.STATUS_FAILED
 
 
@@ -112,22 +120,22 @@ def test_decide_fails_when_there_are_no_stats() -> None:
 
 
 def test_decide_fails_when_the_run_was_interrupted() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 1}, interrupted=True)
+    stats = report.Stats(counts=_counts(survived=1), interrupted=True)
     assert report.decide(stats, "success", baseline=524) == report.STATUS_FAILED
 
 
 @given(survived=st.integers(min_value=0, max_value=10_000), baseline=st.integers(0, 10_000))
 def test_decide_matches_the_baseline_for_every_count(survived: int, baseline: int) -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": survived}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=survived), interrupted=False)
     expected = report.STATUS_CLEAN if survived <= baseline else report.STATUS_REGRESSION
     assert report.decide(stats, "success", baseline) == expected
 
 
 def test_build_body_starts_with_the_marker_and_shows_the_difference() -> None:
-    stats = report.Stats(counts={**GOOD_COUNTS, "survived": 600}, interrupted=False)
+    stats = report.Stats(counts=_counts(survived=600), interrupted=False)
     body = report.build_body(report.STATUS_REGRESSION, stats, 524, "https://example.test/run/1")
     assert body.startswith(report.MARKER)
-    assert "| 1900 | 600 | 2 | 2400 | 524 | +76 |" in body
+    assert "| 1898 | 600 | 2 | 2500 | 524 | +76 |" in body
     assert "https://example.test/run/1" in body
 
 
@@ -218,3 +226,54 @@ def test_find_open_report_rejects_a_malformed_list(payload: str) -> None:
 def test_find_open_report_returns_the_number_it_was_given(number: int) -> None:
     issues = [{"number": number, "body": report.MARKER, "author": BOT}]
     assert report.find_open_report(json.dumps(issues)) == number
+
+
+@pytest.mark.parametrize("delta", [1, 3, 40, -1])
+def test_decide_fails_when_the_total_and_the_outcomes_disagree(delta: int) -> None:
+    # A positive delta is a mutant that did not finish. A negative one means the outcome counts
+    # exceed the total. Either way the counts are not trusted.
+    stats = report.Stats(counts=_counts(total=2400 + delta), interrupted=False)
+    assert report.decide(stats, "success", 10_000) == report.STATUS_FAILED
+
+
+def test_a_stats_file_with_unfinished_mutants_fails_the_run(tmp_path: Path) -> None:
+    path = _write_stats(tmp_path / "stats.json", total=2405)
+    stats = report.read_stats(path)
+    assert report.decide(stats, "success", 524) == report.STATUS_FAILED
+
+
+def test_a_real_export_with_no_unfinished_mutants_stays_clean(tmp_path: Path) -> None:
+    # Every key that mutmut 3.8 writes to its CI stats file, with no unfinished mutant.
+    export = {
+        "killed": 400,
+        "survived": 100,
+        "timeout": 5,
+        "no_tests": 5,
+        "skipped": 0,
+        "suspicious": 0,
+        "segfault": 0,
+        "total": 510,
+        "check_was_interrupted_by_user": False,
+    }
+    path = tmp_path / "stats.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+    stats = report.read_stats(path)
+    assert report.decide(stats, "success", 524) == report.STATUS_CLEAN
+
+
+def test_a_real_export_with_a_suspicious_mutant_fails_the_run(tmp_path: Path) -> None:
+    export = {
+        "killed": 400,
+        "survived": 100,
+        "timeout": 5,
+        "no_tests": 5,
+        "skipped": 3,
+        "suspicious": 1,
+        "segfault": 0,
+        "total": 514,
+        "check_was_interrupted_by_user": False,
+    }
+    path = tmp_path / "stats.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+    stats = report.read_stats(path)
+    assert report.decide(stats, "success", 524) == report.STATUS_FAILED
