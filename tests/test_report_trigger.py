@@ -8,9 +8,11 @@ from hypothesis import strategies as st
 
 from hockey_model.game_day import game_day_window
 from hockey_model.report_trigger import (
+    PREP_WINDOW,
     TRIGGER_HOURS_UTC,
     TRIGGER_MINUTE_UTC,
     first_puck_drop,
+    prep_too_early,
     puck_drop_ahead,
 )
 from hockey_model.types import HockeyModelError
@@ -113,3 +115,36 @@ def test_a_margin_moves_the_cutoff_earlier_by_its_length() -> None:
 def test_a_negative_margin_is_an_error() -> None:
     with pytest.raises(HockeyModelError, match="must not be negative"):
         puck_drop_ahead(at("2026-11-04T23:00"), at("2026-11-05T00:00"), timedelta(seconds=-1))
+
+
+# A run this far before the first puck drop is too early to call the prep missing an error:
+# the morning prep job has not had its window yet.
+@pytest.mark.parametrize(
+    ("now", "first", "expected"),
+    [
+        # Hours before the puck drop, and the prep has not run: too early, skip.
+        ("2026-11-13T07:24", "2026-11-13T23:00", True),
+        # Inside the window: a missing prep is a real failure, so it is not too early.
+        ("2026-11-13T16:00", "2026-11-13T19:00", False),
+        # Exactly the window before the puck drop is still inside it.
+        ("2026-11-13T10:00", "2026-11-13T13:00", False),
+        # One second more than the window is outside it.
+        ("2026-11-13T09:59:59", "2026-11-13T13:00", True),
+        # After the puck drop, the prep failure is real.
+        ("2026-11-13T20:00", "2026-11-13T19:00", False),
+    ],
+)
+def test_prep_is_too_early_only_more_than_the_prep_window_before_the_puck_drop(
+    now: str, first: str, expected: bool
+) -> None:
+    assert prep_too_early(at(now), at(first)) is expected
+
+
+def test_prep_window_matches_the_prepare_job_timeout() -> None:
+    # daily-prepare.yml sets timeout-minutes: 180. A prep that starts at its cron can run that long.
+    assert PREP_WINDOW == timedelta(minutes=180)
+
+
+def test_prep_too_early_rejects_a_naive_time() -> None:
+    with pytest.raises(HockeyModelError):
+        prep_too_early(datetime(2026, 11, 13, 7, 24), at("2026-11-13T23:00"))

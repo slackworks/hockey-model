@@ -25,7 +25,7 @@ from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.game_model.seasons import FIT_FIRST, season_of
 from hockey_model.game_model.training import game_input, training_rows
 from hockey_model.report_gate import decide, warning
-from hockey_model.report_trigger import first_puck_drop, puck_drop_ahead
+from hockey_model.report_trigger import first_puck_drop, prep_too_early, puck_drop_ahead
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow, fetch_score_day
 from hockey_model.store.db import connect, db_path_from_env
@@ -372,6 +372,7 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
         "games": len(games),
         "first_puck_drop_utc": iso_utc(first),
         "puck_drop_passed": now >= first,
+        "prep_too_early": prep_too_early(now, first),
         "due": args.force or puck_drop_ahead(now, first, timedelta(seconds=args.margin_seconds)),
     }, 0
 

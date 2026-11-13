@@ -80,6 +80,16 @@ mkdir -p "$out_dir"
 # A marker from an earlier run in this directory must not stand for this run.
 rm -f "$out_dir/complete"
 if [[ ! -f "$store_dir/prepared-$day" ]]; then
+  # The prep job runs each morning. A run hours before the first puck drop finds no marker yet,
+  # so that run skips. Inside the prep window the same missing marker still fails below.
+  due_json="$(uv run hockey-model report-due --date "$day")" || {
+    echo "daily-report: report-due failed while checking the prep window; its error is above" >&2
+    exit 1
+  }
+  if [[ "$(jq -r '.prep_too_early // false' <<<"$due_json")" == "true" ]]; then
+    echo "::notice::daily-report: no preparation for $day yet, and the first puck drop is more than the prep window away. This run skips." >&2
+    exit 0
+  fi
   echo "daily-report: no preparation for $day in $store_dir." >&2
   echo "daily-report: run the daily-prepare workflow with date $day, then run this again." >&2
   echo "daily-report: if it ran, check that it passed and that the store came back from the cache." >&2

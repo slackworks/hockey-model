@@ -65,6 +65,7 @@ def test_report_due_prints_only_the_gate_fields(
         "games",
         "first_puck_drop_utc",
         "puck_drop_passed",
+        "prep_too_early",
         "due",
     }
 

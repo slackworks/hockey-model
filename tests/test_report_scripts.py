@@ -16,6 +16,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 LIVE = ["xg_form", "rest"]
 DAY = "2026-11-04"
 TAG = f"reports-{DAY}"
+GENERATED = "2026-11-04T20:20:13.000000+00:00"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 REAL_UV = shutil.which("uv") or ""
 
@@ -324,7 +325,9 @@ def test_gate_help_names_every_option(fakes: Path, tmp_path: Path) -> None:
 def _write_report(report_dir: Path, day: str = DAY) -> None:
     report_dir.mkdir()
     (report_dir / f"report-{day}.md").write_text("# report\n", encoding="utf-8")
-    (report_dir / f"report-{day}.json").write_text("{}\n", encoding="utf-8")
+    (report_dir / f"report-{day}.json").write_text(
+        json.dumps({"generated_at": GENERATED}) + "\n", encoding="utf-8"
+    )
     (report_dir / f"backtest-{day}.json").write_text("{}\n", encoding="utf-8")
     (report_dir / f"backtest-games-{day}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
 
@@ -366,19 +369,20 @@ def test_publish_replaces_the_files_of_an_existing_release(fakes: Path, tmp_path
     assert result.returncode == 0, result.stderr
     calls = _calls(tmp_path)
     upload = [line for line in calls if line.startswith("gh release upload")]
-    assert upload and "--clobber" in upload[0] and f" {TAG} " in upload[0]
+    # The alias and the backtest files move to this build with --clobber. The version does not.
+    alias = [line for line in upload if "--clobber" in line]
+    assert alias and f" {TAG} " in alias[0] and f"/report-{DAY}.json" in alias[0]
     assert any(line.startswith("gh release edit") for line in calls)
     assert not any(line.startswith("gh release create") for line in calls)
 
 
-def test_publish_notes_say_the_release_can_change_before_puck_drop(
-    fakes: Path, tmp_path: Path
-) -> None:
+def test_publish_notes_say_every_build_is_kept(fakes: Path, tmp_path: Path) -> None:
     _write_report(tmp_path / "report")
     result = _publish(fakes, tmp_path)
     assert result.returncode == 0, result.stderr
     notes = (tmp_path / "report" / f"release-notes-{DAY}.md").read_text(encoding="utf-8")
-    assert "can be replaced by a later build until the first puck drop" in notes
+    assert "Every build of this day is kept" in notes
+    assert "report-" + DAY + "-HHMMSSZ" in notes
     assert f"commit {SHA}" in notes
 
 
@@ -651,8 +655,29 @@ def test_daily_run_without_the_morning_fails_and_runs_nothing(fakes: Path, tmp_p
     assert f"no preparation for {DAY}" in result.stderr
     assert f"daily-prepare workflow with date {DAY}" in result.stderr
     assert "came back from the cache" in result.stderr
-    assert _calls(tmp_path) == []
+    assert not any(" refresh " in line or " daily " in line for line in _calls(tmp_path))
     assert not (out / f"backtest-{DAY}.json").exists()
+
+
+def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
+    fakes: Path, tmp_path: Path
+) -> None:
+    # The prep has not had its window yet, so a missing marker is not an error.
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+        ),
+    )
+    out = tmp_path / "out"
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
+    assert result.returncode == 0, result.stderr
+    assert "::notice::" in result.stderr
+    assert f"no preparation for {DAY} yet" in result.stderr
+    assert not any(" refresh " in line or " daily " in line for line in _calls(tmp_path))
+    assert not (out / "complete").exists()
 
 
 def test_prepare_and_daily_help_document_the_split(fakes: Path, tmp_path: Path) -> None:
@@ -830,3 +855,53 @@ def test_gate_stops_when_the_decision_step_fails_or_prints_a_bad_payload(
     assert result.returncode == 1
     assert message in result.stderr
     assert result.stdout == ""
+
+
+def _calls_with(tmp_path: Path, prefix: str, text: str) -> list[str]:
+    return [line for line in _calls(tmp_path) if line.startswith(prefix) and text in line]
+
+
+def test_publish_keeps_each_build_under_its_generated_seconds(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 0, result.stderr
+    for ext in ("md", "json"):
+        version = _calls_with(tmp_path, "gh release upload", f"report-{DAY}-202013Z.{ext}")
+        # A published version is never replaced, so its upload has no --clobber.
+        assert version and "--clobber" not in version[0]
+
+
+def test_publish_moves_the_latest_alias_with_clobber(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 0, result.stderr
+    alias = _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+    assert alias and "--clobber" in alias[0]
+    assert not _calls_with(tmp_path, "gh release create", "")
+
+
+def test_publish_creates_the_release_with_versions_and_the_alias(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path)
+    assert result.returncode == 0, result.stderr
+    create = _calls_with(tmp_path, "gh release create", f" {TAG} ")
+    assert create
+    assert f"report-{DAY}-202013Z.json" in create[0]
+    assert f"report-{DAY}-202013Z.md" in create[0]
+    assert f"/report-{DAY}.json" in create[0]
+
+
+@pytest.mark.parametrize("generated", ["", "2026-11-04 20:20:13", "2026-11-04T20:20:13Z"])
+def test_publish_refuses_a_report_without_the_generated_time(
+    fakes: Path, tmp_path: Path, generated: str
+) -> None:
+    _write_report(tmp_path / "report")
+    (tmp_path / "report" / f"report-{DAY}.json").write_text(
+        json.dumps({"generated_at": generated}) + "\n", encoding="utf-8"
+    )
+    result = _publish(fakes, tmp_path)
+    assert result.returncode == 1
+    assert "generated_at" in result.stderr
+    assert not any(line.startswith("gh release") for line in _calls(tmp_path))
