@@ -88,7 +88,9 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
         "FAKE_CALLS": str(tmp_path / "calls.log"),
         "FAKE_RELEASES": "",
-        "FAKE_DUE_JSON": json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3}),
+        "FAKE_DUE_JSON": json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": False}
+        ),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,
         # report-decide is the real command: it holds the decision the gate script prints.
@@ -905,3 +907,43 @@ def test_publish_refuses_a_report_without_the_generated_time(
     assert result.returncode == 1
     assert "generated_at" in result.stderr
     assert not any(line.startswith("gh release") for line in _calls(tmp_path))
+
+
+def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_path: Path) -> None:
+    # A string "true" would otherwise skip the run, so the payload shape is checked first.
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": "true"}
+        ),
+    )
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 1
+    assert "prep_too_early" in result.stderr
+
+
+def test_daily_run_fails_when_report_due_fails_without_a_marker(
+    fakes: Path, tmp_path: Path
+) -> None:
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), FAKE_UV_FAIL="1")
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 1
+    assert "report-due failed" in result.stderr
+
+
+def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        GITHUB_STEP_SUMMARY=str(summary),
+        FAKE_DUE_JSON=json.dumps(
+            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+        ),
+    )
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 0, result.stderr
+    assert "This run skips." in summary.read_text(encoding="utf-8")

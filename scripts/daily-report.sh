@@ -7,7 +7,9 @@
 #
 # Reads the store path from HOCKEY_MODEL_DB. The morning run of daily-prepare.sh does the
 # slow work. When its prepared-DATE marker is missing, this script stops with exit code 1
-# and writes no report, because the slow work does not fit in the report budget. Run the
+# and writes no report, because the slow work does not fit in the report budget. The one
+# exception is a day whose first puck drop is more than the prep window away: then the script
+# skips with exit code 0, because the morning run has not had its window yet. Run the
 # daily-prepare workflow for the day, then run this script again. Any failed step stops
 # the script with its exit code, so a failed run writes no report.
 #
@@ -86,8 +88,17 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
     echo "daily-report: report-due failed while checking the prep window; its error is above" >&2
     exit 1
   }
-  if [[ "$(jq -r '.prep_too_early // false' <<<"$due_json")" == "true" ]]; then
-    echo "::notice::daily-report: no preparation for $day yet, and the first puck drop is more than the prep window away. This run skips." >&2
+  # A string "true" must not skip, so the field has to be a JSON boolean.
+  if ! jq -e '.prep_too_early | type == "boolean"' <<<"$due_json" >/dev/null; then
+    echo "daily-report: report-due payload lacks a boolean prep_too_early: $due_json" >&2
+    exit 1
+  fi
+  if [[ "$(jq -r '.prep_too_early' <<<"$due_json")" == "true" ]]; then
+    notice="daily-report: no preparation for $day yet, and the first puck drop is more than the prep window away. This run skips."
+    echo "::notice::$notice" >&2
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      echo "$notice" >>"$GITHUB_STEP_SUMMARY"
+    fi
     exit 0
   fi
   echo "daily-report: no preparation for $day in $store_dir." >&2
