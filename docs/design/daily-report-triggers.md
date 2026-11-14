@@ -88,11 +88,7 @@ The late run then fell after the puck drops, so most of the day's games were mad
 The design is an external clock that calls `workflow_dispatch` on `daily-report.yml` at each trigger minute, so the slot does not depend on GitHub's queue.
 The `schedule` trigger stays as a fallback.
 The gate already skips a duplicate trigger once the release exists, so a dispatch and a late schedule run do no harm.
-The clock needs a token that may run workflows in this repository, and the owner provisions it.
+The owner provisions the clock. Use a fine-grained token limited to this repository with only the Actions write permission, plus Metadata read, with a set expiry, stored in the clock host's secret store.
 Until the owner provisions the clock, only the `schedule` trigger runs.
-The clock runs `gh workflow run daily-report.yml --repo slackworks/hockey-model` at each slot in the cron below.
-The cron minute and hours MUST match `TRIGGER_MINUTE_UTC` and `TRIGGER_HOURS_UTC`.
-
-```text
-44 0,11,15-23 * * *
-```
+The clock runs `gh workflow run daily-report.yml --repo slackworks/hockey-model` at each slot. The dispatch omits `--ref`, so it always runs the default branch.
+The clock's cron minute and hours MUST match `TRIGGER_MINUTE_UTC` and `TRIGGER_HOURS_UTC`.
