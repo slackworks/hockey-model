@@ -154,6 +154,7 @@ class ReadResult(NamedTuple):
     clean: bool  # every unit is read, or is a known gap
     stopped: bool  # the read quit early: three failures in a row, or the time ran out
     progress: int = 0  # older units that this read finished for good: the backlog, not arrivals
+    timed_out: bool = False  # set only when the time budget ran out
 
 
 def score_gaps(run: RefreshRun) -> set[date]:
@@ -198,7 +199,7 @@ def read_days(
             continue
         if run.out_of_time():
             run.notes.append(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
-            return ReadResult(clean=False, stopped=True, progress=progress)
+            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
 
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
@@ -308,7 +309,7 @@ def read_boxscores(
         if run.out_of_time():
             left = len(waiting) - index
             run.notes.append(f"{BOXSCORES}: stopped, because the time ran out; {left} not tried")
-            return ReadResult(clean=False, stopped=True, progress=progress)
+            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
         url = boxscore_url(game_id)
         if failed_since(run.conn, BOXSCORES, url, run.now - RETRY_FAILED_AFTER):
             skipped += 1

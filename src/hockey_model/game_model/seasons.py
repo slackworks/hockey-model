@@ -55,7 +55,8 @@ EXPECTED_REGULAR_GAMES = {
 MIN_SEASON_COVERAGE = 0.95
 
 # A season is counted from this month of its first year until the same month a year later.
-# The fit, the cohorts, and the MoneyPuck refresh all use it, so they agree in July and August.
+# The cohorts, the season filter, and the MoneyPuck refresh count the season from the Eastern
+# game day. The fit default is the exception, as its open issue records.
 SEASON_START_MONTH = 9
 
 

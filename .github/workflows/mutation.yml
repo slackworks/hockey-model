@@ -133,12 +133,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           stats=.tmp/mutation/mutants/mutmut-cicd-stats.json
           execution=failure
           if [[ "$SHARD_RESULT" == success && "$MERGE_RESULT" == success \
             && "$EXPORT_RESULT" == success && -f "$stats" ]]; then
             execution=success
           fi
-          scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL"
-          # The report is filed. A failed execution still fails the job.
+          status="$(scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL")"
+          # Only clean and regression pass. A regression does not fail the job here, by design.
           test "$execution" = success
+          case "$status" in
+            clean | regression) ;;
+            *)
+              echo "mutation: unexpected report status '$status'" >&2
+              exit 1
+              ;;
+          esac

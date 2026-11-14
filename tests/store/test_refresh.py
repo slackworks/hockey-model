@@ -475,13 +475,15 @@ def _fresh_moneypuck(conn: sqlite3.Connection, now: datetime, last_season: int) 
     [
         (datetime(2026, 7, 15, tzinfo=UTC), False),
         (datetime(2026, 8, 31, tzinfo=UTC), False),
-        (datetime(2026, 9, 1, tzinfo=UTC), True),
+        # 00:00 UTC on Sept 1 is still Aug 31 in Eastern time, the game day the NHL uses.
+        (datetime(2026, 9, 1, tzinfo=UTC), False),
+        (datetime(2026, 9, 1, 4, tzinfo=UTC), True),
     ],
 )
 def test_the_new_goalie_file_is_read_from_the_shared_season_boundary(
     conn: sqlite3.Connection, moment: datetime, new_season_requested: bool
 ) -> None:
-    """Refresh counts the new season from the same boundary as the cohorts and the fit."""
+    """Refresh counts the new season from the Eastern game day, as the NHL schedule does."""
     _fresh_moneypuck(conn, moment, 2025)
     client = FakeClient()
     refresh(conn, client, now=moment, backfill_from=date(2026, 1, 10))
@@ -682,3 +684,60 @@ def test_an_explicit_backfill_reads_an_old_unresolved_day(conn: sqlite3.Connecti
     client = FakeClient()
     refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 5))
     assert _requests_for(client, date(2026, 1, 5)) == 1
+
+
+def test_a_source_failure_stop_does_not_blame_the_budget(conn: sqlite3.Connection) -> None:
+    # Three score days fail in a row, so the read stops on the failures. The budget is also
+    # spent by then. The stop came from the source, so no error tells the operator to raise
+    # the budget.
+    start = date(2026, 1, 6)
+    failing = failing_days("2026-01-06", "2026-01-07", "2026-01-08")
+    client = FakeClient(failing)
+
+    def spent_after_three_reads() -> datetime:
+        # The clock passes the budget only once the three failing reads have happened, so the
+        # failure stop comes first and the budget is spent at the end of the run.
+        return NOW + timedelta(hours=2) if len(client.urls) >= 3 else NOW
+
+    report = refresh(
+        conn,
+        client,
+        now=NOW,
+        backfill_from=start,
+        clock=spent_after_three_reads,
+        budget=timedelta(hours=1),
+    )
+    assert report.backfill_complete is False
+    assert any("stopped after 3 failed days" in n for n in report.notes)
+    assert not any("--budget-seconds" in str(e) for e in report.errors)
+
+
+def test_a_spent_clock_at_the_boxscore_step_does_not_blame_a_failed_day_stop(
+    conn: sqlite3.Connection,
+) -> None:
+    # The first three days of the window fail, so the day read stops on failures. The clock is
+    # spent by then, so the boxscore read of a game that lacks its boxscore also sees it spent.
+    # The failed days caused the stop, so no error may blame the budget.
+    bad = f"{BOX_URL}{MAIN_GAME}/boxscore"
+    refresh(
+        conn,
+        FakeClient({bad: SourceError("nhl", bad, "HTTP 503")}),
+        now=NOW,
+        backfill_from=date(2026, 1, 10),
+    )
+    client = FakeClient(failing_days("2026-01-06", "2026-01-07", "2026-01-08"))
+
+    def spent_after_three_reads() -> datetime:
+        return NOW + timedelta(hours=2) if len(client.urls) >= 3 else NOW
+
+    report = refresh(
+        conn,
+        client,
+        now=NOW,
+        backfill_from=date(2026, 1, 6),
+        clock=spent_after_three_reads,
+        budget=timedelta(hours=1),
+    )
+    assert report.backfill_complete is False
+    assert any("stopped after 3 failed days" in n for n in report.notes)
+    assert not any("--budget-seconds" in str(e) for e in report.errors)
