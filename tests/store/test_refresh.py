@@ -682,3 +682,29 @@ def test_an_explicit_backfill_reads_an_old_unresolved_day(conn: sqlite3.Connecti
     client = FakeClient()
     refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 5))
     assert _requests_for(client, date(2026, 1, 5)) == 1
+
+
+def test_a_source_failure_stop_does_not_blame_the_budget(conn: sqlite3.Connection) -> None:
+    # Three score days fail in a row, so the read stops on the failures. The budget is also
+    # spent by then. The stop came from the source, so no error tells the operator to raise
+    # the budget.
+    start = date(2026, 1, 6)
+    failing = failing_days("2026-01-06", "2026-01-07", "2026-01-08")
+    client = FakeClient(failing)
+
+    def spent_after_three_reads() -> datetime:
+        # The clock passes the budget only once the three failing reads have happened, so the
+        # failure stop comes first and the budget is spent at the end of the run.
+        return NOW + timedelta(hours=2) if len(client.urls) >= 3 else NOW
+
+    report = refresh(
+        conn,
+        client,
+        now=NOW,
+        backfill_from=start,
+        clock=spent_after_three_reads,
+        budget=timedelta(hours=1),
+    )
+    assert report.backfill_complete is False
+    assert any("stopped after 3 failed days" in n for n in report.notes)
+    assert not any("--budget-seconds" in str(e) for e in report.errors)

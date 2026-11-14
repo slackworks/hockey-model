@@ -76,6 +76,7 @@ def nhl(run: RefreshRun) -> None:
     cutoff = game_day_of(run.now) - BACKLOG_BEFORE
     complete = True
     stopped = False
+    timed_out = False
     progress = 0
     for start, end in windows(run.backfill_from, last_day):
         days = {start + timedelta(days=n) for n in range((end - start).days + 1)}
@@ -88,10 +89,11 @@ def nhl(run: RefreshRun) -> None:
         if days_read.stopped or boxes.stopped:
             run.notes.append(f"backfill: stopped in the window {start} to {end}")
             stopped = True
+            timed_out = days_read.timed_out or boxes.timed_out
             break
     if not complete:
         run.notes.append("backfill: some days or games are unread; run it again")
-    if stopped and progress == 0 and run.out_of_time():
+    if stopped and progress == 0 and timed_out:
         run.errors.append(_budget_stall_error())
     note_unresolved(run, unresolved)
     run.backfill_complete = complete
