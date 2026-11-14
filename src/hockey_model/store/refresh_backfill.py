@@ -75,7 +75,6 @@ def nhl(run: RefreshRun) -> None:
     unresolved, due = plan_unresolved(run)
     cutoff = game_day_of(run.now) - BACKLOG_BEFORE
     complete = True
-    stopped = False
     timed_out = False
     progress = 0
     for start, end in windows(run.backfill_from, last_day):
@@ -88,14 +87,13 @@ def nhl(run: RefreshRun) -> None:
         progress += days_read.progress + boxes.progress
         if days_read.stopped or boxes.stopped:
             run.notes.append(f"backfill: stopped in the window {start} to {end}")
-            stopped = True
-            # The first read that stopped the window gives the reason. The boxscore read still runs
-            # after a failed day read, and an out-of-time boxscore read must not take the blame.
+            # The first read that stopped the window gives the reason, so a boxscore read that runs
+            # out of time after a failed day read does not take the blame.
             timed_out = days_read.timed_out if days_read.stopped else boxes.timed_out
             break
     if not complete:
         run.notes.append("backfill: some days or games are unread; run it again")
-    if stopped and progress == 0 and timed_out:
+    if progress == 0 and timed_out:
         run.errors.append(_budget_stall_error())
     note_unresolved(run, unresolved)
     run.backfill_complete = complete

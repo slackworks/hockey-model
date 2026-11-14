@@ -154,9 +154,7 @@ class ReadResult(NamedTuple):
     clean: bool  # every unit is read, or is a known gap
     stopped: bool  # the read quit early: three failures in a row, or the time ran out
     progress: int = 0  # older units that this read finished for good: the backlog, not arrivals
-    # The read quit because the time budget ran out. A failure stop leaves this False, so the
-    # caller does not blame the budget for a source that keeps failing.
-    timed_out: bool = False
+    timed_out: bool = False  # set only when the time budget ran out
 
 
 def score_gaps(run: RefreshRun) -> set[date]:
