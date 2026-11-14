@@ -710,3 +710,34 @@ def test_a_source_failure_stop_does_not_blame_the_budget(conn: sqlite3.Connectio
     assert report.backfill_complete is False
     assert any("stopped after 3 failed days" in n for n in report.notes)
     assert not any("--budget-seconds" in str(e) for e in report.errors)
+
+
+def test_a_spent_clock_at_the_boxscore_step_does_not_blame_a_failed_day_stop(
+    conn: sqlite3.Connection,
+) -> None:
+    # The first three days of the window fail, so the day read stops on failures. The clock is
+    # spent by then, so the boxscore read of a game that lacks its boxscore also sees it spent.
+    # The failed days caused the stop, so no error may blame the budget.
+    bad = f"{BOX_URL}{MAIN_GAME}/boxscore"
+    refresh(
+        conn,
+        FakeClient({bad: SourceError("nhl", bad, "HTTP 503")}),
+        now=NOW,
+        backfill_from=date(2026, 1, 10),
+    )
+    client = FakeClient(failing_days("2026-01-06", "2026-01-07", "2026-01-08"))
+
+    def spent_after_three_reads() -> datetime:
+        return NOW + timedelta(hours=2) if len(client.urls) >= 3 else NOW
+
+    report = refresh(
+        conn,
+        client,
+        now=NOW,
+        backfill_from=date(2026, 1, 6),
+        clock=spent_after_three_reads,
+        budget=timedelta(hours=1),
+    )
+    assert report.backfill_complete is False
+    assert any("stopped after 3 failed days" in n for n in report.notes)
+    assert not any("--budget-seconds" in str(e) for e in report.errors)

@@ -89,7 +89,9 @@ def nhl(run: RefreshRun) -> None:
         if days_read.stopped or boxes.stopped:
             run.notes.append(f"backfill: stopped in the window {start} to {end}")
             stopped = True
-            timed_out = days_read.timed_out or boxes.timed_out
+            # The first read that stopped the window gives the reason. The boxscore read still runs
+            # after a failed day read, and an out-of-time boxscore read must not take the blame.
+            timed_out = days_read.timed_out if days_read.stopped else boxes.timed_out
             break
     if not complete:
         run.notes.append("backfill: some days or games are unread; run it again")
