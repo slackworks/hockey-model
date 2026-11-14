@@ -141,9 +141,7 @@ jobs:
             execution=success
           fi
           status="$(scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL")"
-          # The report decides the status from the stats too. Only clean and regression pass, so an
-          # execution_failed status or an empty status fails the job. A regression does not fail the
-          # job here; that decision stays separate.
+          # Only clean and regression pass. A regression does not fail the job here, by design.
           test "$execution" = success
           case "$status" in
             clean | regression) ;;
