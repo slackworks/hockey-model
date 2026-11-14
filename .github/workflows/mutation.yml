@@ -133,6 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           stats=.tmp/mutation/mutants/mutmut-cicd-stats.json
           execution=failure
           if [[ "$SHARD_RESULT" == success && "$MERGE_RESULT" == success \
@@ -140,8 +141,14 @@ jobs:
             execution=success
           fi
           status="$(scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL")"
-          # The report decides the status from the stats too. A report that reads execution_failed
-          # fails the job even when every shard, merge, and export step passed. A regression does not
-          # fail the job here; that decision stays separate.
+          # The report decides the status from the stats too. Only clean and regression pass, so an
+          # execution_failed status or an empty status fails the job. A regression does not fail the
+          # job here; that decision stays separate.
           test "$execution" = success
-          test "$status" != execution_failed
+          case "$status" in
+            clean | regression) ;;
+            *)
+              echo "mutation: unexpected report status '$status'" >&2
+              exit 1
+              ;;
+          esac
