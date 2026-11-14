@@ -80,3 +80,18 @@ A separate scheduled check alerts when a game day has no release, or when its on
 The repository is public, and GitHub-hosted runners on public repositories have no minute charge.
 A trigger that is not due runs one short gate job.
 The numbers for one month are in the pull request that added this design.
+
+## External clock
+
+GitHub's `schedule` trigger ran the 23:44 UTC slot about 50 to 60 minutes late on two days in eight (#216, #222).
+The late run then fell after the puck drops, so most of the day's games were made after their start.
+An external clock now calls `workflow_dispatch` on `daily-report.yml` at each trigger minute, so the slot does not depend on GitHub's queue.
+The `schedule` trigger stays as a fallback.
+The gate already skips a duplicate trigger once the release exists, so a dispatch and a late schedule run do no harm.
+The clock needs a token that may run workflows in this repository, and the owner provisions it.
+The clock runs `gh workflow run daily-report.yml --repo slackworks/hockey-model` at each slot in the cron below.
+The cron minute and hours MUST match `TRIGGER_MINUTE_UTC` and `TRIGGER_HOURS_UTC`.
+
+```text
+44 0,11,15-23 * * *
+```
