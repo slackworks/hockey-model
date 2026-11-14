@@ -475,13 +475,15 @@ def _fresh_moneypuck(conn: sqlite3.Connection, now: datetime, last_season: int) 
     [
         (datetime(2026, 7, 15, tzinfo=UTC), False),
         (datetime(2026, 8, 31, tzinfo=UTC), False),
-        (datetime(2026, 9, 1, tzinfo=UTC), True),
+        # 00:00 UTC on Sept 1 is still Aug 31 in Eastern time, the game day the NHL uses.
+        (datetime(2026, 9, 1, tzinfo=UTC), False),
+        (datetime(2026, 9, 1, 4, tzinfo=UTC), True),
     ],
 )
 def test_the_new_goalie_file_is_read_from_the_shared_season_boundary(
     conn: sqlite3.Connection, moment: datetime, new_season_requested: bool
 ) -> None:
-    """Refresh counts the new season from the same boundary as the cohorts and the fit."""
+    """Refresh counts the new season from the Eastern game day, as the NHL schedule does."""
     _fresh_moneypuck(conn, moment, 2025)
     client = FakeClient()
     refresh(conn, client, now=moment, backfill_from=date(2026, 1, 10))

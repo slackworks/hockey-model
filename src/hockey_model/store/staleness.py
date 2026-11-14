@@ -10,6 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from hockey_model.game_day import game_day_of
 from hockey_model.game_model.seasons import SCORED, season_of, season_start_year
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, goalie_games_url
 from hockey_model.store.source_reads import (
@@ -70,7 +71,8 @@ def _latest_reads(conn: sqlite3.Connection, as_of: datetime) -> dict[tuple[str, 
 
 def _current_moneypuck_urls(as_of: datetime) -> frozenset[str]:
     """Return the MoneyPuck URLs that are expected to be current at ``as_of``."""
-    return frozenset({TEAM_GAMES_URL, goalie_games_url(season_start_year(as_of.date()))})
+    season = season_start_year(game_day_of(as_of))
+    return frozenset({TEAM_GAMES_URL, goalie_games_url(season)})
 
 
 def _age_limit(source: str, url: str, as_of: datetime) -> timedelta | None:

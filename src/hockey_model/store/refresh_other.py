@@ -99,7 +99,7 @@ def _note_gaps(run: RefreshRun) -> frozenset[str]:
 def moneypuck(run: RefreshRun) -> None:
     """Read the team file and each goalie file that is missing or, for the team file and the
     current season, older than a week. A finished season is read once."""
-    current = season_start_year(run.now.date())
+    current = season_start_year(game_day_of(run.now))
     tried = 0
     gaps = _note_gaps(run)
     if _stale(run, TEAM_GAMES_URL) and TEAM_GAMES_URL not in gaps:
