@@ -98,5 +98,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Set a goalie differential to the neutral value when either starter has no rate, and mark the feature as imputed for that team. The other starter's rate no longer passes through as a measured difference. [fix:model]
 - Refuse a fit, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. A backtest vetoes such a candidate instead of stopping. The `imputation` list in the fit and backtest JSON gives the count and share for each selected feature. [fix:model]
 - Skip a scheduled report run that finds no prep marker more than 180 minutes before the first puck drop, with a notice and exit 0, instead of failing red. The same missing marker inside that window still fails. [fix:report]
+- Fail the mutation job when the report marks the run `execution_failed`. The gate read its own variable, so a bad stats file left the job green. [fix:ci]
+- Document an external clock that starts the daily report at each publish slot, with the GitHub schedule kept as a fallback. GitHub's schedule ran the 23:44 UTC slot about an hour late on two days. [docs:report]
+- Stop a backfill from blaming `--budget-seconds` when a source failure stopped it before the budget ran out. [fix:report]
+- Read the MoneyPuck season and the staleness check from the Eastern game day, so they agree with the game cutoff near the season boundary. The fit default stays in UTC. [fix:store]
 
 [Unreleased]: https://github.com/slackworks/hockey-model/commits/main
