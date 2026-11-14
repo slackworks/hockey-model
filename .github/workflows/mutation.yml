@@ -139,6 +139,9 @@ jobs:
             && "$EXPORT_RESULT" == success && -f "$stats" ]]; then
             execution=success
           fi
-          scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL"
-          # The report is filed. A failed execution still fails the job.
+          status="$(scripts/report-mutation.sh --stats "$stats" --execution "$execution" --run-url "$RUN_URL")"
+          # The report decides the status from the stats too. A report that reads execution_failed
+          # fails the job even when every shard, merge, and export step passed. A regression does not
+          # fail the job here; that decision stays separate.
           test "$execution" = success
+          test "$status" != execution_failed
