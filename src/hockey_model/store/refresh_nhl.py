@@ -114,7 +114,11 @@ def _unresolved_games(run: RefreshRun) -> list[tuple[int, datetime]]:
 
 
 def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> list[date]:
-    """Return the score days to read again for unresolved games, oldest first and bounded."""
+    """Return the score days to read again for unresolved games, oldest first and bounded.
+
+    A day left out by the bound is named in the report, so a backlog of unresolved days is
+    visible rather than silent. The next refresh reads the rest.
+    """
     due: list[date] = []
     for _, start in games:
         day = game_day_of(start)
@@ -128,6 +132,11 @@ def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> 
         last = newest_read(run.conn, SCORES, score_day_url(day))
         if last is None or run.now - last >= wait:
             due.append(day)
+    if len(due) > MAX_UNRESOLVED_DAYS:
+        run.notes.append(
+            f"{SCORES}: {len(due) - MAX_UNRESOLVED_DAYS} unresolved day(s) wait for the next "
+            f"refresh; this run reads at most {MAX_UNRESOLVED_DAYS}"
+        )
     return due[:MAX_UNRESOLVED_DAYS]
 
 
