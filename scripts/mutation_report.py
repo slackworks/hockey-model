@@ -16,13 +16,11 @@ Replace it when #31 publishes a machine-readable baseline.
 
 Subcommands:
 
-- ``status --stats FILE --execution success|failure [--out FILE --run-url URL]``:
-    print one status word. With ``--out``, also write the issue body to FILE.
-- ``count``: read the same JSON on stdin and print how many issues it holds. A caller
-    compares that count with the ``gh --limit`` cap.
-- ``find``: read ``gh issue list --json number,body,author`` JSON on stdin. Print the
-    number of the open report, or print nothing when none exists. Only issues whose
-    author is a bot count, so a user cannot hide a report by copying the marker.
+- ``status``: read the stats and the job results, print one status word. With ``--out``,
+    also write the issue body to that file.
+- ``find --cap N``: read ``gh issue list --json number,body,author`` JSON on stdin. Print the
+    number of the open report, or nothing when none exists. Only a bot-authored issue counts,
+    so a user cannot hide a report by copying the marker. Raise when the list reaches N.
 - ``title``: print the title for a new report.
 
 Diagnostics go to stderr. Exit 0 for a valid call. Exit 1 for invalid input from gh.
@@ -35,6 +33,7 @@ Usage: uv run python3 scripts/mutation_report.py status --stats mutants/mutmut-c
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +45,10 @@ COUNT_KEYS = ("killed", "survived", "timeout", "no_tests", "total")
 STATUS_CLEAN = "clean"
 STATUS_REGRESSION = "regression"
 STATUS_FAILED = "execution_failed"
+# The job results that a run needs. Each must be success for the run to count as a run.
+RESULT_KEYS = ("shard", "merge", "export", "download")
+# ``unknown`` is the value the shell passes for a job that did not report a result.
+RESULT_VALUES = ("success", "failure", "cancelled", "skipped", "unknown")
 
 
 class MalformedStats(ValueError):
@@ -91,6 +94,19 @@ def read_stats(path: Path) -> Stats:
     return Stats(counts=counts, interrupted=data.get("check_was_interrupted_by_user") is True)
 
 
+def unfinished(counts: dict[str, int]) -> int:
+    """Return how many mutants the outcome counts do not account for."""
+    finished = counts["killed"] + counts["survived"] + counts["timeout"] + counts["no_tests"]
+    return counts["total"] - finished
+
+
+def execution_of(results: dict[str, str], stats: Stats | None) -> str:
+    """Return ``success`` only when every job result is success and the stats exist."""
+    if any(results[key] != "success" for key in RESULT_KEYS):
+        return "failure"
+    return "success" if stats is not None else "failure"
+
+
 def decide(stats: Stats | None, execution: str, baseline: int) -> str:
     """Return the status for one run.
 
@@ -103,13 +119,46 @@ def decide(stats: Stats | None, execution: str, baseline: int) -> str:
     """
     if execution != "success" or stats is None or stats.interrupted:
         return STATUS_FAILED
-    c = stats.counts
-    finished = c["killed"] + c["survived"] + c["timeout"] + c["no_tests"]
-    if c["total"] != finished:
+    if unfinished(stats.counts) != 0:
         return STATUS_FAILED
     if stats.counts["survived"] > baseline:
         return STATUS_REGRESSION
     return STATUS_CLEAN
+
+
+def stats_causes(stats: Stats | None) -> list[str]:
+    """Return the causes that the stats file states about the run."""
+    if stats is None:
+        return ["the run did not write the stats file"]
+    found: list[str] = []
+    if stats.interrupted:
+        found.append("the run was interrupted")
+    short = unfinished(stats.counts)
+    if short > 0:
+        found.append(f"{short} mutant(s) did not finish")
+    elif short < 0:
+        found.append(f"the outcome counts exceed the total by {-short}")
+    return found
+
+
+def causes(
+    stats: Stats | None, status: str, given: Sequence[str], results: dict[str, str]
+) -> list[str]:
+    """Return every reason the run does not count as clean, most specific first.
+
+    A caller reason and a job result can each name a cause that the counts do not show, so a
+    failed run never reads as a clean table. A clean or regressed run returns no cause.
+    """
+    if status == STATUS_CLEAN:
+        return []
+    found = stats_causes(stats)
+    for key in RESULT_KEYS:
+        if results[key] != "success":
+            found.append(f"the {key} job did not finish ({results[key]})")
+    found.extend(given)
+    if status == STATUS_FAILED and not found:
+        found.append("the run did not finish")
+    return found
 
 
 def build_body(
@@ -117,20 +166,16 @@ def build_body(
     stats: Stats | None,
     baseline: int,
     run_url: str,
-    reason: str | None = None,
+    reasons: Sequence[str] = (),
 ) -> str:
     """Return the Markdown body for the tracking issue.
 
-    The body starts with the marker, so a later run finds this issue again. When
-    there are no valid stats, the body names the reason. A reason also appears next to
-    valid counts, because it can name a cause the counts do not show, such as a download
-    that failed after the counts were written.
+    The body starts with the marker, so a later run finds this issue again. When there are
+    valid counts they are a table, and any cause sits under the table, so a partial run never
+    shows as a clean one.
     """
     lines = [MARKER, "", f"Status: `{status}`", f"Run: {run_url}", ""]
-    if stats is None:
-        cause = reason or "the run did not write the stats file"
-        lines.append(f"The run did not produce valid stats: {cause}.")
-    else:
+    if stats is not None:
         counts = stats.counts
         difference = counts["survived"] - baseline
         lines += [
@@ -139,8 +184,9 @@ def build_body(
             f"| {counts['killed']} | {counts['survived']} | {counts['timeout']} | "
             f"{counts['total']} | {baseline} | {difference:+d} |",
         ]
-        if reason is not None:
-            lines += ["", f"The run also reported this cause: {reason}."]
+    if reasons:
+        lines += ["", "The run reported these causes:", ""]
+        lines += [f"- {reason}" for reason in reasons]
     return "\n".join(lines) + "\n"
 
 
@@ -149,27 +195,22 @@ def _is_bot(author: object) -> bool:
     return isinstance(author, dict) and author.get("is_bot") is True
 
 
-def count_open(issues_json: str) -> int:
-    """Return how many issues the gh list holds.
-
-    Raise ValueError when the input is not a JSON list. A caller compares the count with the
-    ``gh --limit`` cap, because an entry past the cap is missing from the list.
-    """
-    issues = json.loads(issues_json)
-    if not isinstance(issues, list):
-        raise ValueError("issue list must be a JSON array")
-    return len(issues)
-
-
-def find_open_report(issues_json: str) -> int | None:
+def find_open_report(issues_json: str, cap: int | None = None) -> int | None:
     """Return the number of the first open bot-authored issue that carries the marker.
 
     Raise ValueError when the input is not a JSON list of issue objects, or when an
-    entry has a number that is not an integer, or a body that is not text.
+    entry has a number that is not an integer, or a body that is not text. When ``cap`` is
+    given and the list holds that many or more, raise: an entry past the gh limit is missing
+    from the list, so a marked report could be invisible and a second one would open.
     """
     issues = json.loads(issues_json)
     if not isinstance(issues, list):
         raise ValueError("issue list must be a JSON array")
+    if cap is not None and len(issues) >= cap:
+        raise ValueError(
+            f"the list holds {len(issues)} open issues, which reaches the {cap} limit; "
+            "an open report past the limit cannot be found. Close some issues, then rerun"
+        )
     for issue in issues:
         number = issue.get("number") if isinstance(issue, dict) else None
         if not isinstance(number, int) or isinstance(number, bool):
@@ -191,33 +232,19 @@ def _load_stats(path: Path) -> tuple[Stats | None, str | None]:
         return None, str(error)
 
 
-def _find() -> int:
+def _find(cap: int | None) -> int:
     """Print the open report number from the gh JSON on stdin. Return the exit code."""
     try:
-        number = find_open_report(sys.stdin.read())
+        number = find_open_report(sys.stdin.read(), cap)
     except ValueError as error:
         print(
-            f"mutation-report: gh issue list output is not valid: {error}. "
-            "Run gh auth status, then rerun the report step.",
+            f"mutation-report: gh issue list output cannot be read: {error}. "
+            "Check the gh version, then rerun the report step.",
             file=sys.stderr,
         )
         return 1
     if number is not None:
         print(number)
-    return 0
-
-
-def _count() -> int:
-    """Print how many issues the gh JSON on stdin holds. Return the exit code."""
-    try:
-        print(count_open(sys.stdin.read()))
-    except ValueError as error:
-        print(
-            f"mutation-report: gh issue list output is not valid: {error}. "
-            "Run gh auth status, then rerun the report step.",
-            file=sys.stderr,
-        )
-        return 1
     return 0
 
 
@@ -227,14 +254,50 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     status = sub.add_parser("status")
     status.add_argument("--stats", type=Path, required=True)
-    status.add_argument("--execution", choices=("success", "failure"), required=True)
+    status.add_argument("--execution", choices=("success", "failure"), default=None)
+    for key in RESULT_KEYS:
+        status.add_argument(f"--{key}-result", choices=RESULT_VALUES, default=None)
     status.add_argument("--out", type=Path)
     status.add_argument("--run-url")
-    status.add_argument("--reason", default=None, help="why the run has no valid stats")
-    sub.add_parser("count")
-    sub.add_parser("find")
+    status.add_argument(
+        "--reason",
+        action="append",
+        default=[],
+        help="a cause the counts do not show; repeat it for each cause",
+    )
+    find = sub.add_parser("find")
+    find.add_argument("--cap", type=int, default=None, help="the gh list limit")
     sub.add_parser("title")
     return parser
+
+
+def _status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Print the status word, and write the body when ``--out`` names a file."""
+    results = {key: getattr(args, f"{key}_result") for key in RESULT_KEYS}
+    given_results = {key: value for key, value in results.items() if value is not None}
+    if given_results and len(given_results) != len(RESULT_KEYS):
+        parser.error("give every job result flag, or none of them")
+    stats, read_reason = _load_stats(args.stats)
+    if given_results:
+        execution = execution_of(given_results, stats)
+    elif args.execution is not None:
+        execution = args.execution
+    else:
+        parser.error("give --execution, or the four job result flags")
+    status = decide(stats, execution, PROVISIONAL_BASELINE)
+    # A malformed stats file names itself, so the body says what stopped the run.
+    given = list(args.reason) + ([read_reason] if read_reason is not None else [])
+    if args.out is not None:
+        body = build_body(
+            status,
+            stats,
+            PROVISIONAL_BASELINE,
+            args.run_url,
+            causes(stats, status, given, given_results or {k: "success" for k in RESULT_KEYS}),
+        )
+        args.out.write_text(body, encoding="utf-8")
+    print(status)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,22 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         print(TITLE)
         return 0
     if args.command == "find":
-        return _find()
-    if args.command == "count":
-        return _count()
+        return _find(args.cap)
     if args.out is not None and args.run_url is None:
         parser.error("--out needs --run-url for the run link in the body")
-    stats, reason = _load_stats(args.stats)
-    # A reason from the caller is more specific, and it names the cause when the stats file is
-    # absent for the same reason. A failed download is the example.
-    if args.reason is not None:
-        reason = args.reason
-    status = decide(stats, args.execution, PROVISIONAL_BASELINE)
-    if args.out is not None:
-        body = build_body(status, stats, PROVISIONAL_BASELINE, args.run_url, reason)
-        args.out.write_text(body, encoding="utf-8")
-    print(status)
-    return 0
+    return _status(args, parser)
 
 
 if __name__ == "__main__":

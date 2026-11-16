@@ -141,10 +141,46 @@ def test_build_body_starts_with_the_marker_and_shows_the_difference() -> None:
 
 def test_build_body_names_the_reason_when_there_are_no_stats() -> None:
     body = report.build_body(
-        report.STATUS_FAILED, None, 524, "https://example.test/run/2", "stats file is missing"
+        report.STATUS_FAILED, None, 524, "https://example.test/run/2", ["stats file is missing"]
     )
     assert report.MARKER in body
     assert "stats file is missing" in body
+
+
+@given(
+    counts=st.fixed_dictionaries(
+        {
+            "killed": st.integers(min_value=0, max_value=5000),
+            "survived": st.integers(min_value=0, max_value=5000),
+            "timeout": st.integers(min_value=0, max_value=500),
+            "no_tests": st.integers(min_value=0, max_value=500),
+        }
+    ),
+    baseline=st.integers(min_value=0, max_value=5000),
+)
+def test_build_body_renders_every_count_and_the_difference(
+    counts: dict[str, int], baseline: int
+) -> None:
+    # The difference cell is the one derived value. A negative, zero, or large result all pass.
+    total = sum(counts.values())
+    stats = report.Stats(counts={**counts, "total": total}, interrupted=False)
+    body = report.build_body(report.STATUS_CLEAN, stats, baseline, "https://example.test/run/5")
+    difference = counts["survived"] - baseline
+    row = (
+        f"| {counts['killed']} | {counts['survived']} | {counts['timeout']} | "
+        f"{total} | {baseline} | {difference:+d} |"
+    )
+    assert row in body
+
+
+def test_build_body_lists_each_cause_under_the_counts() -> None:
+    # A partial run shows its counts and its causes, so it never reads as a clean table.
+    stats = report.Stats(counts=_counts(), interrupted=False)
+    body = report.build_body(
+        report.STATUS_FAILED, stats, 524, "https://example.test/run/6", ["a shard did not finish"]
+    )
+    assert "| 1898 | 500 | 2 | 2400 | 524 | -24 |" in body
+    assert "a shard did not finish" in body
 
 
 def test_status_writes_the_body_and_prints_the_status(
@@ -192,6 +228,29 @@ def test_find_open_report_returns_the_marked_bot_issue() -> None:
     assert report.find_open_report(json.dumps(issues)) == 9
 
 
+def test_find_open_report_raises_at_the_cap() -> None:
+    # At the cap an open report can be missing from the list, so a second one would open.
+    issues = [{"number": n, "body": None, "author": BOT} for n in range(1, 11)]
+    with pytest.raises(ValueError, match="reaches the 10 limit"):
+        report.find_open_report(json.dumps(issues), cap=10)
+
+
+def test_find_open_report_accepts_a_list_one_below_the_cap() -> None:
+    issues = [{"number": n, "body": None, "author": BOT} for n in range(1, 10)]
+    assert report.find_open_report(json.dumps(issues), cap=10) is None
+
+
+@given(size=st.integers(min_value=0, max_value=50), cap=st.integers(min_value=1, max_value=50))
+def test_find_open_report_accepts_a_list_smaller_than_the_cap(size: int, cap: int) -> None:
+    # Every list under the cap is read. The only raise is at or above the cap.
+    issues = [{"number": n, "body": None, "author": BOT} for n in range(1, size + 1)]
+    if size >= cap:
+        with pytest.raises(ValueError, match="limit"):
+            report.find_open_report(json.dumps(issues), cap=cap)
+    else:
+        assert report.find_open_report(json.dumps(issues), cap=cap) is None
+
+
 def test_find_open_report_ignores_a_marker_copied_by_a_person() -> None:
     issues = [{"number": 9, "body": report.MARKER, "author": PERSON}]
     assert report.find_open_report(json.dumps(issues)) is None
@@ -228,29 +287,6 @@ def test_find_open_report_returns_the_number_it_was_given(number: int) -> None:
     assert report.find_open_report(json.dumps(issues)) == number
 
 
-def test_count_open_returns_the_length_of_the_list() -> None:
-    issues = [{"number": 7, "body": None, "author": BOT}] * 3
-    assert report.count_open(json.dumps(issues)) == 3
-
-
-def test_count_open_returns_zero_for_an_empty_list() -> None:
-    assert report.count_open("[]") == 0
-
-
-@pytest.mark.parametrize("payload", ['{"number": 1}', "not json", '"text"'])
-def test_count_open_rejects_a_list_that_is_not_a_json_array(payload: str) -> None:
-    # A JSON object, a bare string, and text that is not JSON all raise. A JSONDecodeError is
-    # a ValueError, so one test covers both causes.
-    with pytest.raises(ValueError):
-        report.count_open(payload)
-
-
-@given(size=st.integers(min_value=0, max_value=50))
-def test_count_open_matches_the_list_size(size: int) -> None:
-    issues = [{"number": n} for n in range(1, size + 1)]
-    assert report.count_open(json.dumps(issues)) == size
-
-
 def test_status_names_the_reason_from_the_options(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -273,7 +309,137 @@ def test_status_names_the_reason_from_the_options(
     )
     assert code == 0
     assert capsys.readouterr().out.strip() == report.STATUS_FAILED
-    assert "the artifact download failed" in out.read_text(encoding="utf-8")
+    body = out.read_text(encoding="utf-8")
+    assert "the artifact download failed" in body
+    assert "the run did not write the stats file" in body
+
+
+@pytest.mark.parametrize(
+    ("results", "expected"),
+    [
+        (
+            {"shard": "success", "merge": "success", "export": "success", "download": "success"},
+            "success",
+        ),
+        (
+            {"shard": "failure", "merge": "success", "export": "success", "download": "success"},
+            "failure",
+        ),
+        (
+            {"shard": "success", "merge": "cancelled", "export": "success", "download": "success"},
+            "failure",
+        ),
+        (
+            {"shard": "success", "merge": "success", "export": "skipped", "download": "success"},
+            "failure",
+        ),
+        (
+            {"shard": "success", "merge": "success", "export": "success", "download": "failure"},
+            "failure",
+        ),
+    ],
+)
+def test_execution_requires_every_job_result(results: dict[str, str], expected: str) -> None:
+    stats = report.Stats(counts=_counts(), interrupted=False)
+    assert report.execution_of(results, stats) == expected
+
+
+def test_execution_fails_without_stats_even_when_every_job_finished() -> None:
+    results = dict.fromkeys(report.RESULT_KEYS, "success")
+    assert report.execution_of(results, None) == "failure"
+
+
+def test_a_failed_job_names_itself_under_the_counts(tmp_path: Path) -> None:
+    # The counts are valid, and the shard failure still appears, so a partial run is not clean.
+    out = tmp_path / "body.md"
+    code = report.main(
+        [
+            "status",
+            "--stats",
+            str(_write_stats(tmp_path / "stats.json")),
+            "--out",
+            str(out),
+            "--run-url",
+            "https://example.test/run/7",
+            "--shard-result",
+            "failure",
+            "--merge-result",
+            "success",
+            "--export-result",
+            "success",
+            "--download-result",
+            "success",
+        ]
+    )
+    assert code == 0
+    body = out.read_text(encoding="utf-8")
+    assert report.STATUS_FAILED in body
+    assert "the shard job did not finish (failure)" in body
+
+
+def test_an_interrupted_run_names_itself(tmp_path: Path) -> None:
+    out = tmp_path / "body.md"
+    stats = _write_stats(tmp_path / "stats.json", check_was_interrupted_by_user=True)
+    code = report.main(
+        [
+            "status",
+            "--stats",
+            str(stats),
+            "--execution",
+            "success",
+            "--out",
+            str(out),
+            "--run-url",
+            "https://example.test/run/8",
+        ]
+    )
+    assert code == 0
+    assert "the run was interrupted" in out.read_text(encoding="utf-8")
+
+
+def test_a_short_count_names_the_mutants_that_did_not_finish(tmp_path: Path) -> None:
+    out = tmp_path / "body.md"
+    stats = _write_stats(tmp_path / "stats.json", total=2500)
+    code = report.main(
+        [
+            "status",
+            "--stats",
+            str(stats),
+            "--execution",
+            "success",
+            "--out",
+            str(out),
+            "--run-url",
+            "https://example.test/run/9",
+        ]
+    )
+    assert code == 0
+    assert "100 mutant(s) did not finish" in out.read_text(encoding="utf-8")
+
+
+def test_a_clean_run_reports_no_cause() -> None:
+    stats = report.Stats(counts=_counts(), interrupted=False)
+    results = dict.fromkeys(report.RESULT_KEYS, "success")
+    assert report.causes(stats, report.STATUS_CLEAN, ["a caller reason"], results) == []
+
+
+def test_status_needs_execution_or_every_job_result(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as caught:
+        report.main(["status", "--stats", str(_write_stats(tmp_path / "stats.json"))])
+    assert caught.value.code == 2
+
+
+def test_status_refuses_a_partial_set_of_job_results(tmp_path: Path) -> None:
+    argv = [
+        "status",
+        "--stats",
+        str(_write_stats(tmp_path / "stats.json")),
+        "--shard-result",
+        "success",
+    ]
+    with pytest.raises(SystemExit) as caught:
+        report.main(argv)
+    assert caught.value.code == 2
 
 
 @pytest.mark.parametrize("delta", [1, 3, 40, -1])

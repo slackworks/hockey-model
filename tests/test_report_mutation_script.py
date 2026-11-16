@@ -9,12 +9,22 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from report_script_support import REAL_UV
+from report_script_support import REAL_UV, _calls
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "report-mutation.sh"
 URL = "https://example.test/run/9"
 STATS = {"killed": 400, "survived": 10, "timeout": 0, "no_tests": 0, "total": 410}
+GOOD_RESULTS = [
+    "--shard-result",
+    "success",
+    "--merge-result",
+    "success",
+    "--export-result",
+    "success",
+    "--download-result",
+    "success",
+]
 
 # The mutation run copies src and tests only, so the script is not there to test.
 if "mutants" in Path(__file__).resolve().parts:
@@ -45,28 +55,20 @@ def _run(
     )
 
 
-def _calls(tmp_path: Path) -> list[str]:
-    log = tmp_path / "calls.log"
-    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-
-
-def _stats(tmp_path: Path) -> Path:
+def _stats(tmp_path: Path, **changes: int) -> Path:
     path = tmp_path / "stats.json"
-    path.write_text(json.dumps(STATS), encoding="utf-8")
+    path.write_text(json.dumps({**STATS, **changes}), encoding="utf-8")
     return path
+
+
+def _body() -> str:
+    return (ROOT / ".tmp" / "mutation-report.md").read_text(encoding="utf-8")
 
 
 def test_without_file_issue_the_script_makes_no_gh_call(fakes: Path, tmp_path: Path) -> None:
     # A run on another ref still judges its own stats, and writes no issue.
     result = _run(
-        fakes,
-        tmp_path,
-        "--stats",
-        str(_stats(tmp_path)),
-        "--execution",
-        "success",
-        "--run-url",
-        URL,
+        fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *GOOD_RESULTS
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean"
@@ -77,32 +79,69 @@ def test_without_file_issue_the_script_makes_no_gh_call(fakes: Path, tmp_path: P
 
 
 def test_a_bad_stats_file_fails_a_run_that_files_no_issue(fakes: Path, tmp_path: Path) -> None:
-    # A manual run on a branch must not stay green on an interrupted stats file.
+    # A manual run on a branch must not stay green on a missing stats file.
     result = _run(
-        fakes,
-        tmp_path,
-        "--stats",
-        str(tmp_path / "absent.json"),
-        "--execution",
-        "success",
-        "--run-url",
-        URL,
+        fakes, tmp_path, "--stats", str(tmp_path / "absent.json"), "--run-url", URL, *GOOD_RESULTS
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "execution_failed"
 
 
+def test_a_failed_shard_fails_the_run(fakes: Path, tmp_path: Path) -> None:
+    results = list(GOOD_RESULTS)
+    results[1] = "failure"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "execution_failed"
+    assert "the shard job did not finish (failure)" in _body()
+
+
+def test_a_skipped_download_is_a_cause(fakes: Path, tmp_path: Path) -> None:
+    # A download that never ran is not a download that worked.
+    results = list(GOOD_RESULTS)
+    results[7] = "skipped"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 0, result.stderr
+    assert "the download job did not finish (skipped)" in _body()
+
+
+def test_an_unknown_download_outcome_is_a_cause(fakes: Path, tmp_path: Path) -> None:
+    # An unresolved workflow expression arrives as an empty string, which the script names.
+    results = list(GOOD_RESULTS)
+    results[7] = "unknown"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 0, result.stderr
+    assert "the download job did not finish (unknown)" in _body()
+
+
+def test_the_script_rejects_a_bad_result_value(fakes: Path, tmp_path: Path) -> None:
+    results = list(GOOD_RESULTS)
+    results[1] = "failur"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 2
+    assert "must be one of" in result.stderr
+
+
+def test_the_script_rejects_a_bad_execution_value(fakes: Path, tmp_path: Path) -> None:
+    result = _run(
+        fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, "--execution", "failur"
+    )
+    assert result.returncode == 2
+    assert "success or failure" in result.stderr
+
+
 def test_file_issue_creates_the_report_when_none_is_open(fakes: Path, tmp_path: Path) -> None:
+    results = list(GOOD_RESULTS)
+    results[1] = "failure"
     result = _run(
         fakes,
         tmp_path,
         "--stats",
         str(_stats(tmp_path)),
-        "--execution",
-        "failure",
         "--run-url",
         URL,
         "--file-issue",
+        *results,
     )
     assert result.returncode == 0, result.stderr
     assert any(call.startswith("gh issue create") for call in _calls(tmp_path))
@@ -110,57 +149,64 @@ def test_file_issue_creates_the_report_when_none_is_open(fakes: Path, tmp_path: 
 
 def test_a_failed_download_names_itself_in_the_report(fakes: Path, tmp_path: Path) -> None:
     # A failed download and a shard that wrote no stats file must not read the same.
+    results = list(GOOD_RESULTS)
+    results[7] = "failure"
     result = _run(
         fakes,
         tmp_path,
         "--stats",
         str(_stats(tmp_path)),
-        "--execution",
-        "success",
         "--run-url",
         URL,
-        "--download-outcome",
-        "failure",
         "--file-issue",
+        *results,
     )
     assert result.returncode == 0, result.stderr
-    body = (ROOT / ".tmp" / "mutation-report.md").read_text(encoding="utf-8")
-    assert "the artifact download failed" in body
+    assert "the download job did not finish (failure)" in _body()
 
 
 def test_the_issue_search_fails_at_the_list_cap(fakes: Path, tmp_path: Path) -> None:
     # At the cap, an open report can be missing from the list, so a second one would open.
     issues = [{"number": n, "body": None, "author": {"is_bot": True}} for n in range(1000)]
+    results = list(GOOD_RESULTS)
+    results[1] = "failure"
     result = _run(
         fakes,
         tmp_path,
         "--stats",
         str(_stats(tmp_path)),
-        "--execution",
-        "failure",
         "--run-url",
         URL,
         "--file-issue",
+        *results,
         issues=issues,
     )
     assert result.returncode == 1
-    assert "cap" in result.stderr
+    assert "limit" in result.stderr
     assert not any(call.startswith("gh issue create") for call in _calls(tmp_path))
 
 
 def test_one_issue_below_the_cap_still_files(fakes: Path, tmp_path: Path) -> None:
     issues = [{"number": n, "body": None, "author": {"is_bot": True}} for n in range(999)]
+    results = list(GOOD_RESULTS)
+    results[1] = "failure"
     result = _run(
         fakes,
         tmp_path,
         "--stats",
         str(_stats(tmp_path)),
-        "--execution",
-        "failure",
         "--run-url",
         URL,
         "--file-issue",
+        *results,
         issues=issues,
     )
     assert result.returncode == 0, result.stderr
     assert any(call.startswith("gh issue create") for call in _calls(tmp_path))
+
+
+def test_help_prints_the_usage_without_the_set_line(fakes: Path, tmp_path: Path) -> None:
+    result = _run(fakes, tmp_path, "--help")
+    assert result.returncode == 0, result.stderr
+    assert "Usage: scripts/report-mutation.sh" in result.stdout
+    assert "set -euo pipefail" not in result.stdout
