@@ -157,6 +157,12 @@ class ReadResult(NamedTuple):
     timed_out: bool = False  # set only when the time budget ran out
 
 
+def _timed_out(run: RefreshRun, progress: int) -> ReadResult:
+    """Return the result of a read that the time budget stopped, and mark the run."""
+    run.timed_out = True
+    return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
+
+
 def score_gaps(run: RefreshRun) -> set[date]:
     """Return the score days that failed in every recent read, and note them in the report."""
     skipped = sorted(_day_of(url) for url in run.skipped(SCORES))
@@ -199,7 +205,7 @@ def read_days(
             continue
         if run.out_of_time():
             run.notes.append(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
-            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
+            return _timed_out(run, progress)
 
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
@@ -309,7 +315,7 @@ def read_boxscores(
         if run.out_of_time():
             left = len(waiting) - index
             run.notes.append(f"{BOXSCORES}: stopped, because the time ran out; {left} not tried")
-            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
+            return _timed_out(run, progress)
         url = boxscore_url(game_id)
         if failed_since(run.conn, BOXSCORES, url, run.now - RETRY_FAILED_AFTER):
             skipped += 1

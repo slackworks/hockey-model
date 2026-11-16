@@ -29,6 +29,9 @@ class RefreshReport:
     credits: tuple[str, ...]
     # True when a backfill read every window, False when it stopped early, None without one.
     backfill_complete: bool | None = None
+    # True when the time budget stopped a step. It says why the backfill is not complete, so a
+    # caller does not blame the budget for a source failure that stopped the run first.
+    timed_out: bool = False
 
 
 @dataclass
@@ -51,6 +54,9 @@ class RefreshRun:
     # Read a unit again that earlier reads left as a known gap. One good read clears the gap.
     retry_skipped: bool = False
     credits: list[str] = field(default_factory=list)
+    # True once a step stopped because the time budget ran out. It is the only reason that
+    # makes a stopped backfill a budget stall, so a source failure is never blamed on the budget.
+    timed_out: bool = False
     # The boxscores this refresh already read, so one game costs one request per refresh.
     boxscores_read: set[int] = field(default_factory=set)
 
@@ -93,4 +99,5 @@ class RefreshRun:
             tuple(self.notes),
             tuple(self.credits),
             self.backfill_complete,
+            self.timed_out,
         )
