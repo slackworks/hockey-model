@@ -78,6 +78,21 @@ def test_without_file_issue_the_script_makes_no_gh_call(fakes: Path, tmp_path: P
     assert not any("mutation_report.py title" in call for call in _calls(tmp_path))
 
 
+def test_a_run_without_the_flag_that_files_no_issue_says_so(fakes: Path, tmp_path: Path) -> None:
+    # The flag is opt-in, so a caller that forgets it must not read as a pass.
+    result = _run(
+        fakes, tmp_path, "--stats", str(tmp_path / "absent.json"), "--run-url", URL, *GOOD_RESULTS
+    )
+    assert "no issue is filed without --file-issue" in result.stderr
+
+
+def test_a_clean_run_without_the_flag_says_nothing_extra(fakes: Path, tmp_path: Path) -> None:
+    result = _run(
+        fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *GOOD_RESULTS
+    )
+    assert "no issue is filed" not in result.stderr
+
+
 def test_a_bad_stats_file_fails_a_run_that_files_no_issue(fakes: Path, tmp_path: Path) -> None:
     # A manual run on a branch must not stay green on a missing stats file.
     result = _run(

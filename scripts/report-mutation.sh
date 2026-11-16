@@ -13,8 +13,9 @@
 # Each --*-result names the outcome of one job, or unknown when it did not run. Each
 # --reason names one cause that the counts do not show. Both reach the issue body, so a
 # partial run never reads as a clean one.
-# --file-issue makes the issue calls. Without it the script only prints the status, so a
-# run on any other ref still judges its own stats and fails on a bad one.
+# --file-issue makes the issue calls. Without it the script prints the status, so a run on
+# any other ref still judges its own stats. A status that is not clean then also says on
+# stderr that no issue is filed.
 #
 # Stdout: the status word (clean, regression, or execution_failed).
 # Stderr: diagnostics. Exit 0 when the status is judged, and with --file-issue, the report
@@ -118,6 +119,10 @@ for reason in "${REASONS[@]}"; do args+=(--reason "$reason"); done
 status="$(uv run python3 "$HELPER" "${args[@]}")"
 
 if ((FILE_ISSUE == 0)); then
+  # A non-clean run that files nothing must say so, or a missing flag reads as a pass.
+  if [[ "$status" != "clean" ]]; then
+    echo "report-mutation: status $status; no issue is filed without --file-issue" >&2
+  fi
   echo "$status"
   exit 0
 fi
