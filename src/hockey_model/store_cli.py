@@ -126,8 +126,9 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
     features = parse_features(args.features)
     through = args.through_season
     if through is None:
-        # The UTC date, not the Eastern game day. The fit scores whole seasons, so a four-hour
-        # difference at the boundary chooses the last completed season either way (#238).
+        # The UTC date, not the Eastern game day. The two differ only in the four hours after
+        # 00:00 UTC on September 1, and no game of the new season is stored then, so the fit
+        # data is the same. The recorded through-season differs there; #238 decides the date.
         through = season_of(datetime.now(UTC).date())
     conn = connect(db_path_from_env(os.environ))
     try:
