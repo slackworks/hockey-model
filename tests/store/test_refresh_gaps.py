@@ -174,6 +174,9 @@ def test_the_first_file_of_a_run_is_always_tried(conn: sqlite3.Connection) -> No
     run = RefreshRun(conn, FakeClient(), NOW, deadline=NOW - timedelta(minutes=1))
     assert _stop_for_time(run, "the goalie file of season 2025", tried=0) is False
     assert run.timed_out is False
+
+
+def test_a_budget_that_lasts_leaves_moneypuck_alone(conn: sqlite3.Connection) -> None:
     client = FakeClient()
     report = refresh(
         conn,
