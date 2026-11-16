@@ -101,6 +101,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fail the mutation job when the report marks the run `execution_failed`. The gate read its own variable, so a bad stats file left the job green. [fix:ci]
 - Document an external clock that will start the daily report at each publish slot, with the GitHub schedule kept as a fallback. GitHub's schedule ran the 23:44 UTC slot about an hour late on two days. The clock runs only after the owner provisions it. [docs:report]
 - Stop a backfill from blaming `--budget-seconds` when a source failure stopped it before the budget ran out. [fix:report]
-- Read the MoneyPuck season and its staleness URLs from the Eastern game day, so they agree with the game cutoff near the season boundary. The fit default and the dated score-day check stay on the UTC date. [fix:store]
+- Read the MoneyPuck season and its staleness URLs from the Eastern game day, so they agree with the game cutoff near the season boundary. The dated score-day check reads the current season from the Eastern game day too. The fit default stays on the UTC date. [fix:store]
 
 [Unreleased]: https://github.com/slackworks/hockey-model/commits/main
