@@ -33,6 +33,12 @@ addopts = """
     --cov-fail-under=80
 """
 
+[tool.module-budget]
+# `consumer_errors.py` is one table of error names, so it has no job of its own to split.
+# The value-class exemption does not cover an exception class, and a caller needs all five
+# names from one import. The caps stay at their defaults for every other file.
+exclude = ["src/hockey_model/consumer_errors.py"]
+
 [tool.ruff]
 line-length = 100
 

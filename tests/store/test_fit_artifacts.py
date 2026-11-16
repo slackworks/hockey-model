@@ -5,16 +5,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from hockey_model.consumer_errors import UnknownFitError
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.store.db import StoreError
-from hockey_model.store.fits import (
-    FitRecord,
-    FitRef,
-    UnknownFitError,
-    label_fit,
-    load_fit,
-    save_fit,
-)
+from hockey_model.store.fits import FitRecord, FitRef, label_fit, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 

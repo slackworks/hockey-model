@@ -77,6 +77,10 @@ for gap in result.missing:
     print(gap.kind, gap.team, gap.note)
 ```
 
+The example imports internal modules, so it is for the repository's own tools and tests.
+An outside consumer calls `open_store` and `predict` instead, as described in [Consumer API](#consumer-api).
+`predict` returns the same `GamePrediction` fields.
+
 The model is the results-only Elo of sportsbettr plus three features: MoneyPuck expected-goals form, the starting goalie's goals saved above expected, and rest days.
 A fitted logistic regression sets the weights.
 `made_after_start` is true when the prediction time is at or after the puck drop.
@@ -193,6 +197,62 @@ The per-game CSV of a confirmation run is committed under
 `experiments/results/`, and the record stores its path relative to the repository root and its SHA-256 hash.
 `experiments check` also fails when a record that holds a result is deleted or renamed, when its status disagrees with its result, when a committed result was removed or replaced, and when two records share a number.
 It reads the git history, so a shallow clone stops with a message that asks for the full history.
+
+## Consumer API
+
+`sportsbettr` and `leaguecheatr` read the store through one supported module.
+The consumer never runs SQL, never imports an internal module, and never writes, migrates, fits, or refreshes the store.
+`open_store` is the only entry point, and it is exported from the package root.
+
+```python
+from datetime import UTC, date, datetime
+
+from hockey_model import FitRef, open_store
+
+with open_store(path_to_store, fit=FitRef(label="live")) as store:
+    print(store.store.path, store.store.schema_version)
+    for game in store.games_on_day(date(2026, 11, 4)):
+        print(game.game_id, game.away, "at", game.home, game.start, game.state)
+    result = store.predict(game_id, as_of=datetime(2026, 11, 4, 0, 0, tzinfo=UTC))
+    print(result.prediction.home_win, result.fit.features, result.fit.fit_sha256)
+```
+
+The consumer imports the supported names from the package root only.
+`hockey_model.store.fits` and the other internal modules are not part of the surface, even when a name appears in both places.
+`LIVE_LABEL` is `"live"`, and it names the fit that `hockey-model game` and `hockey-model daily` serve.
+
+The store opens read-only, over one read transaction, so every call of one consumer sees one state of the store.
+A producer may write at the same time.
+Call `refresh_snapshot()` to end the transaction and start a new one.
+The fit is pinned when the store opens, and it never changes for the life of the object.
+
+A missing file raises `StoreMissingError`, and the consumer never creates one.
+A schema version this package cannot read, a missing view, and an unknown fit or game raise `StoreVersionError`, `UnknownFitError`, or `UnknownGameError`.
+Every error names the fix, which is `hockey-model store upgrade` or `hockey-model refresh`, run by the producer.
+
+`result.outcome` is `"full_game_winner"`: one winner after overtime and the shootout.
+It is not a regulation, period, prop, futures, or in-play result.
+`result.prediction.home_goals` and `result.prediction.away_goals` are marginal intervals for one team's goals.
+They are not a joint score distribution: two marginals give no chance of a total, and no chance of a margin.
+`result.reconstruction` is `"restatement"`: the inputs are today's rows, not the rows that existed at `as_of`.
+A call with an `as_of` therefore does not prove an as-issued historical prediction.
+`result.made_after_start` is true when `as_of` is at or after the puck drop.
+
+A game inside the seasons that trained the fit is an in-sample result.
+`result.fit` names the fit, and `result.fit.fit_through_season` is the last season that trained it.
+A reader that compares `result.game.season` against that value sees the in-sample case.
+A `fit_through_season` of `None` means the cutoff is unknown, not that the game is out of sample.
+
+### Install for a consumer
+
+The repository is public, so the install needs no token.
+Pin a tag or a commit, so a consumer never builds from a moving branch.
+
+```text
+uv add "hockey-model @ git+https://github.com/slackworks/hockey-model@<tag-or-commit>"
+```
+
+A consumer must not use a sibling checkout at a developer-specific absolute path.
 
 ## CLI
 

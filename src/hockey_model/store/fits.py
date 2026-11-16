@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+from hockey_model.consumer_errors import UnknownFitError
 from hockey_model.game_model.features import feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
 from hockey_model.store.db import StoreError
@@ -16,10 +17,6 @@ from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 # The label that `hockey-model game` and `hockey-model daily` serve. A research fit that
 # carries no label cannot replace it, which is what #80 asks for.
 LIVE_LABEL = "live"
-
-
-class UnknownFitError(StoreError):
-    """Raised when a fit id names no saved fit."""
 
 
 @dataclass(frozen=True, slots=True)
