@@ -13,7 +13,8 @@ from hockey_model.identity import Catalog
 from hockey_model.matchup import matchup, playoff_probability
 from hockey_model.models import JointModel, MatchupModel, StandingsModel, StatModel
 from hockey_model.projections import project_player, project_team
-from hockey_model.store_cli import STORE_COMMANDS, add_store_commands, run_store_command
+from hockey_model.store_cli import STORE_COMMANDS, run_store_command
+from hockey_model.store_cli_parsers import add_store_commands
 from hockey_model.types import (
     AmbiguousPlayerError,
     HockeyModelError,

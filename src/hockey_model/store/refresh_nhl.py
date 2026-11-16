@@ -114,7 +114,11 @@ def _unresolved_games(run: RefreshRun) -> list[tuple[int, datetime]]:
 
 
 def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> list[date]:
-    """Return the score days to read again for unresolved games, oldest first and bounded."""
+    """Return the score days to read again for unresolved games, oldest first and bounded.
+
+    A day left out by the bound is named in the report, so a backlog of unresolved days is
+    visible rather than silent. The next refresh reads the rest.
+    """
     due: list[date] = []
     for _, start in games:
         day = game_day_of(start)
@@ -128,6 +132,11 @@ def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> 
         last = newest_read(run.conn, SCORES, score_day_url(day))
         if last is None or run.now - last >= wait:
             due.append(day)
+    if len(due) > MAX_UNRESOLVED_DAYS:
+        run.notes.append(
+            f"{SCORES}: {len(due) - MAX_UNRESOLVED_DAYS} unresolved day(s) wait for the next "
+            f"refresh; this run reads at most {MAX_UNRESOLVED_DAYS}"
+        )
     return due[:MAX_UNRESOLVED_DAYS]
 
 
@@ -155,6 +164,12 @@ class ReadResult(NamedTuple):
     stopped: bool  # the read quit early: three failures in a row, or the time ran out
     progress: int = 0  # older units that this read finished for good: the backlog, not arrivals
     timed_out: bool = False  # set only when the time budget ran out
+
+
+def _timed_out(run: RefreshRun, progress: int) -> ReadResult:
+    """Return the result of a read that the time budget stopped, and mark the run."""
+    run.timed_out = True
+    return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
 
 
 def score_gaps(run: RefreshRun) -> set[date]:
@@ -199,7 +214,7 @@ def read_days(
             continue
         if run.out_of_time():
             run.notes.append(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
-            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
+            return _timed_out(run, progress)
 
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
@@ -309,7 +324,7 @@ def read_boxscores(
         if run.out_of_time():
             left = len(waiting) - index
             run.notes.append(f"{BOXSCORES}: stopped, because the time ran out; {left} not tried")
-            return ReadResult(clean=False, stopped=True, progress=progress, timed_out=True)
+            return _timed_out(run, progress)
         url = boxscore_url(game_id)
         if failed_since(run.conn, BOXSCORES, url, run.now - RETRY_FAILED_AFTER):
             skipped += 1

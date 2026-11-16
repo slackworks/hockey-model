@@ -363,6 +363,7 @@ on:
       - src/hockey_model/store/source_reads.py
       - src/hockey_model/store/refresh.py
       - src/hockey_model/store_cli.py
+      - src/hockey_model/store_cli_parsers.py
       - .github/workflows/tla.yml
   push:
     branches: [main]
@@ -376,6 +377,7 @@ on:
       - src/hockey_model/store/source_reads.py
       - src/hockey_model/store/refresh.py
       - src/hockey_model/store_cli.py
+      - src/hockey_model/store_cli_parsers.py
       - .github/workflows/tla.yml
   workflow_dispatch:
 

@@ -71,6 +71,7 @@ def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
     if tried == 0 or not run.out_of_time():
         return False
     run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    run.timed_out = True
     _mark_incomplete(run)
     return True
 

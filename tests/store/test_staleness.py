@@ -335,6 +335,31 @@ def test_an_abandoned_current_season_day_still_reports_on_game_rows(
     assert ("nhl_scores", f"the newest read of {url} failed") in reasons
 
 
+def test_a_day_before_the_season_starts_does_not_report_at_the_boundary(
+    store: sqlite3.Connection,
+) -> None:
+    # 2026-09-01T02:00 UTC is 2026-08-31 22:00 Eastern, so the Eastern game day is still in the
+    # 2025-26 season. A gap in a 2026-27 day is a game that has not started, so it is not on a
+    # game row and must not report. A rule that read the UTC date would name the 2026-27 season
+    # and report it.
+    url = score_day_url(date(2026, 10, 15))
+    record_read(store, "nhl_scores", "https://x/score/fresh", utc("2026-09-01T01:00"))
+    _abandon(store, url, utc("2026-08-31T12:00"))
+    assert [r for r in stale_sources(store, utc("2026-09-01T02:00")) if r[0] == "nhl_scores"] == []
+    assert training_gaps(store, utc("2026-09-01T02:00")) == [
+        f"nhl_scores: {url} failed in every read; its day is outside the scored and current seasons"
+    ]
+
+
+def test_a_day_in_the_current_season_still_reports(store: sqlite3.Connection) -> None:
+    # The same 2026-27 day is in the current season once the Eastern game day has reached it.
+    url = score_day_url(date(2026, 10, 15))
+    record_read(store, "nhl_scores", "https://x/score/fresh", utc("2026-11-13T11:00"))
+    _abandon(store, url, utc("2026-11-01T12:00"))
+    reasons = stale_sources(store, utc("2026-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {url} failed") in reasons
+
+
 def test_an_abandoned_url_with_no_date_always_reports(store: sqlite3.Connection) -> None:
     url = "https://x/boxscore"
     _fresh_score_read(store)

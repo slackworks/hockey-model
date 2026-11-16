@@ -26,6 +26,7 @@ from hockey_model.store.db import connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import read_boxscores
+from hockey_model.store.refresh_other import _stop_for_time
 from hockey_model.store.source_reads import abandoned_urls, record_read
 
 GAME = 2025020697
@@ -147,6 +148,32 @@ def test_a_spent_budget_reads_one_moneypuck_file_and_says_it_stopped(
     assert not any("peter-tanner" in url for url in client.urls)
     assert any("moneypuck:" in n and "time ran out" in n for n in report.notes)
     assert report.backfill_complete is False
+
+
+def test_a_moneypuck_budget_stop_is_reported_as_a_time_stop(conn: sqlite3.Connection) -> None:
+    # The report names the stop with the same flag as the NHL steps, so a caller reads one
+    # contract and not a note. Without the flag, only the note says the budget did it.
+    report = _spent_budget(conn, FakeClient())
+    assert report.timed_out is True
+
+
+def test_a_run_without_a_budget_is_not_a_time_stop(conn: sqlite3.Connection) -> None:
+    report = refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    assert report.timed_out is False
+
+
+def test_the_moneypuck_stop_sets_the_time_flag_on_the_run(conn: sqlite3.Connection) -> None:
+    # A direct test of the unit, because a full refresh that reaches this stop also stops the
+    # NHL step, so the report cannot tell the two stops apart.
+    run = RefreshRun(conn, FakeClient(), NOW, deadline=NOW - timedelta(minutes=1))
+    assert _stop_for_time(run, "the goalie file of season 2025", tried=1) is True
+    assert run.timed_out is True
+
+
+def test_the_first_file_of_a_run_is_always_tried(conn: sqlite3.Connection) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW, deadline=NOW - timedelta(minutes=1))
+    assert _stop_for_time(run, "the goalie file of season 2025", tried=0) is False
+    assert run.timed_out is False
 
 
 def test_a_budget_that_lasts_leaves_moneypuck_alone(conn: sqlite3.Connection) -> None:

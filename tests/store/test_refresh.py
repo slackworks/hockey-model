@@ -672,11 +672,13 @@ def test_a_run_reads_a_bounded_number_of_unresolved_days(conn: sqlite3.Connectio
     add_game(conn, 9002, "2026-01-09T18:00", state="OFF", fetched_at=utc("2026-01-10T00:00"))
     conn.commit()
     client = FakeClient()
-    refresh(conn, client, now=NOW)
+    report = refresh(conn, client, now=NOW)
     old_days = [
         u for u in client.urls if u.startswith(SCORE_URL) and u[len(SCORE_URL) :] < "2026-01-08"
     ]
     assert len(old_days) == MAX_UNRESOLVED_DAYS
+    # The days left out by the bound are named, so the backlog is not silent.
+    assert any("wait for the next refresh" in note for note in report.notes)
 
 
 def test_an_explicit_backfill_reads_an_old_unresolved_day(conn: sqlite3.Connection) -> None:

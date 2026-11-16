@@ -38,6 +38,8 @@ def fakes(tmp_path: Path) -> Path:
         "#!/usr/bin/env bash\n"
         'echo "gh $*" >> "$FAKE_CALLS"\n'
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
+        # The mutation report reads the open issue list. The default is an empty list.
+        'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
         'tag="${3:-}"\n'
         'if [[ "$1 $2" == "release view" ]]; then\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'
@@ -67,6 +69,11 @@ def fakes(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
+        # The mutation report runs the real helper, so its status is the real decision. The
+        # path is absolute, because a bare name would find this fake again on PATH.
+        'if [[ "$*" == "run python3 scripts/mutation_report.py"* ]]; then\n'
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
         'if [[ "$*" == "run hockey-model refresh --backfill-from"* ]]; then\n'
         '  if [[ -n "${FAKE_REFRESH_FAIL:-}" ]]; then\n'
         '    printf "{\\"errors\\": [\\"boom\\"]}"; exit 1\n'
