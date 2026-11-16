@@ -28,7 +28,7 @@ from hockey_model.store.reads import game_row
 from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.store.upgrade import run_store_group
-from hockey_model.store_cli_parsers import candidates
+from hockey_model.store_cli_parsers import CANDIDATE_SETS
 from hockey_model.types import HockeyModelError
 
 STORE_COMMANDS = frozenset(
@@ -126,6 +126,8 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
     features = parse_features(args.features)
     through = args.through_season
     if through is None:
+        # The UTC date, not the Eastern game day. The fit scores whole seasons, so a four-hour
+        # difference at the boundary chooses the last completed season either way (#238).
         through = season_of(datetime.now(UTC).date())
     conn = connect(db_path_from_env(os.environ))
     try:
@@ -246,7 +248,7 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
 def _backtest(args: argparse.Namespace) -> tuple[object, int]:
     conn = connect(db_path_from_env(os.environ))
     try:
-        report, records = run_backtest(conn, candidates=candidates(args.candidates))
+        report, records = run_backtest(conn, candidates=CANDIDATE_SETS[args.candidates])
     finally:
         conn.close()
     if args.games_out is not None:

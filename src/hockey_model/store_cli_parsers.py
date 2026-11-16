@@ -8,7 +8,7 @@ from pathlib import Path
 from hockey_model.game_model.features import ATTEMPT_FEATURES, FEATURES
 from hockey_model.store.upgrade import add_store_group
 
-_CANDIDATE_SETS: dict[str, tuple[str, ...]] = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
+CANDIDATE_SETS: dict[str, tuple[str, ...]] = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
 
 
 def _add_refresh(parser: argparse.ArgumentParser) -> None:
@@ -72,7 +72,7 @@ def _add_backtest(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--candidates",
-        choices=sorted(_CANDIDATE_SETS),
+        choices=sorted(CANDIDATE_SETS),
         default="xg",
         help="xg: the production candidates; attempt: xg_form replaced by attempt_form (#77)",
     )
@@ -170,8 +170,3 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
             help="decide the publish step of a trigger from the facts the gate read",
         )
     )
-
-
-def candidates(name: str) -> tuple[str, ...]:
-    """Return the feature candidate set that ``--candidates`` names."""
-    return _CANDIDATE_SETS[name]
