@@ -64,12 +64,12 @@ The model reads only the local store and makes no network request.
 from datetime import UTC, datetime
 
 from hockey_model import Game, game_win_probability
-from hockey_model.game_model.logistic import ELO_ONLY
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.store.db import connect
+from hockey_model.store.fits import FitRef, load_fit
 
 conn = connect(path_to_store)
-model = NhlGameModel(conn, ELO_ONLY)
+model = NhlGameModel(conn, load_fit(conn, FitRef(label="live")))
 game = Game(2026020236, "TOR", "UTA", datetime(2026, 11, 4, 0, 0, tzinfo=UTC))
 result = game_win_probability(game, model)
 print(result.home_win, result.away_win, result.made_after_start)

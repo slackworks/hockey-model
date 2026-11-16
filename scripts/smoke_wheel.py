@@ -169,7 +169,11 @@ def _smoke(work: Path, venv: Path, env: dict[str, str]) -> None:
     store = work / "store.db"
     seeded = {**env, "HOCKEY_MODEL_DB": str(store)}
     _run([str(python), "-I", str(SEED_SCRIPT), str(store)], cwd=work, env=seeded)
-    _run([cli, "fit", "--through-season", "20152016", "--features", ""], cwd=work, env=seeded)
+    _run(
+        [cli, "fit", "--through-season", "20152016", "--features", "", "--label", "live"],
+        cwd=work,
+        env=seeded,
+    )
     _check_prediction(_parse_json(_run([cli, "game", SCHEDULED_ID], cwd=work, env=seeded)))
     print("smoke test passed")
 

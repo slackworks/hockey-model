@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from seeding import add_game, add_goalie, add_team_form, utc
+from seeding import add_game, add_goalie, add_team_form, artifact, utc
 
 from hockey_model.daily_report import (
     DailyLine,
@@ -33,7 +33,7 @@ NOW = utc("2026-01-20T12:00")
 
 
 def _model(store: sqlite3.Connection) -> NhlGameModel:
-    return NhlGameModel(store, ELO_ONLY, GoalieMode.GUESS)
+    return NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.GUESS)
 
 
 def _seed_form(store: sqlite3.Connection) -> None:
@@ -144,7 +144,7 @@ def test_a_finished_game_in_reads_mode_names_the_boxscore_starter(
     add_game(store, 22, "2026-01-20T11:00", "TOR", "BOS", state="FINAL")
     add_goalie(store, 22, "TOR", 8001, "A. Home")
     add_goalie(store, 22, "BOS", 8002, "B. Away")
-    model = NhlGameModel(store, ELO_ONLY, GoalieMode.READS)
+    model = NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.READS)
     (line,) = build_report(store, model, DAY, now=NOW).lines
     assert line.prediction is not None
     notes = [m.note for m in line.prediction.missing if m.kind == MissingKind.LATE_RUN]

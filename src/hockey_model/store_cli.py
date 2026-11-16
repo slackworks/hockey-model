@@ -23,7 +23,7 @@ from hockey_model.report_trigger import first_puck_drop, prep_too_early, puck_dr
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow, fetch_score_day
 from hockey_model.store.db import connect, db_path_from_env
-from hockey_model.store.fits import newest_fit, save_fit
+from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, save_fit
 from hockey_model.store.reads import game_row
 from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc
@@ -55,6 +55,11 @@ def _report_json(report: RefreshReport) -> dict[str, object]:
         "backfill_complete": report.backfill_complete,
         "timed_out": report.timed_out,
     }
+
+
+def _live_ref() -> FitRef:
+    """Return the request for the fit that the daily run serves."""
+    return FitRef(label=LIVE_LABEL)
 
 
 def _refresh(args: argparse.Namespace) -> tuple[object, int]:
@@ -145,7 +150,10 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
             games = len(rows)
         else:
             quality, fit, games = [], ELO_ONLY, 0
-        fit_id = save_fit(conn, fit, through, datetime.now(UTC), quality)
+        fit_id = save_fit(
+            conn,
+            FitRecord(fit, through, datetime.now(UTC), quality, label=args.label),
+        )
     finally:
         conn.close()
     return {
@@ -166,7 +174,8 @@ def _game(args: argparse.Namespace) -> tuple[object, int]:
                 f"predict game {args.game_id}: the game is not in the store; "
                 "run `hockey-model refresh`"
             )
-        model = NhlGameModel(conn, newest_fit(conn))
+        artifact = load_fit(conn, FitRef(fit_id=args.fit_id) if args.fit_id else _live_ref())
+        model = NhlGameModel(conn, artifact)
         return game_win_probability(game_input(row), model, level=args.level), 0
     finally:
         conn.close()
@@ -177,10 +186,10 @@ def _daily(args: argparse.Namespace) -> tuple[object, int]:
     day = args.date if args.date is not None else game_day_of(now)
     conn = connect(db_path_from_env(os.environ))
     try:
-        fit = newest_fit(conn)
-        report = build_report(conn, NhlGameModel(conn, fit), day, now=now, level=args.level)
+        artifact = load_fit(conn, _live_ref())
+        report = build_report(conn, NhlGameModel(conn, artifact), day, now=now, level=args.level)
         # Actions sets GITHUB_SHA. A local run has no commit to name.
-        report = replace(report, model=model_identity(fit, os.environ.get("GITHUB_SHA")))
+        report = replace(report, model=model_identity(artifact.fit, os.environ.get("GITHUB_SHA")))
     finally:
         conn.close()
     md_path, json_path = write_report(report, args.out_dir)

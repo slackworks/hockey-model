@@ -7,10 +7,11 @@ from datetime import datetime
 from hockey_model.game import Game, GamePrediction, MissingInput, MissingKind
 from hockey_model.game_model.elo import replay
 from hockey_model.game_model.features import FORM_WINDOW, GoalieMode, build_features
-from hockey_model.game_model.logistic import LogisticFit, predict_logistic
+from hockey_model.game_model.logistic import predict_logistic
 from hockey_model.game_model.seasons import ELO_BURN_IN
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
+from hockey_model.store.fits import FitArtifact
 from hockey_model.store.reads import final_games_before, mp_team_form_before, team_games_before
 from hockey_model.store.staleness import stale_sources
 from hockey_model.types import Projection
@@ -77,11 +78,12 @@ class NhlGameModel:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        fit: LogisticFit,
+        artifact: FitArtifact,
         goalie_mode: GoalieMode = GoalieMode.READS,
     ) -> None:
         self._conn = conn
-        self._fit = fit
+        self._artifact = artifact
+        self._fit = artifact.fit
         self._mode = goalie_mode
 
     def _expected_goals(

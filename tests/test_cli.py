@@ -268,6 +268,11 @@ def _store_with_games(path: Path) -> None:
     conn.close()
 
 
+def _fit(features: str) -> list[str]:
+    """Return the arguments of a fit that `game` serves, over the seeded store."""
+    return ["fit", "--through-season", "20152016", "--features", features, "--label", "live"]
+
+
 def test_cli_fit_requires_through_season(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
     assert cli.main(["fit"]) == 2
@@ -399,7 +404,12 @@ def test_cli_fit_accepts_the_attempt_form_research_recipe(
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert cli.main(["fit", "--through-season", "20152016", "--features", "attempt_form"]) == 0
+    assert (
+        cli.main(
+            ["fit", "--through-season", "20152016", "--features", "attempt_form", "--label", "live"]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert cli.main(["game", "2025020001"]) == 0
 
@@ -411,7 +421,7 @@ def test_the_selected_recipe_leaves_the_vetoed_feature_out_of_the_served_fit(
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert cli.main(["fit", "--through-season", "20152016", "--features", "xg_form,rest"]) == 0
+    assert cli.main(_fit("xg_form,rest")) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["features"] == ["xg_form", "rest"]
     assert "goalie_gsax" not in out["features"]
@@ -425,7 +435,7 @@ def test_an_empty_live_recipe_serves_the_raw_elo(
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert cli.main(["fit", "--through-season", "20152016", "--features", ""]) == 0
+    assert cli.main(_fit("")) == 0
     fit = json.loads(capsys.readouterr().out)
     assert (fit["features"], fit["elo_weight"], fit["intercept"]) == ([], 1.0, 0.0)
     assert fit["games"] == 0
@@ -438,7 +448,7 @@ def test_cli_game_prints_prediction(
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert cli.main(["fit", "--through-season", "20152016", "--features", "rest"]) == 0
+    assert cli.main(_fit("rest")) == 0
     capsys.readouterr()
     assert cli.main(["game", "2025020001", "--level", "0.9"]) == 0
     out = json.loads(capsys.readouterr().out)
@@ -736,7 +746,7 @@ def test_cli_game_reports_a_degraded_form_input(
     conn.commit()
     conn.close()
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert cli.main(["fit", "--through-season", "20152016", "--features", "xg_form"]) == 0
+    assert cli.main(_fit("xg_form")) == 0
     capsys.readouterr()
     assert cli.main(["game", "2025020002"]) == 0
     out = json.loads(capsys.readouterr().out)

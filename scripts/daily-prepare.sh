@@ -110,5 +110,5 @@ fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
-uv run hockey-model fit --features "$live_features"
+uv run hockey-model fit --features "$live_features" --label live
 touch "$store_dir/prepared-$day"

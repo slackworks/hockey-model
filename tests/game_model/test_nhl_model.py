@@ -6,7 +6,7 @@ import urllib.request
 from datetime import timedelta
 
 import pytest
-from seeding import FETCHED, add_game, add_goalie, add_goalie_form, add_team_form, utc
+from seeding import FETCHED, add_game, add_goalie, add_goalie_form, add_team_form, artifact, utc
 
 from hockey_model.game import Game, MissingKind, game_win_probability
 from hockey_model.game_model.features import GoalieMode
@@ -21,7 +21,7 @@ GAME = Game(100, "TOR", "BOS", START)
 
 
 def model(store: sqlite3.Connection, fit: LogisticFit = ELO_ONLY) -> NhlGameModel:
-    return NhlGameModel(store, fit, GoalieMode.GUESS)
+    return NhlGameModel(store, artifact(fit), GoalieMode.GUESS)
 
 
 def season(store: sqlite3.Connection) -> None:

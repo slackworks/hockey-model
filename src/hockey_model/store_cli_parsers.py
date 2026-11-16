@@ -63,6 +63,16 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
             'report; "" fits the Elo alone, which is the result of a failed joint test'
         ),
     )
+    parser.add_argument(
+        "--label",
+        default=None,
+        metavar="NAME",
+        help=(
+            "name this fit so a later reader selects it. `game` and `daily` serve the fit "
+            "labelled live, so pass --label live for the production fit. A research fit "
+            "takes no label and cannot replace the live one"
+        ),
+    )
 
 
 def _add_backtest(parser: argparse.ArgumentParser) -> None:
@@ -153,9 +163,16 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
     _add_refresh(refresh_parser)
     _add_fit(add_parser("fit", help="fit the game model on the stored games and save the fit"))
     _add_backtest(add_parser("backtest", help="score the model on the stored games"))
-    game = add_parser("game", help="predict one stored game with the newest fit")
+    game = add_parser("game", help="predict one stored game with the live fit")
     game.add_argument("game_id", type=int)
     game.add_argument("--level", type=float, default=0.8)
+    game.add_argument(
+        "--fit-id",
+        type=int,
+        default=None,
+        metavar="N",
+        help="predict with saved fit N instead of the fit labelled live",
+    )
     _add_experiments(add_parser("experiments", help="manage the experiment registry"))
     daily = add_parser(
         "daily", help="predict every game of one Eastern game day; write Markdown and JSON"

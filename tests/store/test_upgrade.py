@@ -43,6 +43,21 @@ def make_v1_store(path: Path, mp_rows: list[tuple] = V1_MP_ROWS) -> Path:
     return path
 
 
+def make_v2_store(path: Path) -> Path:
+    """Write a version 2 store: a fresh store with the fit label table removed."""
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE fit_labels")
+    conn.execute("UPDATE schema_version SET version = 2")
+    conn.execute(
+        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
+        " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
 def rows(path: Path, sql: str) -> list[tuple]:
     conn = sqlite3.connect(path)
     try:
@@ -269,6 +284,19 @@ def test_a_completed_upgrade_says_what_to_run_next(v1: Path) -> None:
     report = upgrade_store(v1)
     assert report.next_step is not None
     assert "hockey-model refresh --reread-moneypuck" in report.next_step
+
+
+def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
+    tmp_path: Path,
+) -> None:
+    # The upgrade adds the label table but not a label. An operator sets the label, because
+    # only a person knows which saved fit the daily run should serve.
+    v2 = make_v2_store(tmp_path / "store.db")
+    report = upgrade_store(v2)
+    assert (report.from_version, report.to_version) == (2, SCHEMA_VERSION)
+    assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
+    assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
+    assert version_of(v2) == SCHEMA_VERSION
 
 
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:

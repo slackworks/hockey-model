@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.store.db import StoreError
-from hockey_model.store.fits import save_fit
+from hockey_model.store.fits import FitRecord, save_fit
 from hockey_model.types import HockeyModelError
 
 T0 = datetime(2026, 11, 1, tzinfo=UTC)
@@ -24,12 +24,12 @@ def _stored_imputation(store: sqlite3.Connection, fit_id: int) -> object:
 
 
 def test_the_quality_is_stored_with_the_fit(store: sqlite3.Connection) -> None:
-    fit_id = save_fit(store, FIT, 20252026, T0, QUALITY)
+    fit_id = save_fit(store, FitRecord(FIT, 20252026, T0, QUALITY))
     assert _stored_imputation(store, fit_id) == QUALITY
 
 
 def test_a_fit_with_no_features_stores_an_empty_list(store: sqlite3.Connection) -> None:
-    fit_id = save_fit(store, FIT, 20252026, T0, [])
+    fit_id = save_fit(store, FitRecord(FIT, 20252026, T0))
     assert _stored_imputation(store, fit_id) == []
 
 
@@ -53,7 +53,7 @@ def test_any_quality_list_round_trips_unchanged(entries: list[dict[str, object]]
         "CREATE TABLE model_fits (fit_id INTEGER PRIMARY KEY, fit_through_season INTEGER,"
         " features TEXT, weights TEXT, created_at TEXT)"
     )
-    fit_id = save_fit(conn, FIT, 20252026, T0, entries)
+    fit_id = save_fit(conn, FitRecord(FIT, 20252026, T0, entries))
     assert _stored_imputation(conn, fit_id) == entries
     conn.close()
 
@@ -61,12 +61,12 @@ def test_any_quality_list_round_trips_unchanged(entries: list[dict[str, object]]
 def test_an_entry_without_its_keys_raises_and_saves_no_row(store: sqlite3.Connection) -> None:
     bad = [{"feature": "rest", "imputed": 1}]
     with pytest.raises(StoreError, match="imputation entry"):
-        save_fit(store, FIT, 20252026, T0, bad)
+        save_fit(store, FitRecord(FIT, 20252026, T0, bad))
     assert store.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0] == 0
 
 
 def test_a_fit_with_a_bad_weight_still_saves_nothing(store: sqlite3.Connection) -> None:
     bad = LogisticFit(("rest",), 0.0, 1.0, {"rest": float("nan")})
     with pytest.raises(HockeyModelError):
-        save_fit(store, bad, 20252026, T0, QUALITY)
+        save_fit(store, FitRecord(bad, 20252026, T0, QUALITY))
     assert store.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0] == 0

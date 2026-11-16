@@ -121,6 +121,15 @@ CREATE TABLE model_fits (
     created_at TEXT NOT NULL
 );
 
+-- Which fit a name serves. Append-only, so a label can move to a newer fit and its earlier
+-- assignment stays readable. A row is a statement by the person who saved the fit, not a
+-- derived value, so a later research fit that carries no label cannot replace the live one.
+CREATE TABLE fit_labels (
+    label TEXT NOT NULL,
+    fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id),
+    set_at TEXT NOT NULL
+);
+
 -- Indexes for the as-of reads, which filter by time, team, and player.
 CREATE INDEX IF NOT EXISTS games_start ON games (start_utc);
 CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started);
