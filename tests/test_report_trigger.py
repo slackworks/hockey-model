@@ -143,6 +143,9 @@ def test_prep_is_too_early_only_more_than_the_prep_window_before_the_puck_drop(
 
 def test_prep_window_matches_the_prepare_job_timeout() -> None:
     # The prep job timeout in daily-prepare.yml is the window the prep can use.
+    if "mutants" in Path(__file__).resolve().parts:
+        # The mutation run copies src and tests only, so it has no workflow file to read.
+        pytest.skip("the mutation copy has no .github directory")
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github" / "workflows" / "daily-prepare.yml").read_text(encoding="utf-8")
     assert f"timeout-minutes: {PREP_WINDOW // timedelta(minutes=1)}" in workflow
