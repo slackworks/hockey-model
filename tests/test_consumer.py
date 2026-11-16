@@ -19,6 +19,7 @@ from hockey_model.consumer_errors import (
     UnknownGameError,
 )
 from hockey_model.consumer_types import FULL_GAME_WINNER, RESTATEMENT, GameInfo
+from hockey_model.game import TrainingInfo, TrainingMembership
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow
@@ -130,6 +131,13 @@ def test_a_missing_path_raises_and_creates_no_file(tmp_path: Path) -> None:
     with pytest.raises(StoreMissingError, match="no store file there.*hockey-model refresh"):
         open_store(path, fit=FitRef(label="live"))
     assert not path.exists()
+
+
+def test_a_prediction_names_the_training_membership(store_path: Path) -> None:
+    """The seed fit trained through 2025-26, and both seeded games are in that season."""
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        result = consumer.predict(2, as_of=NOW)
+    assert result.training == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
 
 
 def test_a_labelled_fit_wins_over_a_newer_unlabelled_fit(store_path: Path) -> None:

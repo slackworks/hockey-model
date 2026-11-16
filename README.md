@@ -91,6 +91,11 @@ The result lists a goalie that no source confirmed.
 A form that was measured, even when it measured zero, is not listed.
 The command line prints the same field, and each game in the daily report JSON carries it.
 
+`training` names the fit and whether the game trained it: `in_sample`, `out_of_sample`, or `unknown`.
+A fit that trained through the game's season names it `in_sample`, and such a result is not a forecast: the fit has seen the game's outcome.
+`unknown` means the saved fit does not record the season it trained through, so a reader must not read it as out of sample.
+`game`, `daily`, and the consumer API carry the same field. The daily report Markdown puts an `in_sample` note on the game row.
+
 The model uses no price data.
 It does not say whether the model beats a betting market.
 The backtest (below) scores it against game results and the results-only Elo only.
@@ -238,10 +243,13 @@ They are not a joint score distribution: two marginals give no chance of a total
 A call with an `as_of` therefore does not prove an as-issued historical prediction.
 `result.made_after_start` is true when `as_of` is at or after the puck drop.
 
-A game inside the seasons that trained the fit is an in-sample result.
-`result.fit` names the fit, and `result.fit.fit_through_season` is the last season that trained it.
-A reader that compares `result.game.season` against that value sees the in-sample case.
-A `fit_through_season` of `None` means the cutoff is unknown, not that the game is out of sample.
+A game inside the seasons that trained the fit is an in-sample result, and the fit has seen its outcome.
+`result.training` names the fit and the membership: `in_sample`, `out_of_sample`, or `unknown`.
+`result.training.fit_through_season` is the last season that trained the fit.
+A `fit_through_season` of `None` gives `unknown`, not `out_of_sample`.
+The check takes the season from the Eastern game day of the start.
+The check is conservative: a game of the cutoff season counts as in-sample, even when the fit read only part of that season.
+An `as_of` earlier than the game does not clear the marker, because the fit still trained on the game.
 
 ### Install for a consumer
 

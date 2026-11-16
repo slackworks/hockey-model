@@ -110,6 +110,28 @@ class DegradedInput:
     teams: tuple[str, ...]
 
 
+class TrainingMembership(StrEnum):
+    """Whether the seasons that trained the fit include the predicted game."""
+
+    IN_SAMPLE = "in_sample"
+    OUT_OF_SAMPLE = "out_of_sample"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingInfo:
+    """The fit that made a prediction, and whether the game trained it.
+
+    ``membership`` is ``unknown`` when the saved fit does not record the season that it
+    trained through. Such a fit may still include the game, so a reader must not read
+    ``unknown`` as out of sample.
+    """
+
+    fit_id: int
+    fit_through_season: int | None
+    membership: TrainingMembership
+
+
 @dataclass(frozen=True, slots=True)
 class GamePrediction:
     """Win probabilities and goal projections for one game."""
@@ -122,6 +144,8 @@ class GamePrediction:
     credits: tuple[str, ...]
     made_after_start: bool = False
     degraded_inputs: tuple[DegradedInput, ...] = ()
+    # None only for a prediction that a model made without a saved fit, such as a test model.
+    training: TrainingInfo | None = None
 
 
 def game_win_probability(

@@ -7,7 +7,7 @@ UTC-aware ``datetime``. The module holds no logic that reads the store.
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from hockey_model.game import GamePrediction, GoalieStart, MissingInput
+from hockey_model.game import GamePrediction, GoalieStart, MissingInput, TrainingInfo
 from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.utc import require_utc
 
@@ -167,3 +167,8 @@ class ConsumerPrediction:
     def made_after_start(self) -> bool:
         """Return whether the prediction time is at or after the puck drop."""
         return self.prediction.made_after_start
+
+    @property
+    def training(self) -> TrainingInfo | None:
+        """Return the fit that made the prediction and whether the game trained it."""
+        return self.prediction.training

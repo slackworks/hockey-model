@@ -4,11 +4,19 @@ import math
 import sqlite3
 from datetime import datetime
 
-from hockey_model.game import Game, GamePrediction, MissingInput, MissingKind
+from hockey_model.game import (
+    Game,
+    GamePrediction,
+    MissingInput,
+    MissingKind,
+    TrainingInfo,
+    TrainingMembership,
+)
+from hockey_model.game_day import game_day_of
 from hockey_model.game_model.elo import replay
 from hockey_model.game_model.features import FORM_WINDOW, GoalieMode, build_features
 from hockey_model.game_model.logistic import predict_logistic
-from hockey_model.game_model.seasons import ELO_BURN_IN
+from hockey_model.game_model.seasons import ELO_BURN_IN, season_of
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
 from hockey_model.store.fits import FitArtifact
@@ -61,6 +69,24 @@ def _goals_for_and_against(
 
 def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def _training_info(artifact: FitArtifact, game: Game) -> TrainingInfo:
+    """Return the fit that made a prediction, and whether the game trained it.
+
+    The check takes the season from the Eastern game day of the start, as the schedule does.
+    The check is conservative: a fit that trained through a season names every game of that
+    season in-sample, even when the fit read only part of it. A fit that does not record its
+    cutoff gives ``unknown``.
+    """
+    cutoff = artifact.fit_through_season
+    if cutoff is None:
+        membership = TrainingMembership.UNKNOWN
+    elif season_of(game_day_of(game.start)) <= cutoff:
+        membership = TrainingMembership.IN_SAMPLE
+    else:
+        membership = TrainingMembership.OUT_OF_SAMPLE
+    return TrainingInfo(artifact.fit_id, cutoff, membership)
 
 
 def _clamp_notes(game: Game, home_rate: float, away_rate: float) -> list[MissingInput]:
@@ -135,4 +161,5 @@ class NhlGameModel:
             missing=tuple(missing),
             credits=credits,
             degraded_inputs=row.imputed,
+            training=_training_info(self._artifact, game),
         )

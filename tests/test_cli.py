@@ -458,6 +458,42 @@ def test_cli_game_prints_prediction(
     assert isinstance(out["missing"], list)
 
 
+def _game_ids(db: Path) -> tuple[int, int]:
+    """Return the id of a 2015-16 game and the id of the seeded 2026-27 game."""
+    conn = connect(db)
+    try:
+        inside, outside = conn.execute(
+            "SELECT (SELECT game_id FROM latest_games WHERE season = 20152016 LIMIT 1),"
+            " (SELECT game_id FROM latest_games WHERE season = 20262027 LIMIT 1)"
+        ).fetchone()
+    finally:
+        conn.close()
+    return inside, outside
+
+
+def test_cli_game_marks_a_game_inside_the_fit_seasons(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    inside_id, outside_id = _game_ids(db)
+    assert cli.main(_fit("rest")) == 0
+    capsys.readouterr()
+    # The seeded history is the 2015-16 season, and the fit trained through it.
+    assert cli.main(["game", str(inside_id)]) == 0
+    inside = json.loads(capsys.readouterr().out)["training"]
+    assert inside == {
+        "fit_id": 1,
+        "fit_through_season": 20152016,
+        "membership": "in_sample",
+    }
+    # The 2026-27 game starts a season after the fit cutoff.
+    assert cli.main(["game", str(outside_id)]) == 0
+    outside = json.loads(capsys.readouterr().out)["training"]
+    assert outside["membership"] == "out_of_sample"
+
+
 def test_cli_game_unknown_id(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

@@ -32,6 +32,8 @@ from hockey_model.game import (
     MissingKind,
     StarterSource,
     StarterStatus,
+    TrainingInfo,
+    TrainingMembership,
     game_win_probability,
 )
 from hockey_model.identity import Catalog
@@ -112,6 +114,8 @@ __all__ = [
     "Standing",
     "StandingsModel",
     "StatModel",
+    "TrainingInfo",
+    "TrainingMembership",
     "StoreInfo",
     "StoreMissingError",
     "StoreVersionError",
