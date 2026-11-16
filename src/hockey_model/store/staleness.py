@@ -103,7 +103,10 @@ def _changes_prediction(url: str, as_of: datetime) -> bool:
     except ValueError as error:
         raise ValueError(f"cannot read the day in the source URL {url}: {error}") from error
     season = season_of(day)
-    return SCORED[0] <= season <= SCORED[1] or season == season_of(as_of.date())
+    # The current season is the one that holds the Eastern game day, as the MoneyPuck URLs
+    # already use. Between 00:00 and 04:00 UTC the UTC date is the earlier day, and near the
+    # season boundary it is the earlier season.
+    return SCORED[0] <= season <= SCORED[1] or season == season_of(game_day_of(as_of))
 
 
 def _hours(span: timedelta) -> str:
