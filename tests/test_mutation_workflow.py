@@ -57,8 +57,9 @@ def test_the_report_step_shows_the_status_on_every_ref() -> None:
     assert "GITHUB_STEP_SUMMARY" in _job("report")
 
 
-def test_the_job_env_reads_no_step_context() -> None:
-    # GitHub allows the steps context in a step's env only. A job-level use fails actionlint,
-    # and the workflow never starts.
-    header = _job("report").split("\n    steps:\n")[0]
+@pytest.mark.parametrize("name", ["report", "file"])
+def test_the_job_env_reads_no_step_context(name: str) -> None:
+    # GitHub allows the steps context in a step's env only. A job-level use stops the
+    # workflow before any job starts, and no lint step in this repo catches it.
+    header = _job(name).split("\n    steps:\n")[0]
     assert "steps." not in header
