@@ -57,9 +57,30 @@ def test_the_report_step_shows_the_status_on_every_ref() -> None:
     assert "GITHUB_STEP_SUMMARY" in _job("report")
 
 
+def _job_env(name: str) -> str:
+    """Return the job-level env block, or an empty string when the job has none."""
+    header = _job(name).split("\n    steps:\n")[0]
+    if "\n    env:\n" not in header:
+        return ""
+    return header.split("\n    env:\n")[1].split("\n    [a-z]")[0]
+
+
 @pytest.mark.parametrize("name", ["report", "file"])
 def test_the_job_env_reads_no_step_context(name: str) -> None:
-    # GitHub allows the steps context in a step's env only. A job-level use stops the
-    # workflow before any job starts, and no lint step in this repo catches it.
-    header = _job(name).split("\n    steps:\n")[0]
-    assert "steps." not in header
+    # GitHub allows the steps context in a step's env, and in a job's outputs, but not in a
+    # job's env. A job-level use stops the workflow before any job starts.
+    assert "steps." not in _job_env(name)
+
+
+def test_the_file_job_files_the_decision_of_the_report_job() -> None:
+    # Two downloads and two decisions can disagree. The file job reads the status instead.
+    file_job = _job("file")
+    assert "needs.report.outputs.status" in file_job
+    assert "--status" in file_job
+    assert "--stats" not in file_job
+
+
+def test_the_report_job_publishes_its_status_and_its_body() -> None:
+    report = _job("report")
+    assert "status: ${{ steps.decide.outputs.status }}" in report
+    assert "mutation-report.md" in report

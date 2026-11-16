@@ -5,6 +5,7 @@
 #         (--execution success|failure | --shard-result R --merge-result R
 #          --export-result R --download-result R)
 #         [--reason TEXT]... [--file-issue]
+#        scripts/report-mutation.sh --status S --body FILE --run-url URL --file-issue
 #
 # A regression or an execution failure opens the report, or comments on the open one.
 # A clean run comments a recovery note on an open report and leaves it open, so the
@@ -15,7 +16,9 @@
 # partial run never reads as a clean one.
 # --file-issue makes the issue calls. Without it the script prints the status, so a run on
 # any other ref still judges its own stats. A status that is not clean then also says on
-# stderr that no issue is filed.
+# stderr that the step files no issue.
+# --status with --body takes a decision that another job made, so only one job reads the
+# stats. The body must be the file that decision wrote.
 #
 # Stdout: the status word (clean, regression, or execution_failed).
 # Stderr: diagnostics. Exit 0 when the status is judged, and with --file-issue, the report
@@ -37,6 +40,8 @@ STATS=""
 EXECUTION=""
 RUN_URL=""
 FILE_ISSUE=0
+GIVEN_STATUS=""
+GIVEN_BODY=""
 REASONS=()
 declare -A RESULTS=()
 while [[ $# -gt 0 ]]; do
@@ -78,6 +83,23 @@ while [[ $# -gt 0 ]]; do
     REASONS+=("${2:-}")
     shift 2
     ;;
+  --status)
+    need_value "$@"
+    case "${2:-}" in
+    clean | regression | execution_failed) GIVEN_STATUS="${2:-}" ;;
+    *)
+      echo "report-mutation: --status must be clean, regression, or execution_failed," \
+        "got ${2:-}" >&2
+      exit 2
+      ;;
+    esac
+    shift 2
+    ;;
+  --body)
+    need_value "$@"
+    GIVEN_BODY="${2:-}"
+    shift 2
+    ;;
   --file-issue)
     FILE_ISSUE=1
     shift
@@ -93,35 +115,51 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$STATS" || -z "$RUN_URL" ]]; then
-  echo "report-mutation: --stats and --run-url are both required" >&2
+if [[ -z "$RUN_URL" ]]; then
+  echo "report-mutation: --run-url is required" >&2
+  exit 2
+fi
+if [[ -n "$GIVEN_STATUS" && -z "$GIVEN_BODY" ]]; then
+  echo "report-mutation: --status needs --body, the file that decision wrote" >&2
+  exit 2
+fi
+if [[ -z "$GIVEN_STATUS" && -z "$STATS" ]]; then
+  echo "report-mutation: --stats is required; pass it, or pass --status and --body" >&2
   exit 2
 fi
 
 readonly HELPER="scripts/mutation_report.py"
-readonly BODY=".tmp/mutation-report.md"
 mkdir -p .tmp
 
-# One call decides the status and writes the body, so both read the same stats.
-args=(status --stats "$STATS" --out "$BODY" --run-url "$RUN_URL")
-if ((${#RESULTS[@]} > 0)); then
-  for key in shard merge export download; do
-    args+=("--$key-result" "${RESULTS[$key]:-unknown}")
-  done
+if [[ -n "$GIVEN_STATUS" ]]; then
+  # The report job already decided, so this job reads no stats and repeats nothing.
+  status="$GIVEN_STATUS"
+  BODY="$GIVEN_BODY"
 else
-  if [[ -z "$EXECUTION" ]]; then
-    echo "report-mutation: give --execution, or the four --*-result flags" >&2
-    exit 2
+  readonly BODY_DECIDED=".tmp/mutation-report.md"
+  BODY="$BODY_DECIDED"
+  # One call decides the status and writes the body, so both read the same stats.
+  args=(status --stats "$STATS" --out "$BODY" --run-url "$RUN_URL")
+  if ((${#RESULTS[@]} > 0)); then
+    for key in shard merge export download; do
+      args+=("--$key-result" "${RESULTS[$key]:-unknown}")
+    done
+  else
+    if [[ -z "$EXECUTION" ]]; then
+      echo "report-mutation: give --execution, or the four --*-result flags" >&2
+      exit 2
+    fi
+    args+=(--execution "$EXECUTION")
   fi
-  args+=(--execution "$EXECUTION")
+  for reason in "${REASONS[@]}"; do args+=("--reason" "$reason"); done
+  status="$(uv run python3 "$HELPER" "${args[@]}")"
 fi
-for reason in "${REASONS[@]}"; do args+=(--reason "$reason"); done
-status="$(uv run python3 "$HELPER" "${args[@]}")"
 
 if ((FILE_ISSUE == 0)); then
-  # A non-clean run that files nothing must say so, or a missing flag reads as a pass.
+  # This step files nothing. A non-clean status says so, so a missing flag cannot read as a
+  # pass. The filing job holds issues: write, so its run does not print this line.
   if [[ "$status" != "clean" ]]; then
-    echo "report-mutation: status $status; no issue is filed without --file-issue" >&2
+    echo "report-mutation: status $status; this step files no issue" >&2
   fi
   echo "$status"
   exit 0

@@ -83,14 +83,14 @@ def test_a_run_without_the_flag_that_files_no_issue_says_so(fakes: Path, tmp_pat
     result = _run(
         fakes, tmp_path, "--stats", str(tmp_path / "absent.json"), "--run-url", URL, *GOOD_RESULTS
     )
-    assert "no issue is filed without --file-issue" in result.stderr
+    assert "this step files no issue" in result.stderr
 
 
 def test_a_clean_run_without_the_flag_says_nothing_extra(fakes: Path, tmp_path: Path) -> None:
     result = _run(
         fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *GOOD_RESULTS
     )
-    assert "no issue is filed" not in result.stderr
+    assert "this step files no issue" not in result.stderr
 
 
 def test_a_bad_stats_file_fails_a_run_that_files_no_issue(fakes: Path, tmp_path: Path) -> None:
@@ -117,7 +117,7 @@ def test_a_skipped_download_is_a_cause(fakes: Path, tmp_path: Path) -> None:
     results[7] = "skipped"
     result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
     assert result.returncode == 0, result.stderr
-    assert "the download job did not finish (skipped)" in _body()
+    assert "the download step did not finish (skipped)" in _body()
 
 
 def test_an_unknown_download_outcome_is_a_cause(fakes: Path, tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_an_unknown_download_outcome_is_a_cause(fakes: Path, tmp_path: Path) -> 
     results[7] = "unknown"
     result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
     assert result.returncode == 0, result.stderr
-    assert "the download job did not finish (unknown)" in _body()
+    assert "the download step did not finish (unknown)" in _body()
 
 
 def test_the_script_rejects_a_bad_result_value(fakes: Path, tmp_path: Path) -> None:
@@ -177,7 +177,7 @@ def test_a_failed_download_names_itself_in_the_report(fakes: Path, tmp_path: Pat
         *results,
     )
     assert result.returncode == 0, result.stderr
-    assert "the download job did not finish (failure)" in _body()
+    assert "the download step did not finish (failure)" in _body()
 
 
 def test_the_issue_search_fails_at_the_list_cap(fakes: Path, tmp_path: Path) -> None:

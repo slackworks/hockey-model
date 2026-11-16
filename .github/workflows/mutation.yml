@@ -106,12 +106,15 @@ jobs:
   report:
     needs: [shard, merge]
     # The decision runs on every ref, so a manual run judges its own stats. A branch run
-    # passes no --file-issue, and the filing step below runs only on main.
+    # files nothing, and the file job below runs only on main.
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      # The file job files this decision. It reads no stats of its own, so the two agree.
+      status: ${{ steps.decide.outputs.status }}
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       SHARD_RESULT: ${{ needs.shard.result }}
@@ -132,6 +135,7 @@ jobs:
           name: mutation
           path: .tmp/mutation
       - name: Decide the report
+        id: decide
         env:
           # A step reads the steps context. A job-level env cannot.
           DOWNLOAD_RESULT: ${{ steps.download.outcome }}
@@ -146,14 +150,22 @@ jobs:
           # The status goes to the run summary on every ref, so a branch regression is visible.
           echo "The mutation report status is \`$status\`." >>"$GITHUB_STEP_SUMMARY"
           # A failed run fails the job. A regression does not, by design: the owner decides.
-          test "$status" != execution_failed
           case "$status" in
             clean | regression) ;;
+            execution_failed) echo "status=$status" >>"$GITHUB_OUTPUT"; exit 1 ;;
             *)
               echo "mutation: unexpected report status '$status'" >&2
               exit 1
               ;;
           esac
+          echo "status=$status" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        # The file job needs the body that the decision wrote, so it repeats nothing.
+        if: always()
+        with:
+          name: mutation-report
+          if-no-files-found: warn
+          path: .tmp/mutation-report.md
 
   file:
     needs: [shard, merge, report]
@@ -166,9 +178,6 @@ jobs:
       issues: write
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      SHARD_RESULT: ${{ needs.shard.result }}
-      MERGE_RESULT: ${{ needs.merge.result }}
-      EXPORT_RESULT: ${{ needs.merge.outputs.export }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -176,20 +185,18 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        id: download
-        # A missing artifact leaves no stats file, and the script names that cause.
+        # A missing body means the decision step did not finish. The script then fails.
         continue-on-error: true
         with:
-          name: mutation
-          path: .tmp/mutation
+          name: mutation-report
+          path: .tmp
       - name: File the report
         env:
           GH_TOKEN: ${{ github.token }}
-          DOWNLOAD_RESULT: ${{ steps.download.outcome }}
+          # A failed report job leaves no output, and the script rejects an empty status.
+          REPORT_STATUS: ${{ needs.report.outputs.status }}
         run: |
           set -euo pipefail
-          stats=.tmp/mutation/mutants/mutmut-cicd-stats.json
-          scripts/report-mutation.sh --stats "$stats" --run-url "$RUN_URL" --file-issue \
-            --shard-result "$SHARD_RESULT" --merge-result "$MERGE_RESULT" \
-            --export-result "$EXPORT_RESULT" --download-result "$DOWNLOAD_RESULT" >/dev/null
+          scripts/report-mutation.sh --status "$REPORT_STATUS" \
+            --body .tmp/mutation-report.md --run-url "$RUN_URL" --file-issue >/dev/null
 

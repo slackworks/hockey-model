@@ -47,6 +47,8 @@ STATUS_REGRESSION = "regression"
 STATUS_FAILED = "execution_failed"
 # The job results that a run needs. Each must be success for the run to count as a run.
 RESULT_KEYS = ("shard", "merge", "export", "download")
+# The download runs as a step of the report job, so the body names it as a step.
+RESULT_NOUNS = {"download": "step"}
 # ``unknown`` is the value the shell passes for a job that did not report a result.
 RESULT_VALUES = ("success", "failure", "cancelled", "skipped", "unknown")
 
@@ -141,6 +143,12 @@ def stats_causes(stats: Stats | None) -> list[str]:
     return found
 
 
+def result_cause(key: str, outcome: str) -> str:
+    """Return the cause for a run part that did not finish with success."""
+    noun = RESULT_NOUNS.get(key, "job")
+    return f"the {key} {noun} did not finish ({outcome})"
+
+
 def causes(
     stats: Stats | None, status: str, given: Sequence[str], results: dict[str, str]
 ) -> list[str]:
@@ -154,7 +162,7 @@ def causes(
     found = stats_causes(stats)
     for key in RESULT_KEYS:
         if results[key] != "success":
-            found.append(f"the {key} job did not finish ({results[key]})")
+            found.append(result_cause(key, results[key]))
     found.extend(given)
     if status == STATUS_FAILED and not found:
         found.append("the run did not finish")
@@ -205,7 +213,7 @@ def find_open_report(issues_json: str, cap: int | None = None) -> int | None:
     """
     issues = json.loads(issues_json)
     if not isinstance(issues, list):
-        raise ValueError("issue list must be a JSON array")
+        raise ValueError("gh issue list must print a JSON array; check the gh version, then rerun")
     if cap is not None and len(issues) >= cap:
         raise ValueError(
             f"the list holds {len(issues)} open issues, which reaches the {cap} limit; "
@@ -237,11 +245,7 @@ def _find(cap: int | None) -> int:
     try:
         number = find_open_report(sys.stdin.read(), cap)
     except ValueError as error:
-        print(
-            f"mutation-report: gh issue list output cannot be read: {error}. "
-            "Check the gh version, then rerun the report step.",
-            file=sys.stderr,
-        )
+        print(f"mutation-report: {error}", file=sys.stderr)
         return 1
     if number is not None:
         print(number)
