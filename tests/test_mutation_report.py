@@ -228,6 +228,54 @@ def test_find_open_report_returns_the_number_it_was_given(number: int) -> None:
     assert report.find_open_report(json.dumps(issues)) == number
 
 
+def test_count_open_returns_the_length_of_the_list() -> None:
+    issues = [{"number": 7, "body": None, "author": BOT}] * 3
+    assert report.count_open(json.dumps(issues)) == 3
+
+
+def test_count_open_returns_zero_for_an_empty_list() -> None:
+    assert report.count_open("[]") == 0
+
+
+@pytest.mark.parametrize("payload", ['{"number": 1}', "not json", '"text"'])
+def test_count_open_rejects_a_list_that_is_not_a_json_array(payload: str) -> None:
+    # A JSON object, a bare string, and text that is not JSON all raise. A JSONDecodeError is
+    # a ValueError, so one test covers both causes.
+    with pytest.raises(ValueError):
+        report.count_open(payload)
+
+
+@given(size=st.integers(min_value=0, max_value=50))
+def test_count_open_matches_the_list_size(size: int) -> None:
+    issues = [{"number": n} for n in range(1, size + 1)]
+    assert report.count_open(json.dumps(issues)) == size
+
+
+def test_status_names_the_reason_from_the_options(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The download outcome passes this reason, so a failed download reads apart from no file.
+    out = tmp_path / "body.md"
+    code = report.main(
+        [
+            "status",
+            "--stats",
+            str(tmp_path / "missing.json"),
+            "--execution",
+            "failure",
+            "--out",
+            str(out),
+            "--run-url",
+            "https://example.test/run/4",
+            "--reason",
+            "the artifact download failed",
+        ]
+    )
+    assert code == 0
+    assert capsys.readouterr().out.strip() == report.STATUS_FAILED
+    assert "the artifact download failed" in out.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("delta", [1, 3, 40, -1])
 def test_decide_fails_when_the_total_and_the_outcomes_disagree(delta: int) -> None:
     # A positive delta is a mutant that did not finish. A negative one means the outcome counts

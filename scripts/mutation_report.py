@@ -18,6 +18,8 @@ Subcommands:
 
 - ``status --stats FILE --execution success|failure [--out FILE --run-url URL]``:
     print one status word. With ``--out``, also write the issue body to FILE.
+- ``count``: read the same JSON on stdin and print how many issues it holds. A caller
+    compares that count with the ``gh --limit`` cap.
 - ``find``: read ``gh issue list --json number,body,author`` JSON on stdin. Print the
     number of the open report, or print nothing when none exists. Only issues whose
     author is a bot count, so a user cannot hide a report by copying the marker.
@@ -120,7 +122,9 @@ def build_body(
     """Return the Markdown body for the tracking issue.
 
     The body starts with the marker, so a later run finds this issue again. When
-    there are no valid stats, the body names the reason.
+    there are no valid stats, the body names the reason. A reason also appears next to
+    valid counts, because it can name a cause the counts do not show, such as a download
+    that failed after the counts were written.
     """
     lines = [MARKER, "", f"Status: `{status}`", f"Run: {run_url}", ""]
     if stats is None:
@@ -135,12 +139,26 @@ def build_body(
             f"| {counts['killed']} | {counts['survived']} | {counts['timeout']} | "
             f"{counts['total']} | {baseline} | {difference:+d} |",
         ]
+        if reason is not None:
+            lines += ["", f"The run also reported this cause: {reason}."]
     return "\n".join(lines) + "\n"
 
 
 def _is_bot(author: object) -> bool:
     """Return True when gh reports the author as a bot account."""
     return isinstance(author, dict) and author.get("is_bot") is True
+
+
+def count_open(issues_json: str) -> int:
+    """Return how many issues the gh list holds.
+
+    Raise ValueError when the input is not a JSON list. A caller compares the count with the
+    ``gh --limit`` cap, because an entry past the cap is missing from the list.
+    """
+    issues = json.loads(issues_json)
+    if not isinstance(issues, list):
+        raise ValueError("issue list must be a JSON array")
+    return len(issues)
 
 
 def find_open_report(issues_json: str) -> int | None:
@@ -189,6 +207,20 @@ def _find() -> int:
     return 0
 
 
+def _count() -> int:
+    """Print how many issues the gh JSON on stdin holds. Return the exit code."""
+    try:
+        print(count_open(sys.stdin.read()))
+    except ValueError as error:
+        print(
+            f"mutation-report: gh issue list output is not valid: {error}. "
+            "Run gh auth status, then rerun the report step.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     """Build the argument parser for the three subcommands."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
@@ -198,6 +230,8 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--execution", choices=("success", "failure"), required=True)
     status.add_argument("--out", type=Path)
     status.add_argument("--run-url")
+    status.add_argument("--reason", default=None, help="why the run has no valid stats")
+    sub.add_parser("count")
     sub.add_parser("find")
     sub.add_parser("title")
     return parser
@@ -212,9 +246,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "find":
         return _find()
+    if args.command == "count":
+        return _count()
     if args.out is not None and args.run_url is None:
         parser.error("--out needs --run-url for the run link in the body")
     stats, reason = _load_stats(args.stats)
+    # A reason from the caller is more specific, and it names the cause when the stats file is
+    # absent for the same reason. A failed download is the example.
+    if args.reason is not None:
+        reason = args.reason
     status = decide(stats, args.execution, PROVISIONAL_BASELINE)
     if args.out is not None:
         body = build_body(status, stats, PROVISIONAL_BASELINE, args.run_url, reason)
