@@ -89,7 +89,7 @@ Do not change `store/db.py::connect`. The producer path keeps its DDL and WAL se
 
 1. Add a table `fit_labels (label TEXT NOT NULL, fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id), set_at TEXT NOT NULL)`, append-only, through `hockey-model store upgrade`. The newest row of a label wins.
 2. `hockey-model fit ... --label live` saves the fit and adds the label row in one transaction. `scripts/daily-prepare.sh` passes `--label live`.
-3. `hockey-model game` and `hockey-model daily` load the fit with label `live`. A store with no `live` label raises `StoreError` with the fix (`hockey-model fit ... --label live`). `newest_fit` is then dead code: delete it.
+3. `hockey-model game` and `hockey-model daily` load the fit with label `live`. A store with no `live` label raises `StoreError` with the fix (`hockey-model fit ... --label live`). `game` also takes `--fit-id N`, which loads fit `N` in place of the label, so a reader can score a research fit. `newest_fit` is then dead code: delete it.
 4. `FitRef(fit_id=n)` loads that fit. An unknown id raises `UnknownFitError(fit_id)`. `FitRef(label="live")` resolves the label to an id when the store opens.
 5. A `FitRef` with both fields or with neither raises `ValueError`.
 

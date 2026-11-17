@@ -15,6 +15,7 @@ from hockey_model.game_model.seasons import (
 from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.store.reads import unresolved_games
 from hockey_model.store.refresh_nhl import UNRESOLVED_AFTER
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import parse_iso_utc
 
 
@@ -45,7 +46,7 @@ def _expected_seasons(plan: SeasonPlan) -> list[int]:
 
 def _unresolved(conn: sqlite3.Connection) -> Counter[tuple[int, int]]:
     """Count the stored games, by season and game type, not final long after the newest final."""
-    marks = ",".join("?" for _ in FINAL_STATES)
+    marks = placeholders(FINAL_STATES)
     (newest,) = conn.execute(
         f"SELECT MAX(start_utc) FROM latest_games WHERE state IN ({marks})", sorted(FINAL_STATES)
     ).fetchone()

@@ -19,6 +19,7 @@ from hockey_model.sources.espn import InjuryRead
 from hockey_model.sources.nhl import FINAL_STATES, GameRow
 from hockey_model.sources.teams import franchise
 from hockey_model.store.source_reads import ESPN_INJURIES, LIVE_FEED_MAX_AGE
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.team_codes import NHL_TEAM_CODES
 from hockey_model.types import Player, Slot
@@ -47,12 +48,9 @@ def franchise_codes(team: str) -> tuple[str, ...]:
     return tuple(sorted(code for code in NHL_TEAM_CODES if franchise(code) == home))
 
 
-def _cutoff(before: datetime) -> str:
+def result_cutoff(before: datetime) -> str:
+    """Return the latest start of a game that was over by ``before``."""
     return iso_utc(before - RESULT_DELAY)
-
-
-def _marks(values: tuple[str, ...]) -> str:
-    return ",".join("?" for _ in values)
 
 
 def _game_row(row: Sequence[Any]) -> GameRow:
@@ -82,7 +80,7 @@ def final_games_before(conn: sqlite3.Connection, before: datetime) -> list[GameR
     cursor = conn.execute(
         f"SELECT {_GAME_COLUMNS} FROM latest_final_games g WHERE g.start_utc <= ?"
         " ORDER BY g.start_utc, g.game_id",
-        (_cutoff(before),),
+        (result_cutoff(before),),
     )
     return [_game_row(row) for row in cursor]
 
@@ -94,9 +92,9 @@ def team_games_before(
     codes = franchise_codes(team)
     cursor = conn.execute(
         f"SELECT {_GAME_COLUMNS} FROM latest_final_games g WHERE g.start_utc <= ?"
-        f" AND (g.home IN ({_marks(codes)}) OR g.away IN ({_marks(codes)}))"
+        f" AND (g.home IN ({placeholders(codes)}) OR g.away IN ({placeholders(codes)}))"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (_cutoff(before), *codes, *codes, limit),
+        (result_cutoff(before), *codes, *codes, limit),
     )
     return [_game_row(row) for row in cursor]
 
@@ -109,9 +107,9 @@ def goalie_starts_before(
     cursor = conn.execute(
         f"SELECT g.game_id, w.nhl_id FROM latest_final_games g"
         " JOIN goalie_games w ON w.game_id = g.game_id"
-        f" WHERE w.started = 1 AND w.team IN ({_marks(codes)}) AND g.start_utc <= ?"
+        f" WHERE w.started = 1 AND w.team IN ({placeholders(codes)}) AND g.start_utc <= ?"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (*codes, _cutoff(before), limit),
+        (*codes, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 
@@ -143,11 +141,11 @@ def _mp_pairs_before(
     cursor = conn.execute(
         f"SELECT m.{columns[0]}, m.{columns[1]} FROM latest_mp_team_games m"
         " JOIN latest_final_games g ON g.game_id = m.game_id"
-        f" WHERE m.team IN ({_marks(codes)}) AND g.start_utc <= ?"
+        f" WHERE m.team IN ({placeholders(codes)}) AND g.start_utc <= ?"
         # A NULL is an unknown value, such as a version 1 row has for attempt counts.
         f" AND m.{columns[0]} IS NOT NULL AND m.{columns[1]} IS NOT NULL"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (*codes, _cutoff(before), limit),
+        (*codes, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 
@@ -161,7 +159,7 @@ def mp_goalie_form_before(
         " JOIN latest_final_games g ON g.game_id = m.game_id"
         " WHERE m.nhl_id = ? AND g.start_utc <= ?"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (nhl_id, _cutoff(before), limit),
+        (nhl_id, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 
@@ -190,7 +188,7 @@ def unresolved_games(
 
     The newest read of the game decides. The list is in start then id order.
     """
-    marks = _marks(tuple(sorted(FINAL_STATES)))
+    marks = placeholders(tuple(sorted(FINAL_STATES)))
     cursor = conn.execute(
         "SELECT game_id, season, game_type, start_utc FROM latest_games"
         f" WHERE state NOT IN ({marks}) AND start_utc <= ? ORDER BY start_utc, game_id",

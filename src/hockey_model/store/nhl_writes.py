@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from hockey_model.game_day import game_day_window
 from hockey_model.sources.nhl import FINAL_STATES, BoxscoreRows, GameRow
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import iso_utc
 
 
@@ -24,7 +25,7 @@ def _values(row: GameRow) -> tuple[object, ...]:
 
 
 def _newest_reads(conn: sqlite3.Connection, game_ids: list[int]) -> dict[int, tuple[object, ...]]:
-    marks = ",".join("?" for _ in game_ids)
+    marks = placeholders(game_ids)
     cursor = conn.execute(
         "SELECT game_id, season, game_type, start_utc, home, away, state, home_score,"
         f" away_score, last_period FROM latest_games WHERE game_id IN ({marks})",
@@ -132,7 +133,7 @@ def games_missing_boxscore(
     ``last_day`` are Eastern game days, both included. Either may be None. ``game_id`` limits the
     answer to one game. A game counts as final when any stored row of it is final.
     """
-    marks = ",".join("?" for _ in FINAL_STATES)
+    marks = placeholders(FINAL_STATES)
     low = None if first_day is None else iso_utc(game_day_window(first_day)[0])
     high = None if last_day is None else iso_utc(game_day_window(last_day)[1])
     cursor = conn.execute(

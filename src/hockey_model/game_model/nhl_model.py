@@ -4,13 +4,23 @@ import math
 import sqlite3
 from datetime import datetime
 
-from hockey_model.game import Game, GamePrediction, MissingInput, MissingKind
+from hockey_model.game import (
+    Game,
+    GamePrediction,
+    MissingInput,
+    MissingKind,
+    TrainingInfo,
+    TrainingMembership,
+)
+from hockey_model.game_day import game_day_of
 from hockey_model.game_model.elo import replay
 from hockey_model.game_model.features import FORM_WINDOW, GoalieMode, build_features
-from hockey_model.game_model.logistic import LogisticFit, predict_logistic
-from hockey_model.game_model.seasons import ELO_BURN_IN
+from hockey_model.game_model.logistic import predict_logistic
+from hockey_model.game_model.seasons import ELO_BURN_IN, season_of
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
+from hockey_model.store.fits import FitArtifact
+from hockey_model.store.moneypuck_gaps import mp_form_lag
 from hockey_model.store.reads import final_games_before, mp_team_form_before, team_games_before
 from hockey_model.store.staleness import stale_sources
 from hockey_model.types import Projection
@@ -62,6 +72,25 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _training_info(artifact: FitArtifact, game: Game) -> TrainingInfo:
+    """Return the fit that made a prediction, and whether the game trained it.
+
+    The check takes the season from the Eastern game day of the start, as the schedule does.
+    The check is conservative: a fit that trained through a season names every game of that
+    season in-sample, even when the fit read only part of it. A fit that does not record its
+    cutoff gives ``unknown``. ``FitArtifact.covers_season`` holds the season bounds.
+    """
+    cutoff = artifact.fit_through_season
+    covered = artifact.covers_season(season_of(game_day_of(game.start)))
+    if covered is None:
+        membership = TrainingMembership.UNKNOWN
+    elif covered:
+        membership = TrainingMembership.IN_SAMPLE
+    else:
+        membership = TrainingMembership.OUT_OF_SAMPLE
+    return TrainingInfo(artifact.fit_id, cutoff, membership)
+
+
 def _clamp_notes(game: Game, home_rate: float, away_rate: float) -> list[MissingInput]:
     """Name each side whose expected goals are raised to the floor."""
     return [
@@ -77,11 +106,12 @@ class NhlGameModel:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        fit: LogisticFit,
+        artifact: FitArtifact,
         goalie_mode: GoalieMode = GoalieMode.READS,
     ) -> None:
         self._conn = conn
-        self._fit = fit
+        self._artifact = artifact
+        self._fit = artifact.fit
         self._mode = goalie_mode
 
     def _expected_goals(
@@ -105,6 +135,10 @@ class NhlGameModel:
             if not used_xg:
                 note = "the expected goals come from actual goals, not MoneyPuck expected goals"
                 notes.append(MissingInput(MissingKind.XG_FORM, team, note))
+            else:
+                lag = mp_form_lag(self._conn, team, cutoff)
+                if lag is not None:
+                    notes.append(MissingInput(MissingKind.STALE_SOURCE, team, lag.note()))
             rates.append((attack + defence) / 2)
         return rates[0], rates[1], notes, home_xg or away_xg
 
@@ -133,4 +167,5 @@ class NhlGameModel:
             missing=tuple(missing),
             credits=credits,
             degraded_inputs=row.imputed,
+            training=_training_info(self._artifact, game),
         )

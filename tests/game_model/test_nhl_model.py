@@ -6,9 +6,15 @@ import urllib.request
 from datetime import timedelta
 
 import pytest
-from seeding import FETCHED, add_game, add_goalie, add_goalie_form, add_team_form, utc
+from seeding import FETCHED, add_game, add_goalie, add_goalie_form, add_team_form, artifact, utc
 
-from hockey_model.game import Game, MissingKind, game_win_probability
+from hockey_model.game import (
+    Game,
+    MissingKind,
+    TrainingInfo,
+    TrainingMembership,
+    game_win_probability,
+)
 from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.game_model.nhl_model import LEAGUE_GOALS, NhlGameModel
@@ -21,7 +27,7 @@ GAME = Game(100, "TOR", "BOS", START)
 
 
 def model(store: sqlite3.Connection, fit: LogisticFit = ELO_ONLY) -> NhlGameModel:
-    return NhlGameModel(store, fit, GoalieMode.GUESS)
+    return NhlGameModel(store, artifact(fit), GoalieMode.GUESS)
 
 
 def season(store: sqlite3.Connection) -> None:
@@ -274,3 +280,79 @@ def test_the_starter_notes_stay_when_the_fit_has_no_goalie_feature(
     served = LogisticFit(("rest",), 0.0, 1.0, {"rest": 0.1})
     result = model(store, served).predict(GAME, AS_OF, 0.8)
     assert MissingKind.GOALIE_UNKNOWN in {note.kind for note in result.missing}
+
+
+def _training(
+    store: sqlite3.Connection, through: int | None, start: str = "2026-01-20T00:00"
+) -> TrainingInfo:
+    """Return the training marker of one game, for a fit that trained through ``through``."""
+    played = Game(100, "TOR", "BOS", utc(start))
+    marker = (
+        NhlGameModel(store, artifact(ELO_ONLY, through), GoalieMode.GUESS)
+        .predict(played, utc("2026-01-19T16:00"), 0.8)
+        .training
+    )
+    assert marker is not None
+    return marker
+
+
+def test_a_game_in_the_fit_seasons_is_in_sample(store: sqlite3.Connection) -> None:
+    marker = _training(store, 20252026)
+    assert marker == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
+
+
+def test_a_game_in_a_later_season_is_out_of_sample(store: sqlite3.Connection) -> None:
+    marker = _training(store, 20242025)
+    assert marker.membership is TrainingMembership.OUT_OF_SAMPLE
+
+
+def test_a_game_in_the_season_after_the_cutoff_is_out_of_sample(
+    store: sqlite3.Connection,
+) -> None:
+    marker = _training(store, 20252026, start="2026-10-13T23:00")
+    assert marker.membership is TrainingMembership.OUT_OF_SAMPLE
+
+
+def test_a_burn_in_season_game_is_out_of_sample(store: sqlite3.Connection) -> None:
+    """The fit reads no game of 2014-15, so the Elo burn-in season did not train it."""
+    marker = _training(store, 20252026, start="2015-01-20T00:00")
+    assert marker.membership is TrainingMembership.OUT_OF_SAMPLE
+
+
+def test_a_fit_with_no_cutoff_says_the_membership_is_unknown(
+    store: sqlite3.Connection,
+) -> None:
+    marker = _training(store, None)
+    assert marker == TrainingInfo(1, None, TrainingMembership.UNKNOWN)
+
+
+def test_the_as_of_time_does_not_clear_the_in_sample_marker(
+    store: sqlite3.Connection,
+) -> None:
+    played = Game(100, "TOR", "BOS", utc("2026-01-20T00:00"))
+    served = NhlGameModel(store, artifact(ELO_ONLY, 20252026), GoalieMode.GUESS)
+    late = game_win_probability(played, served, as_of=utc("2026-01-21T00:00"))
+    assert late.made_after_start
+    assert late.training is not None
+    assert late.training.membership is TrainingMembership.IN_SAMPLE
+
+
+def test_the_eastern_game_day_decides_the_season_near_the_boundary(
+    store: sqlite3.Connection,
+) -> None:
+    """A 02:00 UTC game on Sep 1 is Aug 31 in the East, so it is still season 2025-26."""
+    marker = _training(store, 20252026, start="2026-09-01T02:00")
+    assert marker.membership is TrainingMembership.IN_SAMPLE
+
+
+def test_a_team_whose_moneypuck_form_lags_gets_a_note(store: sqlite3.Connection) -> None:
+    # TOR has a MoneyPuck row only for game 15, and games 17 and 18 are final. MTL is current.
+    for day in (15, 17, 18):
+        add_game(store, day, f"2026-01-{day}T00:00", home="TOR", away="MTL")
+        add_team_form(store, day, "MTL", 2.0, 3.0)
+    add_team_form(store, 15, "TOR", 3.5, 2.0)
+    played = Game(100, "TOR", "MTL", START)
+    notes = [m.note for m in model(store).predict(played, AS_OF, 0.8).missing]
+    assert [note for note in notes if "MoneyPuck form" in note] == [
+        "MoneyPuck form is 2 stored games behind; newest MoneyPuck game 15, newest final game 18"
+    ]

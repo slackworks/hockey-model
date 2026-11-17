@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from seeding import add_game, add_goalie, add_team_form, utc
+from seeding import add_game, add_goalie, add_team_form, artifact, utc
 
 from hockey_model.daily_report import (
     DailyLine,
@@ -21,7 +21,13 @@ from hockey_model.daily_report import (
     report_tag,
     write_report,
 )
-from hockey_model.game import DegradedInput, GamePrediction, MissingKind
+from hockey_model.game import (
+    DegradedInput,
+    GamePrediction,
+    MissingKind,
+    TrainingInfo,
+    TrainingMembership,
+)
 from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY, FitDiagnostics, LogisticFit
 from hockey_model.game_model.nhl_model import NhlGameModel
@@ -33,7 +39,7 @@ NOW = utc("2026-01-20T12:00")
 
 
 def _model(store: sqlite3.Connection) -> NhlGameModel:
-    return NhlGameModel(store, ELO_ONLY, GoalieMode.GUESS)
+    return NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.GUESS)
 
 
 def _seed_form(store: sqlite3.Connection) -> None:
@@ -144,7 +150,7 @@ def test_a_finished_game_in_reads_mode_names_the_boxscore_starter(
     add_game(store, 22, "2026-01-20T11:00", "TOR", "BOS", state="FINAL")
     add_goalie(store, 22, "TOR", 8001, "A. Home")
     add_goalie(store, 22, "BOS", 8002, "B. Away")
-    model = NhlGameModel(store, ELO_ONLY, GoalieMode.READS)
+    model = NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.READS)
     (line,) = build_report(store, model, DAY, now=NOW).lines
     assert line.prediction is not None
     notes = [m.note for m in line.prediction.missing if m.kind == MissingKind.LATE_RUN]
@@ -248,6 +254,33 @@ def test_report_without_a_model_says_null(store: sqlite3.Connection) -> None:
     report = build_report(store, _model(store), DAY, now=NOW)
     assert report_json(report)["model"] is None
     assert "Model:" not in report_markdown(report)
+
+
+def test_json_names_the_training_membership_of_a_prediction() -> None:
+    marker = TrainingInfo(7, 20252026, TrainingMembership.IN_SAMPLE)
+    predicted = replace(_prediction(0), training=marker)
+    lines = (DailyLine(_row(1), predicted, ""), DailyLine(_row(2), None, "over"))
+    games = report_json(DailyReport(DAY, NOW, 0.8, lines))["games"]
+    assert games[0]["training"] == {
+        "fit_id": 7,
+        "fit_through_season": 20252026,
+        "membership": "in_sample",
+    }
+    assert games[1]["training"] is None
+
+
+def test_the_markdown_names_an_in_sample_game_before_the_gaps() -> None:
+    marker = TrainingInfo(7, 20252026, TrainingMembership.IN_SAMPLE)
+    predicted = replace(_prediction(0), training=marker)
+    report = DailyReport(DAY, NOW, 0.8, (DailyLine(_row(1), predicted, ""),))
+    assert "in_sample: fit 7 trained through season 20252026" in report_markdown(report)
+
+
+def test_an_out_of_sample_game_gets_no_marker() -> None:
+    marker = TrainingInfo(7, 20242025, TrainingMembership.OUT_OF_SAMPLE)
+    predicted = replace(_prediction(0), training=marker)
+    report = DailyReport(DAY, NOW, 0.8, (DailyLine(_row(1), predicted, ""),))
+    assert "in_sample" not in report_markdown(report)
 
 
 def test_json_lists_the_degraded_inputs_of_a_prediction() -> None:

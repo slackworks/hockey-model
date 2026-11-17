@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from hockey_model.sources.teams import franchise
-from hockey_model.store.reads import RESULT_DELAY
-from hockey_model.store.timestamps import iso_utc
+from hockey_model.store.reads import result_cutoff
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +40,7 @@ def goalie_membership_before(
     ``goalie_starts_before``.
     """
     home = franchise(team)
-    cutoff = iso_utc(before - RESULT_DELAY)
+    cutoff = result_cutoff(before)
     departed: set[int] = set()
     conflicting: set[int] = set()
     for nhl_id in sorted(nhl_ids):

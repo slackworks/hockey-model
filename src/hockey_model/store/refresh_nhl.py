@@ -25,6 +25,7 @@ from hockey_model.store.source_reads import (
     last_ok_read,
     newest_read,
 )
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import parse_iso_utc
 
 SCORES = "nhl_scores"
@@ -84,7 +85,7 @@ def _failed_days(run: RefreshRun) -> list[date]:
 def _first_day(run: RefreshRun) -> date:
     if run.backfill_from is not None:
         return run.backfill_from
-    marks = ",".join("?" for _ in FINAL_STATES)
+    marks = placeholders(FINAL_STATES)
     (newest,) = run.conn.execute(
         f"SELECT MAX(start_utc) FROM games WHERE state IN ({marks})", sorted(FINAL_STATES)
     ).fetchone()

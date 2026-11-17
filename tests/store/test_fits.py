@@ -12,33 +12,36 @@ from hypothesis import strategies as st
 from hockey_model.game_model.features import ALL_FEATURE_NAMES, feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
 from hockey_model.store.db import StoreError
-from hockey_model.store.fits import newest_fit, save_fit
+from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def test_newest_fit_missing_raises(store: sqlite3.Connection) -> None:
-    with pytest.raises(StoreError, match="run `hockey-model fit` first"):
-        newest_fit(store)
+def _loaded(conn: sqlite3.Connection, fit_id: int) -> LogisticFit:
+    """Return the fit that ``fit_id`` names, as the old `newest_fit` returned a bare fit."""
+    return load_fit(conn, FitRef(fit_id=fit_id)).fit
 
 
 def test_save_and_load_a_fit(store: sqlite3.Connection) -> None:
     fit = LogisticFit(("xg_form", "rest"), 0.1, 0.9, {"xg_form": 2.5, "rest": -0.05})
-    save_fit(store, fit, 20252026, T0, [])
-    assert newest_fit(store) == fit
+    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+    assert _loaded(store, fit_id) == fit
 
 
-def test_the_newest_fit_wins(store: sqlite3.Connection) -> None:
+def test_a_fit_loads_by_its_own_id_not_by_its_save_order(
+    store: sqlite3.Connection,
+) -> None:
     old = LogisticFit((), 0.0, 1.0, {})
     new = LogisticFit(("rest",), 0.2, 1.1, {"rest": 0.01})
-    save_fit(store, new, 20252026, T0 + timedelta(days=1), [])
-    save_fit(store, old, 20242025, T0, [])
-    assert newest_fit(store) == new
+    save_fit(store, FitRecord(new, 20252026, T0 + timedelta(days=1)))
+    old_id = save_fit(store, FitRecord(old, 20242025, T0))
+    assert _loaded(store, old_id) == old
 
 
 def test_save_fit_returns_increasing_ids(store: sqlite3.Connection) -> None:
     fit = LogisticFit((), 0.0, 1.0, {})
-    assert save_fit(store, fit, 20252026, T0, []) < save_fit(store, fit, 20252026, T0, [])
+    first = save_fit(store, FitRecord(fit, 20252026, T0))
+    assert first < save_fit(store, FitRecord(fit, 20252026, T0))
 
 
 @pytest.mark.parametrize(
@@ -59,7 +62,7 @@ def test_a_malformed_saved_fit_says_to_fit_again(
         (features, weights),
     )
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
-        newest_fit(store)
+        load_fit(store, FitRef(fit_id=1))
 
 
 DIAGNOSTICS = FitDiagnostics(
@@ -85,19 +88,19 @@ _INSERT = (
 
 def test_diagnostics_survive_a_save_and_load(store: sqlite3.Connection) -> None:
     fit = LogisticFit(("rest",), 0.1, 0.9, {"rest": 0.02}, DIAGNOSTICS)
-    save_fit(store, fit, 20252026, T0, [])
-    assert newest_fit(store) == fit
+    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+    assert _loaded(store, fit_id) == fit
 
 
 def test_a_fit_saved_without_diagnostics_loads_with_none(store: sqlite3.Connection) -> None:
     store.execute(_INSERT, (_NO_DIAGNOSTICS,))
-    assert newest_fit(store).diagnostics is None
+    assert _loaded(store, 1).diagnostics is None
 
 
 def test_malformed_diagnostics_say_to_fit_again(store: sqlite3.Connection) -> None:
     store.execute(_INSERT, (_BAD_DIAGNOSTICS,))
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
-        newest_fit(store)
+        load_fit(store, FitRef(fit_id=1))
 
 
 _FINITE = st.floats(allow_nan=False, allow_infinity=False)
@@ -117,8 +120,8 @@ def test_any_diagnostics_round_trip_through_the_store(
         iterations, objective, gradient_norm, condition, l2, scaling, dict(scaling), "stop"
     )
     fit = LogisticFit((), 0.0, 1.0, {}, diagnostics)
-    save_fit(store, fit, 20252026, T0, [])
-    assert newest_fit(store) == fit
+    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+    assert _loaded(store, fit_id) == fit
 
 
 @pytest.mark.parametrize(
@@ -138,7 +141,7 @@ def test_a_saved_fit_with_a_value_that_is_not_finite_says_to_fit_again(
         (weights,),
     )
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
-        newest_fit(store)
+        load_fit(store, FitRef(fit_id=1))
 
 
 @pytest.mark.parametrize(
@@ -158,7 +161,7 @@ def test_a_saved_fit_whose_features_and_weights_disagree_says_to_fit_again(
         (features, weights),
     )
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
-        newest_fit(store)
+        load_fit(store, FitRef(fit_id=1))
 
 
 _WEIGHT = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False)
@@ -178,8 +181,8 @@ def test_any_fit_round_trips_through_the_store(
 ) -> None:
     weights = {name: data.draw(_WEIGHT) for name in features}
     fit = LogisticFit(tuple(features), intercept, elo_weight, weights)
-    save_fit(store, fit, 20252026, T0, [])
-    assert newest_fit(store) == fit
+    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+    assert _loaded(store, fit_id) == fit
 
 
 def _row_count(store: sqlite3.Connection) -> int:
@@ -200,7 +203,7 @@ def test_save_fit_refuses_an_invalid_fit_and_leaves_no_row(
     store: sqlite3.Connection, fit: LogisticFit, reason: str
 ) -> None:
     with pytest.raises(StoreError, match=f"save the model fit.*{reason}"):
-        save_fit(store, fit, 20252026, T0, [])
+        save_fit(store, FitRecord(fit, 20252026, T0))
     assert _row_count(store) == 0
 
 
@@ -216,7 +219,7 @@ def test_a_saved_fit_with_a_removed_feature_says_it_is_incompatible(
         ),
     )
     with pytest.raises(StoreError, match="unknown feature 'old_feature'.*run `hockey-model fit`"):
-        newest_fit(store)
+        load_fit(store, FitRef(fit_id=1))
 
 
 _NAMES = st.lists(st.one_of(st.sampled_from(ALL_FEATURE_NAMES), st.text(max_size=6)), max_size=5)
@@ -247,11 +250,11 @@ def test_save_fit_accepts_a_fit_exactly_when_it_follows_the_four_rules(
     )
     before = _row_count(store)
     if valid:
-        save_fit(store, fit, 20252026, T0, [])
+        save_fit(store, FitRecord(fit, 20252026, T0))
         assert _row_count(store) == before + 1
     else:
         with pytest.raises(StoreError):
-            save_fit(store, fit, 20252026, T0, [])
+            save_fit(store, FitRecord(fit, 20252026, T0))
         assert _row_count(store) == before
 
 

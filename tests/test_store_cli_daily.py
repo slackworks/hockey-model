@@ -11,7 +11,7 @@ from hockey_model.cli import main
 from hockey_model.game_model.logistic import ELO_ONLY
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.db import connect
-from hockey_model.store.fits import save_fit
+from hockey_model.store.fits import FitRecord, save_fit
 
 
 def _row(game_id: int, start: str) -> GameRow:
@@ -142,7 +142,7 @@ def test_daily_names_the_fit_and_the_commit(
 ) -> None:
     db = tmp_path / "store.db"
     conn = connect(db)
-    save_fit(conn, ELO_ONLY, 20252026, datetime(2026, 11, 1, tzinfo=UTC), [])
+    save_fit(conn, FitRecord(ELO_ONLY, 20252026, datetime(2026, 11, 1, tzinfo=UTC), label="live"))
     conn.close()
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
     monkeypatch.setenv("GITHUB_SHA", "c0ffee")
