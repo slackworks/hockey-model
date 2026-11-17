@@ -74,6 +74,10 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ "$*" == "run python3 scripts/mutation_report.py"* ]]; then\n'
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
+        'if [[ "$*" == "run hockey-model store upgrade"* ]]; then\n'
+        '  if [[ -n "${FAKE_UPGRADE_FAIL:-}" ]]; then echo "upgrade boom" >&2; exit 2; fi\n'
+        '  printf "{\\"changed\\": true, \\"to_version\\": 3}"; exit 0\n'
+        "fi\n"
         'if [[ "$*" == "run hockey-model refresh --backfill-from"* ]]; then\n'
         '  if [[ -n "${FAKE_REFRESH_FAIL:-}" ]]; then\n'
         '    printf "{\\"errors\\": [\\"boom\\"]}"; exit 1\n'

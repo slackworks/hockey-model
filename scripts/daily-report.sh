@@ -81,6 +81,9 @@ store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$out_dir"
 # A marker from an earlier run in this directory must not stand for this run.
 rm -f "$out_dir/complete"
+# The cache may restore a store that older code wrote, because the prepare run can save one.
+# The upgrade keeps every row and writes a backup, so the steps below read a current store.
+bash "$(dirname "$0")/upgrade-store.sh"
 if [[ ! -f "$store_dir/prepared-$day" ]]; then
   # The prep job runs each morning. A run hours before the first puck drop finds no marker yet,
   # so that run skips. Inside the prep window the same missing marker still fails below.

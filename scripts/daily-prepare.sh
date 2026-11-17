@@ -59,6 +59,10 @@ day="${day:-$(TZ=America/New_York date +%F)}"
 store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$store_dir"
 
+# The cache restores a store that older code wrote. The upgrade keeps every row and writes a
+# backup, so the run continues on the same store instead of stopping at the version check.
+bash "$(dirname "$0")/upgrade-store.sh"
+
 # The marker is written only after a backfill finishes. A store file without it is partial.
 if ! command -v jq >/dev/null; then
   echo "daily-prepare: jq is not installed; it reads the refresh report and live_features" >&2

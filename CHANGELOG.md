@@ -67,6 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Upgrade the restored store at the start of `daily-prepare.sh` and `daily-report.sh`. The store cache holds a file that older code wrote, and the schema version check refused it, so every scheduled prepare run from the version 3 bump to this fix stopped before it read a source and no daily report was written. [fix:store]
 - Leave the same count of bootstrap means outside each end of the interval. The upper end moved one rank lower, so a promotion needs a slightly stricter result. [fix:backtest]
 - Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
 - Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
