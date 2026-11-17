@@ -77,6 +77,10 @@ _NEXT_STEP = (
     "until it runs, the attempt-form features are empty and every game counts as missing"
 )
 _SKIP_NOTE = "no store file there yet; the first refresh creates it at the current version"
+# Only the 1->2 step leaves the attempt counts empty. A store that started at version 2 or
+# later already has its counts, so a later step carries no reread instruction.
+_EMPTY_ATTEMPTS_FROM = 1
+_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM mp_team_games WHERE attempts_known = 0"
 
 
 @dataclass(frozen=True)
@@ -84,8 +88,10 @@ class UpgradeReport:
     """The outcome of one upgrade run.
 
     ``backup_path`` is the backup this run wrote. When nothing changed, it is the backup of
-    the last upgrade that the ledger records, or None when there is none.
+    the last upgrade that the ledger records, or None when there is none. The workflow drops
+    that file after the run, so a no-op report can name a backup that is gone.
     ``from_version`` is None when there is no store file and the caller allowed a skip.
+    ``next_step`` is a command to run, or None. ``note`` is a statement about the run.
     """
 
     path: str
@@ -94,6 +100,7 @@ class UpgradeReport:
     changed: bool
     backup_path: str | None
     next_step: str | None = None
+    note: str | None = None
 
 
 def _check_path(path: Path, if_missing: str) -> bool:
@@ -238,7 +245,7 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
     an unchanged report so a first run can continue to the refresh that creates the store.
     """
     if _check_path(path, if_missing):
-        return UpgradeReport(str(path), None, SCHEMA_VERSION, False, None, _SKIP_NOTE)
+        return UpgradeReport(str(path), None, SCHEMA_VERSION, False, None, note=_SKIP_NOTE)
     conn = sqlite3.connect(path, isolation_level=None)
     try:
         # The write lock is held before the version is read and before the copy is made.
@@ -256,9 +263,23 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
         _rebuild_views(conn, path, backup)
+        next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
     finally:
         conn.close()
-    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), _NEXT_STEP)
+    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step)
+
+
+def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
+    """Return True when the upgrade left a MoneyPuck attempt count empty.
+
+    The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
+    A store that started at version 2 or later keeps its counts, so a later step needs no
+    reread even though it changed the schema.
+    """
+    if stored < _EMPTY_ATTEMPTS_FROM + 1:
+        return True
+    row = conn.execute(_EMPTY_ATTEMPTS_SQL).fetchone()
+    return row is not None and int(row[0]) > 0
 
 
 def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:

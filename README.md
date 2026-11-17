@@ -129,6 +129,8 @@ It keeps every row and every fit ID.
 The default `--if-missing fail` names a store file that does not exist.
 `--if-missing skip` exits 0 and reports that there is no store yet, for a first run that writes one later.
 It first writes a backup beside the store, named `<store>.v<version>.bak`, and it never overwrites an earlier backup.
+The daily workflows delete that backup before they save the store to the cache, so a later no-op report can name a backup that is no longer there.
+`--if-missing skip` reports `from_version: null` and a `note`, and never a `next_step`.
 The change runs in one transaction, so a failure leaves the store as it was.
 The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote, so the attempt-form features skip those rows.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.

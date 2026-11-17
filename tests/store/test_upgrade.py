@@ -157,7 +157,8 @@ def test_if_missing_skip_returns_without_creating_the_file(tmp_path: Path) -> No
     path = tmp_path / "absent.db"
     report = upgrade_store(path, if_missing="skip")
     assert (report.from_version, report.to_version, report.changed) == (None, SCHEMA_VERSION, False)
-    assert report.next_step is not None and "first refresh" in report.next_step
+    assert report.next_step is None
+    assert report.note is not None and "first refresh" in report.note
     assert not path.exists()
 
 
@@ -357,6 +358,26 @@ def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
     assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
     assert version_of(v2) == SCHEMA_VERSION
+    # The 2->3 step adds the label table and leaves every attempt count alone.
+    assert report.next_step is None
+
+
+def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction(
+    tmp_path: Path,
+) -> None:
+    """A row the 1->2 step wrote keeps NULL counts, so the reread is a real step to take."""
+    v2 = make_v2_store(tmp_path / "store.db")
+    conn = sqlite3.connect(v2)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " '2026-01-02T00:00:00Z', 0)"
+    )
+    conn.commit()
+    conn.close()
+    report = upgrade_store(v2)
+    assert report.next_step is not None
+    assert "hockey-model refresh --reread-moneypuck" in report.next_step
 
 
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
