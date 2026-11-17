@@ -25,13 +25,14 @@ from hockey_model.consumer_errors import (
 )
 from hockey_model.consumer_types import FULL_GAME_WINNER, RESTATEMENT, GameInfo
 from hockey_model.game import TrainingInfo, TrainingMembership
+from hockey_model.game_day import game_day_window
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.db import SCHEMA_VERSION, connect
 from hockey_model.store.fits import FitRecord, FitRef, save_fit
 from hockey_model.store.nhl_writes import write_games
-from hockey_model.store.source_reads import record_read
+from hockey_model.store.source_reads import LIVE_FEED_MAX_AGE, record_read
 from hockey_model.types import HockeyModelError
 
 DAY = date(2026, 1, 20)
@@ -314,6 +315,30 @@ def test_a_full_slate_of_sixteen_games_is_read_in_one_snapshot(store_path: Path)
     assert len(results) == 16
 
 
+def _window_edges(conn: sqlite3.Connection) -> None:
+    """Store a game at each edge of the game-day window, and one a minute outside each edge."""
+    opens, closes = game_day_window(DAY)
+    for game_id, moment in enumerate(
+        (
+            opens - timedelta(minutes=1),
+            opens,
+            closes - timedelta(minutes=1),
+            closes,
+        ),
+        start=200,
+    ):
+        add_game(conn, game_id, moment.strftime("%Y-%m-%dT%H:%M"), state="FUT")
+
+
+def test_games_on_day_takes_the_open_edge_and_leaves_the_close_edge(store_path: Path) -> None:
+    # The window is half-open. A game at the opening instant belongs to the day, and a game at
+    # the closing instant belongs to the next day.
+    _write(store_path, _window_edges)
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        # 201 opens the day, 202 is one minute before it closes, and 200 and 203 sit outside.
+        assert [info.game_id for info in consumer.games_on_day(DAY)] == [201, 2, 202]
+
+
 def _injury_list(conn: sqlite3.Connection) -> None:
     add_injury(conn, "TOR", "Auston Matthews", "OUT", "2026-01-20T09:00")
 
@@ -342,6 +367,19 @@ def test_an_injury_list_older_than_the_live_feed_limit_is_not_used(store_path: P
         assert consumer.injuries(as_of=NOW) == ()
         reads = dict(consumer.store.newest_reads)
         assert reads["espn_injuries"] == utc("2026-01-17T12:00")
+
+
+def test_an_injury_list_exactly_at_the_age_limit_is_used(store_path: Path) -> None:
+    # The rule refuses a list older than LIVE_FEED_MAX_AGE, so a list at the limit is still
+    # used. The off-by-one matters: the morning run reads the list once a day.
+    _write(
+        store_path,
+        lambda conn: add_injury(
+            conn, "TOR", "Auston Matthews", "OUT", (NOW - LIVE_FEED_MAX_AGE).isoformat()
+        ),
+    )
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        assert len(consumer.injuries(as_of=NOW)) == 1
 
 
 def test_store_info_lists_a_source_that_every_read_of_failed(store_path: Path) -> None:
