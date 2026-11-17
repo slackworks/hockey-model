@@ -11,6 +11,7 @@ from typing import Any
 from hockey_model.consumer_errors import UnknownFitError
 from hockey_model.game_model.features import feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
+from hockey_model.game_model.seasons import FIT_FIRST
 from hockey_model.store.db import StoreError
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
@@ -31,8 +32,16 @@ class FitRef:
             raise ValueError("a FitRef sets exactly one of fit_id or label")
         if self.fit_id is not None and self.fit_id <= 0:
             raise ValueError(f"fit_id must be positive, got {self.fit_id}")
-        if self.label is not None and not self.label.strip():
-            raise ValueError("label must not be blank")
+        if self.label is not None:
+            # The blank test matches `_insert_label`, so a label that a reader can type is the
+            # only label that a ref accepts.
+            if not self.label.strip():
+                raise ValueError("label must not be blank")
+            if self.label != self.label.strip():
+                raise ValueError(
+                    f"label must not carry spaces around it, got {self.label!r}; "
+                    "give a name such as 'live'"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +59,14 @@ class FitArtifact:
     labels: tuple[str, ...] = ()
 
     def covers_season(self, season: int) -> bool | None:
-        """Return whether ``season`` trained this fit, or None when the cutoff is unknown."""
+        """Return whether ``season`` trained this fit, or None when the cutoff is unknown.
+
+        The fit reads the seasons from ``FIT_FIRST``, so an earlier season trained no fit, even
+        when its games sit below the cutoff. The Elo burn-in season is the case that matters.
+        """
         if self.fit_through_season is None:
             return None
-        return season <= self.fit_through_season
+        return FIT_FIRST <= season <= self.fit_through_season
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,11 +188,17 @@ def _fit_id_of_label(conn: sqlite3.Connection, label: str) -> int:
 
 
 def _labels_of(conn: sqlite3.Connection, fit_id: int) -> tuple[str, ...]:
-    """Return every label that serves ``fit_id`` now, in label order."""
+    """Return the labels that serve ``fit_id`` now, in label order.
+
+    A label that moved to a newer fit stays in the table, because the rows are kept. It no
+    longer names this fit, so it is not returned.
+    """
     rows = conn.execute(
-        "SELECT label, fit_id FROM fit_labels WHERE fit_id = ? ORDER BY label", (fit_id,)
+        "SELECT f.label FROM fit_labels f WHERE f.fit_id = ? AND f.rowid ="
+        " (SELECT MAX(g.rowid) FROM fit_labels g WHERE g.label = f.label) ORDER BY f.label",
+        (fit_id,),
     )
-    return tuple(label for label, _ in rows)
+    return tuple(label for (label,) in rows)
 
 
 def _build_fit(features: str, weights: str) -> LogisticFit:

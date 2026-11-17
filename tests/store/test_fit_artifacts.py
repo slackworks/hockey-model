@@ -36,6 +36,12 @@ def test_a_label_must_not_be_blank(label: str) -> None:
         FitRef(label=label)
 
 
+def test_a_ref_refuses_a_padded_label_as_a_saved_label_does() -> None:
+    # A saved label with a space cannot be typed back as a ref, so the ref refuses it early.
+    with pytest.raises(ValueError, match="must not carry spaces around it"):
+        FitRef(label=" live ")
+
+
 def test_load_by_id_returns_the_fit_and_its_provenance(store: sqlite3.Connection) -> None:
     fit = _fit()
     fit_id = save_fit(store, FitRecord(fit, 20252026, T0, label="live"))
@@ -84,9 +90,17 @@ def test_a_label_moves_and_keeps_every_earlier_row(store: sqlite3.Connection) ->
     second = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0 + timedelta(days=1)))
     label_fit(store, first, "live", T0)
     label_fit(store, second, "live", T0 + timedelta(days=1))
-    assert load_fit(store, FitRef(fit_id=first)).labels == ("live",)
+    assert load_fit(store, FitRef(fit_id=first)).labels == ()
+    assert load_fit(store, FitRef(fit_id=second)).labels == ("live",)
+    assert load_fit(store, FitRef(label="live")).fit_id == second
     rows = store.execute("SELECT fit_id, label FROM fit_labels ORDER BY rowid").fetchall()
     assert rows == [(first, "live"), (second, "live")]
+
+
+def test_one_fit_carries_several_labels(store: sqlite3.Connection) -> None:
+    fit_id = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0, label="live"))
+    label_fit(store, fit_id, "reviewed", T0 + timedelta(days=1))
+    assert load_fit(store, FitRef(fit_id=fit_id)).labels == ("live", "reviewed")
 
 
 def test_labelling_an_unknown_fit_raises(store: sqlite3.Connection) -> None:
