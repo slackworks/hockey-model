@@ -8,7 +8,7 @@ import pytest
 from hockey_model.consumer_errors import UnknownFitError
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.store.db import StoreError
-from hockey_model.store.fits import FitRecord, FitRef, label_fit, load_fit, save_fit
+from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -86,10 +86,8 @@ def test_a_newer_label_free_fit_does_not_replace_the_labelled_one(
 
 
 def test_a_label_moves_and_keeps_every_earlier_row(store: sqlite3.Connection) -> None:
-    first = save_fit(store, FitRecord(_fit("xg_form"), 20252026, T0))
-    second = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0 + timedelta(days=1)))
-    label_fit(store, first, "live", T0)
-    label_fit(store, second, "live", T0 + timedelta(days=1))
+    first = save_fit(store, FitRecord(_fit("xg_form"), 20252026, T0, label="live"))
+    second = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0 + timedelta(days=1), label="live"))
     assert load_fit(store, FitRef(fit_id=first)).labels == ()
     assert load_fit(store, FitRef(fit_id=second)).labels == ("live",)
     assert load_fit(store, FitRef(label="live")).fit_id == second
@@ -99,21 +97,18 @@ def test_a_label_moves_and_keeps_every_earlier_row(store: sqlite3.Connection) ->
 
 def test_one_fit_carries_several_labels(store: sqlite3.Connection) -> None:
     fit_id = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0, label="live"))
-    label_fit(store, fit_id, "reviewed", T0 + timedelta(days=1))
+    store.execute(
+        "INSERT INTO fit_labels (label, fit_id, set_at) VALUES (?,?,?)",
+        ("reviewed", fit_id, "2026-01-02T00:00:00.000000+00:00"),
+    )
     assert load_fit(store, FitRef(fit_id=fit_id)).labels == ("live", "reviewed")
-
-
-def test_labelling_an_unknown_fit_raises(store: sqlite3.Connection) -> None:
-    save_fit(store, FitRecord(ELO_ONLY, 20252026, T0))
-    with pytest.raises(UnknownFitError, match="fit 99"):
-        label_fit(store, 99, "live", T0)
 
 
 @pytest.mark.parametrize("label", ["", " live "])
 def test_a_stored_label_must_not_be_blank_or_padded(store: sqlite3.Connection, label: str) -> None:
-    fit_id = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0))
     with pytest.raises(ValueError, match="label"):
-        label_fit(store, fit_id, label, T0)
+        save_fit(store, FitRecord(ELO_ONLY, 20252026, T0, label=label))
+    assert store.execute("SELECT COUNT(*) FROM model_fits").fetchone() == (0,)
 
 
 def test_a_fit_saved_without_a_through_season_loads_with_none(

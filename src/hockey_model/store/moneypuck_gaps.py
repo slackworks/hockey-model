@@ -63,7 +63,6 @@ class FormLag:
     game ids, so a reader can tell a one-week gap from a gap of the whole season.
     """
 
-    team: str
     games_behind: int
     newest_moneypuck: int
     newest_final: int
@@ -130,4 +129,4 @@ def mp_form_lag(conn: sqlite3.Connection, team: str, before: datetime) -> FormLa
         " AND g.start_utc <= ? AND g.start_utc > ?",
         (*codes, *codes, cutoff, mp_start),
     ).fetchone()
-    return FormLag(team, behind, mp_game, final_game)
+    return FormLag(behind, mp_game, final_game)

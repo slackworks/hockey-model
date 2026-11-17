@@ -148,12 +148,6 @@ def load_fit(conn: sqlite3.Connection, ref: FitRef) -> FitArtifact:
     )
 
 
-def label_fit(conn: sqlite3.Connection, fit_id: int, label: str, set_at: datetime) -> None:
-    """Record that ``label`` serves fit ``fit_id`` from ``set_at``. The newest row wins."""
-    with conn:
-        _insert_label(conn, fit_id, label, set_at)
-
-
 def _insert_label(conn: sqlite3.Connection, fit_id: int, label: str, set_at: datetime) -> None:
     """Add one label row. A blank or padded label is refused, because a reader types it."""
     if not label or label != label.strip():
@@ -161,9 +155,6 @@ def _insert_label(conn: sqlite3.Connection, fit_id: int, label: str, set_at: dat
             f"label must not be blank or carry spaces around it, got {label!r}; "
             "give a name such as 'live'"
         )
-    known = conn.execute("SELECT 1 FROM model_fits WHERE fit_id = ?", (fit_id,)).fetchone()
-    if known is None:
-        raise UnknownFitError(f"label fit {fit_id} as {label!r}: fit {fit_id} is not in the store")
     conn.execute(
         "INSERT INTO fit_labels (label, fit_id, set_at) VALUES (?,?,?)",
         (label, fit_id, iso_utc(set_at)),
