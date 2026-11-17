@@ -124,13 +124,14 @@ HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model backtest --games-out
 - `fit --through-season YYYYYYYY --features a,b` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, `rest`, and `attempt_form` (the leak test of #77).
 - `game GAME_ID [--level L] [--fit-id N]` prints the prediction of one stored game with the fit labelled `live`, or with fit `N` when `--fit-id` is given.
 - `backtest [--games-out PATH] [--candidates {xg,attempt}]` runs the walk-forward backtest and prints a JSON report. `--games-out` writes one CSV row for each scored game and run. `--candidates attempt` replaces `xg_form` with the shot-attempt form, the leak test in #77.
-- `store upgrade [--db PATH]` moves a version 1 store to the current schema.
+- `store upgrade [--db PATH]` moves an older store to the current schema, one version at a time.
 It keeps every row and every fit ID.
-It first writes a backup beside the store, named `<store>.v1.bak`, and it never overwrites an earlier backup.
+It first writes a backup beside the store, named `<store>.v<version>.bak`, and it never overwrites an earlier backup.
 The change runs in one transaction, so a failure leaves the store as it was.
 The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote, so the attempt-form features skip those rows.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.
-Opening a store never migrates it, so a consumer on a version 1 store fails and names this command.
+Opening a store never migrates it, so a consumer on an old store fails and names this command.
+The daily prepare and report scripts run this command on the store that the workflow cache restores.
 Upgrade the producer first, then the consumers.
 After the upgrade, run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest.
 Until that refresh runs, the attempt-form features are empty.
