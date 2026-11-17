@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `open_store`, a read-only consumer API that pins one saved fit, reads one snapshot, and predicts a game or lists a day's games. `FitRef` selects the fit by id or by label, and `LIVE_LABEL` names the live fit. [feat:api]
+- Add `GamePrediction.training`, which names the fit and says whether the game is `in_sample`, `out_of_sample`, or `unknown` for it. The CLI JSON, the daily report JSON, the report Markdown, and the consumer result carry it. [feat:model]
 - Add a refresh note that counts the MoneyPuck rows that match no stored game, and the rows whose game is not final yet, and add a `stale_source` note to a prediction whose team's newest MoneyPuck game is older than its newest final game. [feat:store]
 - Add a note to the run payload that says why a run is inconclusive when its interval is wider than the expected effect. [feat:experiments]
 - Fail a confirmation run, before it writes any file, when the games scored differ from the cohort count or the run has no interval. [feat:experiments]
