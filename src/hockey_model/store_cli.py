@@ -16,8 +16,8 @@ from hockey_model.game_model.features import GoalieMode, feature_name_problem
 from hockey_model.game_model.imputation import check_imputation
 from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
-from hockey_model.game_model.seasons import FIT_FIRST, season_of
-from hockey_model.game_model.training import game_input, training_rows
+from hockey_model.game_model.seasons import FIT_FIRST
+from hockey_model.game_model.training import game_input, last_trained_season, training_rows
 from hockey_model.report_gate import decide, warning
 from hockey_model.report_trigger import first_puck_drop, prep_too_early, puck_drop_ahead
 from hockey_model.sources.http import HttpClient
@@ -130,13 +130,18 @@ def parse_features(text: str | None) -> tuple[str, ...]:
 def _fit(args: argparse.Namespace) -> tuple[object, int]:
     features = parse_features(args.features)
     through = args.through_season
-    if through is None:
-        # The UTC date, not the Eastern game day. The two differ only in the four hours after
-        # 00:00 UTC on September 1, and no game of the new season is stored then, so the fit
-        # data is the same. The recorded through-season differs there; #238 decides the date.
-        through = season_of(datetime.now(UTC).date())
     conn = connect(db_path_from_env(os.environ))
     try:
+        # The recorded cutoff follows the data, not the clock. A fit that records a season
+        # whose games it never read would mark the first games of that season in sample (#238).
+        if through is None:
+            newest = last_trained_season(conn)
+            if newest is None:
+                raise HockeyModelError(
+                    f"fit: the store holds no final game from {FIT_FIRST}; "
+                    "run `hockey-model refresh --backfill-from 2014-10-01`"
+                )
+            through = newest
         if features:
             rows = training_rows(conn, FIT_FIRST, through, GoalieMode.ACTUAL, names=features)
             if not rows:

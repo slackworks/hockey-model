@@ -494,6 +494,22 @@ def test_cli_game_marks_a_game_inside_the_fit_seasons(
     assert outside["membership"] == "out_of_sample"
 
 
+def test_cli_fit_without_a_season_does_not_claim_the_next_season(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A default fit records the newest trained season, so a later game stays out of sample."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    outside_id = _game_ids(db)[1]
+    # No --through-season: the seeded final games are all 2015-16. The 2026-27 game is only
+    # scheduled, so the fit trained through 2015-16 and must not mark that game in sample.
+    assert cli.main(["fit", "--features", "rest", "--label", "live"]) == 0
+    assert json.loads(capsys.readouterr().out)["through_season"] == 20152016
+    assert cli.main(["game", str(outside_id)]) == 0
+    assert json.loads(capsys.readouterr().out)["training"]["membership"] == "out_of_sample"
+
+
 def test_cli_game_serves_the_fit_that_fit_id_names(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

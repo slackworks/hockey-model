@@ -53,7 +53,10 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         metavar="YYYYYYYY",
-        help="last season in the fit; default is the season that holds today (UTC)",
+        help=(
+            "last season in the fit; default is the newest season that holds a final game, "
+            "which is the season the fit records as its cutoff"
+        ),
     )
     parser.add_argument(
         "--features",
