@@ -47,7 +47,8 @@ def franchise_codes(team: str) -> tuple[str, ...]:
     return tuple(sorted(code for code in NHL_TEAM_CODES if franchise(code) == home))
 
 
-def _cutoff(before: datetime) -> str:
+def result_cutoff(before: datetime) -> str:
+    """Return the latest start of a game that was over by ``before``."""
     return iso_utc(before - RESULT_DELAY)
 
 
@@ -82,7 +83,7 @@ def final_games_before(conn: sqlite3.Connection, before: datetime) -> list[GameR
     cursor = conn.execute(
         f"SELECT {_GAME_COLUMNS} FROM latest_final_games g WHERE g.start_utc <= ?"
         " ORDER BY g.start_utc, g.game_id",
-        (_cutoff(before),),
+        (result_cutoff(before),),
     )
     return [_game_row(row) for row in cursor]
 
@@ -96,7 +97,7 @@ def team_games_before(
         f"SELECT {_GAME_COLUMNS} FROM latest_final_games g WHERE g.start_utc <= ?"
         f" AND (g.home IN ({_marks(codes)}) OR g.away IN ({_marks(codes)}))"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (_cutoff(before), *codes, *codes, limit),
+        (result_cutoff(before), *codes, *codes, limit),
     )
     return [_game_row(row) for row in cursor]
 
@@ -111,7 +112,7 @@ def goalie_starts_before(
         " JOIN goalie_games w ON w.game_id = g.game_id"
         f" WHERE w.started = 1 AND w.team IN ({_marks(codes)}) AND g.start_utc <= ?"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (*codes, _cutoff(before), limit),
+        (*codes, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 
@@ -147,7 +148,7 @@ def _mp_pairs_before(
         # A NULL is an unknown value, such as a version 1 row has for attempt counts.
         f" AND m.{columns[0]} IS NOT NULL AND m.{columns[1]} IS NOT NULL"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (*codes, _cutoff(before), limit),
+        (*codes, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 
@@ -161,7 +162,7 @@ def mp_goalie_form_before(
         " JOIN latest_final_games g ON g.game_id = m.game_id"
         " WHERE m.nhl_id = ? AND g.start_utc <= ?"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-        (nhl_id, _cutoff(before), limit),
+        (nhl_id, result_cutoff(before), limit),
     )
     return [(row[0], row[1]) for row in cursor]
 

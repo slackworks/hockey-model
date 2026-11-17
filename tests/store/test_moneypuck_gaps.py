@@ -35,7 +35,9 @@ def test_a_final_game_leaves_no_row_unmatched(store: sqlite3.Connection) -> None
     _stored_game(store, 1, "2026-01-10T00:00")
     write_team_games(store, [_team_row(1)], FETCHED)
     write_goalie_games(store, [_goalie_row(1)], FETCHED)
-    assert unmatched_moneypuck(store).is_empty()
+    counts = unmatched_moneypuck(store)
+    assert (counts.team_unknown, counts.goalie_unknown) == (0, 0)
+    assert (counts.team_not_final, counts.goalie_not_final) == (0, 0)
 
 
 def test_a_row_of_an_unknown_game_is_counted(store: sqlite3.Connection) -> None:
@@ -62,11 +64,28 @@ def test_a_repeated_read_does_not_count_a_row_twice(store: sqlite3.Connection) -
     assert unmatched_moneypuck(store).team_unknown == 1
 
 
+def test_a_game_read_three_times_counts_once(store: sqlite3.Connection) -> None:
+    # `games` keeps one row per read, so a live game is written at each state change. The count
+    # must name the game, not the number of rows that hold it.
+    for hours in (0, 1, 2):
+        add_game(
+            store,
+            2,
+            "2026-01-10T00:00",
+            state="LIVE",
+            fetched_at=FETCHED + timedelta(hours=hours),
+        )
+    write_team_games(store, [_team_row(2)], FETCHED)
+    write_goalie_games(store, [_goalie_row(2)], FETCHED)
+    counts = unmatched_moneypuck(store)
+    assert (counts.team_not_final, counts.goalie_not_final) == (1, 1)
+
+
 def test_a_later_game_read_resolves_the_row(store: sqlite3.Connection) -> None:
     write_team_games(store, [_team_row(3)], FETCHED)
     assert unmatched_moneypuck(store).team_unknown == 1
     _stored_game(store, 3, "2026-01-10T00:00")
-    assert unmatched_moneypuck(store).is_empty()
+    assert unmatched_moneypuck(store).team_unknown == 0
 
 
 def test_a_team_with_current_form_has_no_lag(store: sqlite3.Connection) -> None:

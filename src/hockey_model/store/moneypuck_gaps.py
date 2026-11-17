@@ -9,26 +9,20 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 
-from hockey_model.store.reads import RESULT_DELAY, franchise_codes
-from hockey_model.store.timestamps import iso_utc
+from hockey_model.store.reads import franchise_codes, result_cutoff
 
 # The MoneyPuck files name a game by its NHL id. A row is useful only when the store holds
 # that game and the game is over, because the form reader joins the final games.
-_TEAM_COUNTS = """
+# `games` keeps one row per read, so the count asks whether a row exists. A join would count a
+# game once for each read of it, and a live game is read again at each state change.
+_COUNTS = """
 SELECT
-    SUM(g.game_id IS NULL),
-    SUM(g.game_id IS NOT NULL AND f.game_id IS NULL)
-FROM latest_mp_team_games m
-LEFT JOIN games g ON g.game_id = m.game_id
-LEFT JOIN latest_final_games f ON f.game_id = m.game_id
-"""
-_GOALIE_COUNTS = """
-SELECT
-    SUM(g.game_id IS NULL),
-    SUM(g.game_id IS NOT NULL AND f.game_id IS NULL)
-FROM latest_mp_goalie_games m
-LEFT JOIN games g ON g.game_id = m.game_id
-LEFT JOIN latest_final_games f ON f.game_id = m.game_id
+    COUNT(*) FILTER (
+        WHERE NOT EXISTS (SELECT 1 FROM latest_games g WHERE g.game_id = m.game_id)),
+    COUNT(*) FILTER (
+        WHERE EXISTS (SELECT 1 FROM latest_games g WHERE g.game_id = m.game_id)
+        AND NOT EXISTS (SELECT 1 FROM latest_final_games f WHERE f.game_id = m.game_id))
+FROM {table} m
 """
 
 
@@ -44,12 +38,6 @@ class UnmatchedRows:
     goalie_unknown: int
     team_not_final: int
     goalie_not_final: int
-
-    def is_empty(self) -> bool:
-        """Return whether the form readers skip no row."""
-        return not (
-            self.team_unknown or self.goalie_unknown or self.team_not_final or self.goalie_not_final
-        )
 
     def unknown_note(self) -> str:
         """Return the note that names the rows of a game that the store does not hold."""
@@ -95,18 +83,15 @@ def unmatched_moneypuck(conn: sqlite3.Connection) -> UnmatchedRows:
     The count reads the newest row of each identity, so a repeated read of one file does not
     raise it. A row that a later game read matches leaves the count.
     """
-    team_unknown, team_not_final = _counts(conn, _TEAM_COUNTS)
-    goalie_unknown, goalie_not_final = _counts(conn, _GOALIE_COUNTS)
+    team_unknown, team_not_final = _counts(conn, "latest_mp_team_games")
+    goalie_unknown, goalie_not_final = _counts(conn, "latest_mp_goalie_games")
     return UnmatchedRows(team_unknown, goalie_unknown, team_not_final, goalie_not_final)
 
 
-def _counts(conn: sqlite3.Connection, sql: str) -> tuple[int, int]:
-    unknown, not_final = conn.execute(sql).fetchone()
+def _counts(conn: sqlite3.Connection, table: str) -> tuple[int, int]:
+    """Return the unknown and the not-final counts of one MoneyPuck view."""
+    unknown, not_final = conn.execute(_COUNTS.format(table=table)).fetchone()
     return (unknown or 0, not_final or 0)
-
-
-def _cutoff(before: datetime) -> str:
-    return iso_utc(before - RESULT_DELAY)
 
 
 def mp_form_lag(conn: sqlite3.Connection, team: str, before: datetime) -> FormLag | None:
@@ -118,7 +103,7 @@ def mp_form_lag(conn: sqlite3.Connection, team: str, before: datetime) -> FormLa
     """
     codes = franchise_codes(team)
     marks = ",".join("?" for _ in codes)
-    cutoff = _cutoff(before)
+    cutoff = result_cutoff(before)
     side = f"(g.home IN ({marks}) OR g.away IN ({marks}))"
     newest_final = conn.execute(
         f"SELECT g.game_id, g.start_utc FROM latest_final_games g WHERE {side}"
