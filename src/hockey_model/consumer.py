@@ -195,8 +195,16 @@ class ConsumerStore:
         self._store = store_info(self._conn, self._path)
 
     def game(self, game_id: int) -> GameInfo:
-        """Return one game as the newest read of the feed describes it."""
-        return self._require_game(game_id)
+        """Return one game as the newest read of the feed describes it. An unknown game raises."""
+        row = self._conn.execute(
+            f"{_GAME_SELECT} WHERE game_id = ? ORDER BY fetched_at DESC LIMIT 1", (game_id,)
+        ).fetchone()
+        if row is None:
+            raise UnknownGameError(
+                f"read game {game_id}: the game is not in the store; "
+                "the producer runs `hockey-model refresh`"
+            )
+        return _game_info(row)
 
     def games_on_day(self, day: date) -> tuple[GameInfo, ...]:
         """Return the games of one Eastern game day, earliest first."""
@@ -209,7 +217,7 @@ class ConsumerStore:
 
     def skater_games(self, game_id: int) -> tuple[SkaterLine, ...]:
         """Return every skater line of one stored game. An unknown game raises."""
-        self._require_game(game_id)
+        self.game(game_id)
         rows = self._conn.execute(
             "SELECT team, nhl_id, toi_seconds, goals, assists FROM skater_games"
             " WHERE game_id = ? ORDER BY team, nhl_id",
@@ -222,7 +230,7 @@ class ConsumerStore:
 
     def goalie_games(self, game_id: int) -> tuple[GoalieLine, ...]:
         """Return every goalie line of one stored game. An unknown game raises."""
-        self._require_game(game_id)
+        self.game(game_id)
         rows = self._conn.execute(
             "SELECT team, nhl_id, toi_seconds, started FROM goalie_games"
             " WHERE game_id = ? ORDER BY team, nhl_id",
@@ -255,7 +263,7 @@ class ConsumerStore:
         A team that is not in the game raises ``ValueError``.
         """
         require_utc(as_of, "as_of")
-        info = self._require_game(game_id)
+        info = self.game(game_id)
         if team not in (info.home, info.away):
             raise ValueError(
                 f"read starter of game {game_id}: team {team!r} is not in the game; "
@@ -273,7 +281,7 @@ class ConsumerStore:
         are not a joint score distribution: they give no chance of a total or of a margin.
         """
         require_utc(as_of, "as_of")
-        info = self._require_game(game_id)
+        info = self.game(game_id)
         model = NhlGameModel(self._conn, self._artifact)
         return ConsumerPrediction(
             prediction=game_win_probability(_game_of(info), model, as_of=as_of, level=level),
@@ -285,18 +293,6 @@ class ConsumerStore:
             reconstruction=RESTATEMENT,
             package_version=version("hockey-model"),
         )
-
-    def _require_game(self, game_id: int) -> GameInfo:
-        """Return one stored game, or raise ``UnknownGameError`` that names the fix."""
-        row = self._conn.execute(
-            f"{_GAME_SELECT} WHERE game_id = ? ORDER BY fetched_at DESC LIMIT 1", (game_id,)
-        ).fetchone()
-        if row is None:
-            raise UnknownGameError(
-                f"read game {game_id}: the game is not in the store; "
-                "the producer runs `hockey-model refresh`"
-            )
-        return _game_info(row)
 
 
 def _game_of(info: GameInfo) -> Game:
