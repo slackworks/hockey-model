@@ -8,7 +8,7 @@ import pytest
 from hockey_model.consumer_errors import UnknownFitError
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.store.db import StoreError
-from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
+from hockey_model.store.fits import FitArtifact, FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -121,6 +121,53 @@ def test_a_fit_saved_without_a_through_season_loads_with_none(
     )
     artifact = load_fit(store, FitRef(fit_id=1))
     assert artifact.fit_through_season is None
+
+
+def test_a_fit_round_trips_its_game_cutoff(store: sqlite3.Connection) -> None:
+    """The game cutoff is stored beside the weights, so no column and no migration is needed."""
+    read_through = T0 + timedelta(days=3)
+    fit_id = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0, trained_through=read_through))
+    assert load_fit(store, FitRef(fit_id=fit_id)).trained_through == read_through
+
+
+def test_a_fit_saved_without_a_game_cutoff_loads_with_none(store: sqlite3.Connection) -> None:
+    fit_id = save_fit(store, FitRecord(ELO_ONLY, 20252026, T0))
+    assert load_fit(store, FitRef(fit_id=fit_id)).trained_through is None
+
+
+def test_a_malformed_game_cutoff_names_the_fix(store: sqlite3.Connection) -> None:
+    store.execute(
+        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
+        ' VALUES (20252026, \'[]\', \'{"intercept": 0, "elo_weight": 1, "features": {},'
+        ' "trained_through": "last Tuesday"}\', \'2026-01-01T00:00:00.000000+00:00\')'
+    )
+    with pytest.raises(StoreError, match="game cutoff 'last Tuesday'.*hockey-model fit"):
+        load_fit(store, FitRef(fit_id=1))
+
+
+def test_a_fit_with_no_cutoff_season_covers_no_game(store: sqlite3.Connection) -> None:
+    assert FitArtifact(1, ELO_ONLY, None, T0).covers_game(20252026, T0) is None
+
+
+def test_a_game_after_the_stored_game_cutoff_is_not_covered(store: sqlite3.Connection) -> None:
+    artifact = FitArtifact(1, ELO_ONLY, 20252026, T0, trained_through=T0)
+    assert artifact.covers_game(20252026, T0 - timedelta(days=1)) is True
+    assert artifact.covers_game(20252026, T0 + timedelta(days=1)) is False
+
+
+def test_a_game_before_the_first_fit_season_is_not_covered(store: sqlite3.Connection) -> None:
+    """The Elo burn-in season replays results, but no fit trains on one of its feature rows."""
+    artifact = FitArtifact(1, ELO_ONLY, 20252026, T0, trained_through=T0)
+    assert artifact.covers_game(20142015, T0 - timedelta(days=1)) is False
+
+
+def test_a_fit_with_no_game_cutoff_is_bounded_by_its_save_time(
+    store: sqlite3.Connection,
+) -> None:
+    """An older fit read no game that starts after its save, so ``created_at`` is the bound."""
+    artifact = FitArtifact(1, ELO_ONLY, 20252026, T0)
+    assert artifact.covers_game(20252026, T0 - timedelta(days=1)) is True
+    assert artifact.covers_game(20252026, T0 + timedelta(days=1)) is False
 
 
 def test_load_an_empty_store_names_the_fix(store: sqlite3.Connection) -> None:

@@ -1,6 +1,7 @@
 """Tests for the thin JSON CLI wrapper."""
 
 import json
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -529,6 +530,44 @@ def test_cli_fit_without_a_season_does_not_claim_the_next_season(
     assert json.loads(capsys.readouterr().out)["through_season"] == 20152016
     assert cli.main(["game", str(outside_id)]) == 0
     assert json.loads(capsys.readouterr().out)["training"]["membership"] == "out_of_sample"
+
+
+def test_cli_fit_records_the_start_of_the_newest_game_it_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(["fit", "--features", "rest"]) == 0
+    recorded = json.loads(capsys.readouterr().out)["trained_through"]
+    # The seeded history ends on 2015-12-15, and the game after it is still scheduled.
+    assert recorded == "2015-12-15T00:00:00.000000+00:00"
+
+
+def test_cli_a_live_fit_does_not_mark_a_later_game_of_its_season_in_sample(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The live case: the fit records today's season, and tonight's game is still not its data."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+
+    def later(conn: sqlite3.Connection) -> None:
+        # The seeded finals end on 2015-12-15, so this game starts after the fit read them.
+        add_game(conn, 9001, "2016-01-05T00:00", season=20152016, state="FUT")
+
+    conn = connect(db)
+    try:
+        later(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    # The fit reads the final games of 2015-16, so it records that season.
+    assert cli.main(["fit", "--features", "rest", "--label", "live"]) == 0
+    assert json.loads(capsys.readouterr().out)["through_season"] == 20152016
+    assert cli.main(["game", "9001"]) == 0
+    marker = json.loads(capsys.readouterr().out)["training"]
+    assert (marker["fit_through_season"], marker["membership"]) == (20152016, "out_of_sample")
 
 
 def test_cli_game_serves_the_fit_that_fit_id_names(

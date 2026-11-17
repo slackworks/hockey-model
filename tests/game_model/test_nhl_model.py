@@ -345,6 +345,48 @@ def test_the_eastern_game_day_decides_the_season_near_the_boundary(
     assert marker.membership is TrainingMembership.IN_SAMPLE
 
 
+def test_a_game_after_the_last_trained_start_of_a_live_fit_is_out_of_sample(
+    store: sqlite3.Connection,
+) -> None:
+    """The live case: the fit records the current season, and today's game is still not its data."""
+    add_game(store, 1, "2026-10-10T00:00", season=20262027, score=(3, 2))
+    played = Game(100, "TOR", "BOS", utc("2026-11-18T00:00"))
+    served = NhlGameModel(
+        store,
+        artifact(ELO_ONLY, 20262027, utc("2026-10-10T00:00")),
+        GoalieMode.GUESS,
+    )
+    marker = served.predict(played, utc("2026-11-17T16:00"), 0.8).training
+    assert marker == TrainingInfo(1, 20262027, TrainingMembership.OUT_OF_SAMPLE)
+
+
+def test_a_game_before_the_last_trained_start_is_in_sample(store: sqlite3.Connection) -> None:
+    """A game that starts before the newest game that the fit read is inside its data."""
+    played = Game(100, "TOR", "BOS", utc("2026-01-20T00:00"))
+    served = NhlGameModel(
+        store,
+        artifact(ELO_ONLY, 20252026, utc("2026-01-25T00:00")),
+        GoalieMode.GUESS,
+    )
+    marker = served.predict(played, utc("2026-01-19T16:00"), 0.8).training
+    assert marker == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
+
+
+def test_a_fit_with_no_game_cutoff_is_bounded_by_its_save_time(
+    store: sqlite3.Connection,
+) -> None:
+    """A fit saved before the game cutoff existed cannot have read a game that came after it.
+
+    ``ARTIFACT_TIME`` is 2026-01-01, so a game of 2025-12-20 trained the fit and a game of
+    2026-02-10 did not.
+    """
+    served = NhlGameModel(store, artifact(ELO_ONLY, 20252026, None), GoalieMode.GUESS)
+    early = served.predict(Game(100, "TOR", "BOS", utc("2025-12-20T00:00")), AS_OF, 0.8)
+    late = served.predict(Game(100, "TOR", "BOS", utc("2026-02-10T00:00")), AS_OF, 0.8)
+    assert early.training == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
+    assert late.training == TrainingInfo(1, 20252026, TrainingMembership.OUT_OF_SAMPLE)
+
+
 def test_a_stored_game_uses_its_stored_season_not_the_game_day(
     store: sqlite3.Connection,
 ) -> None:

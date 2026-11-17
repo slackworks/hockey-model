@@ -48,6 +48,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - A fit with no `--through-season` records the newest season that holds a final game, not the season that holds today. The old cutoff named a season whose games the fit never read, so `result.training` marked the first games of that season in sample. [fix:model]
+- A fit also records a game cutoff, which is the start of the newest final game that it read, and `result.training` needs both bounds. The season alone still marked a live fit's later games in sample, so a game that starts after the fit read the store is now `out_of_sample`. A fit saved before this value existed uses its save time as the bound, because no game that starts after that time was final. The value is stored in the saved weights, so the schema version does not change. [fix:model]
 - `hockey-model fit` refuses an explicit `--through-season` newer than the newest stored final game, because that cutoff named seasons the fit never read. [fix:model]
 - `result.training.membership` uses the stored season of the game, not the season of its Eastern game day. The 2020 bubble is stored as 2019-20, and its September starts fall on the 2020-21 game day. [fix:model]
 - Lower `timeout_multiplier` for mutmut, so a hung mutant of `block_bootstrap_mean_ci` stops sooner and the pre-push mutation check finishes inside its limit. [chore:test]

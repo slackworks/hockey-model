@@ -14,6 +14,7 @@ from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
 from hockey_model.game_model.seasons import FIT_FIRST
 from hockey_model.store.db import StoreError
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
+from hockey_model.types import HockeyModelError
 
 # The label that `hockey-model game` and `hockey-model daily` serve. A research fit that
 # carries no label cannot replace it, which is what #80 asks for.
@@ -50,6 +51,11 @@ class FitArtifact:
 
     ``fit_through_season`` is None only for a fit saved before the column existed. A reader
     that compares a game season against it MUST treat None as unknown, not as out of sample.
+
+    ``trained_through`` is the start of the newest final game that the fit read. A game that
+    starts after it was not final when the fit ran, so it cannot be in sample. A fit saved
+    before this value existed has None, and the fit ran no later than ``created_at``: no game
+    that starts after that moment was final, so ``created_at`` is the same bound.
     """
 
     fit_id: int
@@ -57,16 +63,20 @@ class FitArtifact:
     fit_through_season: int | None
     created_at: datetime
     labels: tuple[str, ...] = ()
+    trained_through: datetime | None = None
 
-    def covers_season(self, season: int) -> bool | None:
-        """Return whether ``season`` trained this fit, or None when the cutoff is unknown.
+    def covers_game(self, season: int, start: datetime) -> bool | None:
+        """Return whether the game at ``start`` of ``season`` trained this fit.
 
-        The fit reads the seasons from ``FIT_FIRST``, so an earlier season trained no fit, even
-        when its games sit below the cutoff. The Elo burn-in season is the case that matters.
+        A season before ``FIT_FIRST`` trained no fit, even when its games sit below the cutoff.
+        The Elo burn-in season is the case that matters. The season bound alone names every
+        game of the cutoff season, so the start bound decides the rest (#238).
         """
         if self.fit_through_season is None:
             return None
-        return FIT_FIRST <= season <= self.fit_through_season
+        # A fit cannot have read a game that was not final when the fit ran.
+        bound = self.trained_through or self.created_at
+        return FIT_FIRST <= season <= self.fit_through_season and start <= bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +87,9 @@ class FitRecord:
     built. It is stored beside the weights, so a reader can see how much of the fit was a
     stand-in. A fit with no features passes an empty list.
 
+    ``trained_through`` is the start of the newest final game that the fit read. It is stored
+    beside the weights, because the season cutoff names every game of the cutoff season.
+
     ``label`` names the fit for later selection. It is written in the same transaction as the
     fit row, so a reader never sees the label without the fit that it names.
     """
@@ -86,6 +99,7 @@ class FitRecord:
     created_at: datetime
     imputation: Sequence[Mapping[str, object]] = ()
     label: str | None = None
+    trained_through: datetime | None = None
 
 
 def save_fit(conn: sqlite3.Connection, record: FitRecord) -> int:
@@ -101,6 +115,8 @@ def save_fit(conn: sqlite3.Connection, record: FitRecord) -> int:
         "features": dict(fit.weights),
         "imputation": _imputation_entries(record.imputation),
     }
+    if record.trained_through is not None:
+        weights["trained_through"] = iso_utc(record.trained_through)
     if fit.diagnostics is not None:
         weights["diagnostics"] = asdict(fit.diagnostics)
     with conn:
@@ -145,6 +161,7 @@ def load_fit(conn: sqlite3.Connection, ref: FitRef) -> FitArtifact:
         None if through is None else int(through),
         parse_iso_utc(created_at),
         _labels_of(conn, fit_id),
+        _trained_through(weights),
     )
 
 
@@ -190,6 +207,20 @@ def _labels_of(conn: sqlite3.Connection, fit_id: int) -> tuple[str, ...]:
         (fit_id,),
     )
     return tuple(label for (label,) in rows)
+
+
+def _trained_through(weights: str) -> datetime | None:
+    """Return the game-level cutoff of the saved fit, or None for a fit that has none."""
+    moment = json.loads(weights).get("trained_through")
+    if moment is None:
+        return None
+    try:
+        return parse_iso_utc(str(moment))
+    except (ValueError, HockeyModelError) as exc:
+        raise StoreError(
+            f"load the model fit: the saved game cutoff {moment!r} is not a UTC time ({exc}); "
+            "run `hockey-model fit` again"
+        ) from exc
 
 
 def _build_fit(features: str, weights: str) -> LogisticFit:

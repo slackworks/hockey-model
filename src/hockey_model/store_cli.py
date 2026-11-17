@@ -17,7 +17,12 @@ from hockey_model.game_model.imputation import check_imputation
 from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.game_model.seasons import FIT_FIRST
-from hockey_model.game_model.training import game_input, last_trained_season, training_rows
+from hockey_model.game_model.training import (
+    game_input,
+    last_trained_season,
+    last_trained_start,
+    training_rows,
+)
 from hockey_model.report_gate import decide, warning
 from hockey_model.report_trigger import first_puck_drop, prep_too_early, puck_drop_ahead
 from hockey_model.sources.http import HttpClient
@@ -156,17 +161,30 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
             quality = [asdict(q) for q in check_imputation([r.features for r in rows], features)]
             fit = fit_logistic([r.features for r in rows], [r.home_won for r in rows], features)
             games = len(rows)
+            # The newest game that this fit read, not one that a coarser season cutoff names.
+            trained_through = rows[-1].game.start
         else:
             quality, fit, games = [], ELO_ONLY, 0
+            # The Elo replayed every stored result, so the season cutoff's newest game is the
+            # bound. It read no feature row, but its ratings did read those results.
+            trained_through = last_trained_start(conn, through)
         fit_id = save_fit(
             conn,
-            FitRecord(fit, through, datetime.now(UTC), quality, label=args.label),
+            FitRecord(
+                fit,
+                through,
+                datetime.now(UTC),
+                quality,
+                label=args.label,
+                trained_through=trained_through,
+            ),
         )
     finally:
         conn.close()
     return {
         "fit_id": fit_id,
         "through_season": through,
+        "trained_through": None if trained_through is None else iso_utc(trained_through),
         "games": games,
         "imputation": quality,
         **asdict(fit),
