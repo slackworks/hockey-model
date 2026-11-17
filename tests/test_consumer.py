@@ -1,6 +1,8 @@
 """Tests for the read-only consumer API (#80)."""
 
+import os
 import sqlite3
+import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import replace
@@ -260,6 +262,24 @@ def test_a_file_that_is_not_a_store_raises(tmp_path: Path) -> None:
     path.write_bytes(b"not a database")
     with pytest.raises(StoreVersionError, match="not a SQLite store.*hockey-model store"):
         open_store(path, fit=FitRef(label="live"))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a directory permission bit is a POSIX rule")
+def test_a_wal_store_in_a_read_only_directory_names_the_directory() -> None:
+    # SQLite cannot create the -wal and -shm files beside a WAL store in a read-only
+    # directory, so the open fails with SQLITE_READONLY_DIRECTORY. The file itself is fine,
+    # and the fix names the directory, not the file.
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "store.db"
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.close()
+        os.chmod(folder, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            with pytest.raises(StoreVersionError, match="directory write permission"):
+                open_store(path, fit=FitRef(label="live"))
+        finally:
+            os.chmod(folder, stat.S_IRWXU)
 
 
 def test_an_unknown_game_raises(store_path: Path) -> None:

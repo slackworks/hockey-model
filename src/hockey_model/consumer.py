@@ -104,6 +104,19 @@ def _open_failure_fix(path: Path, exc: sqlite3.Error) -> str:
         fix = "the file is not a SQLite store, so use the path of a hockey-model store"
     elif name in {"SQLITE_BUSY", "SQLITE_LOCKED"}:
         fix = "another process holds the store; stop it, then open the store again"
+    elif name in {
+        "SQLITE_CANTOPEN",
+        "SQLITE_READONLY",
+        "SQLITE_READONLY_DIRECTORY",
+        "SQLITE_PERM",
+    }:
+        # SQLite reports a WAL store in a read-only directory this way, because the -wal and
+        # -shm files cannot be created beside it. The file itself may be readable.
+        fix = (
+            "the store and its directory must be readable, and SQLite writes -wal and -shm "
+            "beside a WAL store; give the directory write permission, or run "
+            "`PRAGMA journal_mode=DELETE` on the store as the producer"
+        )
     else:
         fix = "check the file permissions, then open the store again"
     return f"open store {str(path)!r}: {exc}; {fix}"
