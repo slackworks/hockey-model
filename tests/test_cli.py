@@ -494,6 +494,19 @@ def test_cli_game_marks_a_game_inside_the_fit_seasons(
     assert outside["membership"] == "out_of_sample"
 
 
+def test_cli_game_rejects_a_fit_id_of_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(_fit("rest")) == 0
+    capsys.readouterr()
+    game_id, _ = _game_ids(db)
+    assert cli.main(["game", str(game_id), "--fit-id", "0"]) == 2
+    assert "fit_id must be positive" in capsys.readouterr().err
+
+
 def test_cli_game_unknown_id(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:

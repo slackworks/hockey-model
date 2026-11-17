@@ -174,7 +174,8 @@ def _game(args: argparse.Namespace) -> tuple[object, int]:
                 f"predict game {args.game_id}: the game is not in the store; "
                 "run `hockey-model refresh`"
             )
-        artifact = load_fit(conn, FitRef(fit_id=args.fit_id) if args.fit_id else _live_ref())
+        ref = FitRef(fit_id=args.fit_id) if args.fit_id is not None else _live_ref()
+        artifact = load_fit(conn, ref)
         model = NhlGameModel(conn, artifact)
         return game_win_probability(game_input(row), model, level=args.level), 0
     finally:
