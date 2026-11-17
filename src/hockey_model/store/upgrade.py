@@ -56,6 +56,12 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE mp_team_games_v2 RENAME TO mp_team_games",
         "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
     ),
+    2: (
+        "CREATE TABLE IF NOT EXISTS fit_labels ("
+        " label TEXT NOT NULL,"
+        " fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id),"
+        " set_at TEXT NOT NULL)",
+    ),
 }
 _LEDGER = (
     "CREATE TABLE IF NOT EXISTS schema_migrations ("

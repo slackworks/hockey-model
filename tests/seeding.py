@@ -3,14 +3,22 @@
 import sqlite3
 from datetime import UTC, datetime
 
+from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.sources.moneypuck import GoalieGameRow, TeamGameRow
 from hockey_model.sources.nhl import BoxscoreRows, GameRow, GoalieRow, PlayerRow
+from hockey_model.store.fits import FitArtifact
 from hockey_model.store.moneypuck_writes import write_goalie_games, write_team_games
 from hockey_model.store.nhl_writes import write_boxscore, write_games
 from hockey_model.store.source_reads import ESPN_INJURIES, record_read
 from hockey_model.store.timestamps import iso_utc
 
 FETCHED = datetime(2026, 11, 1, tzinfo=UTC)
+ARTIFACT_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def artifact(fit: LogisticFit, through: int | None = 20252026) -> FitArtifact:
+    """Return the saved-fit record that a model needs, for a fit that a test builds."""
+    return FitArtifact(1, fit, through, ARTIFACT_TIME)
 
 
 def utc(text: str) -> datetime:

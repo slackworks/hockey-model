@@ -4,7 +4,7 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
-from seeding import utc
+from seeding import artifact, utc
 
 from hockey_model.game import (
     Game,
@@ -90,7 +90,7 @@ def test_the_error_names_the_read_time_and_the_cutoff(store: sqlite3.Connection)
 
 
 def _public(store: sqlite3.Connection, given: GoalieStart, as_of):
-    model = NhlGameModel(store, ELO_ONLY, GoalieMode.GUESS)
+    model = NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.GUESS)
     return game_win_probability(_game("home", given), model, as_of=as_of)
 
 

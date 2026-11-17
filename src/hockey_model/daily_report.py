@@ -13,7 +13,13 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from hockey_model.game import GamePrediction, MissingInput, game_win_probability
+from hockey_model.game import (
+    GamePrediction,
+    MissingInput,
+    TrainingInfo,
+    TrainingMembership,
+    game_win_probability,
+)
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
@@ -116,6 +122,16 @@ def _degraded_json(prediction: GamePrediction) -> list[dict[str, Any]]:
     ]
 
 
+def _training_json(training: TrainingInfo | None) -> dict[str, Any] | None:
+    if training is None:
+        return None
+    return {
+        "fit_id": training.fit_id,
+        "fit_through_season": training.fit_through_season,
+        "membership": training.membership.value,
+    }
+
+
 def _line_json(line: DailyLine) -> dict[str, Any]:
     row = line.row
     base: dict[str, Any] = {
@@ -135,6 +151,7 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
             "made_after_start": False,
             "missing": [],
             "degraded_inputs": [],
+            "training": None,
         }
     return {
         **base,
@@ -143,6 +160,7 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
         "made_after_start": prediction.made_after_start,
         "missing": _missing_json(prediction.missing),
         "degraded_inputs": _degraded_json(prediction),
+        "training": _training_json(prediction.training),
     }
 
 
@@ -178,6 +196,16 @@ def _cell(text: str) -> str:
     return " ".join(text.replace("|", "\\|").split())
 
 
+def _training_note(training: TrainingInfo | None) -> str:
+    """Return the in-sample marker, or an empty string for a game outside the fit seasons."""
+    if training is None or training.membership is not TrainingMembership.IN_SAMPLE:
+        return ""
+    return (
+        f"in_sample: fit {training.fit_id} trained through season "
+        f"{training.fit_through_season}; this game is inside its training seasons"
+    )
+
+
 def _notes(line: DailyLine) -> str:
     if line.skipped:
         return _cell(line.skipped)
@@ -185,6 +213,9 @@ def _notes(line: DailyLine) -> str:
     if prediction is None:
         return ""
     notes = [f"{m.kind.value}: {m.note}" for m in prediction.missing]
+    marker = _training_note(prediction.training)
+    if marker:
+        notes.insert(0, marker)
     return _cell("; ".join(notes) or "none")
 
 

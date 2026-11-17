@@ -64,18 +64,22 @@ The model reads only the local store and makes no network request.
 from datetime import UTC, datetime
 
 from hockey_model import Game, game_win_probability
-from hockey_model.game_model.logistic import ELO_ONLY
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.store.db import connect
+from hockey_model.store.fits import FitRef, load_fit
 
 conn = connect(path_to_store)
-model = NhlGameModel(conn, ELO_ONLY)
+model = NhlGameModel(conn, load_fit(conn, FitRef(label="live")))
 game = Game(2026020236, "TOR", "UTA", datetime(2026, 11, 4, 0, 0, tzinfo=UTC))
 result = game_win_probability(game, model)
 print(result.home_win, result.away_win, result.made_after_start)
 for gap in result.missing:
     print(gap.kind, gap.team, gap.note)
 ```
+
+The example imports internal modules, so it is for the repository's own tools and tests.
+An outside consumer calls `open_store` and `predict` instead, as described in [Consumer API](#consumer-api).
+`predict` returns the same `GamePrediction` fields.
 
 The model is the results-only Elo of sportsbettr plus three features: MoneyPuck expected-goals form, the starting goalie's goals saved above expected, and rest days.
 A fitted logistic regression sets the weights.
@@ -86,6 +90,16 @@ The result lists a goalie that no source confirmed.
 `degraded_inputs` lists each form feature of the fit that was set to the neutral value `NEUTRAL_FORM`, because a team had no MoneyPuck games before the game.
 A form that was measured, even when it measured zero, is not listed.
 The command line prints the same field, and each game in the daily report JSON carries it.
+
+The form reader joins a MoneyPuck row to a final game, so a row whose game is not in the store is dropped.
+The model adds a `stale_source` note when a team's newest usable MoneyPuck game is older than its newest final game.
+The note names the number of stored games in the gap and the two game ids.
+A MoneyPuck file is weekly, so a recent download can still stop several games short.
+
+`training` names the fit and whether the game trained it: `in_sample`, `out_of_sample`, or `unknown`.
+A fit that trained through the game's season names it `in_sample`, and such a result is not a forecast: the fit has seen the game's outcome.
+`unknown` means the saved fit does not record the season it trained through, so a reader must not read it as out of sample.
+`game`, `daily`, and the consumer API carry the same field. The daily report Markdown puts an `in_sample` note on the game row.
 
 The model uses no price data.
 It does not say whether the model beats a betting market.
@@ -99,15 +113,15 @@ An unset or empty variable is an error that names it.
 
 ```text
 HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model refresh --backfill-from 2014-10-01
-HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model fit --through-season 20252026 --features xg_form,rest
+HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model fit --through-season 20252026 --features xg_form,rest --label live
 HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model game 2026020236
 HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model backtest --games-out games.csv
 ```
 
-- `refresh` reads every source and appends each read with its fetch time. It exits 1 when a source failed, and it prints what each source wrote, the errors, the credits, and `backfill_complete`. The first backfill makes about 16,000 NHL requests at two a second, so it takes hours. A backfill reads one year at a time, newest year first. `--budget-seconds N` stops it after N seconds, and `backfill_complete` is then false. The budget also stops the MoneyPuck files: a run reads one stale MoneyPuck file at least, and it stops before the next one when the time is spent. A refresh skips a score day, boxscore, or MoneyPuck file whose reads failed in a row, and the notes name it. `--retry-skipped` reads those units again once, and one good read clears the skip. Run it again after a stop or an error: it skips what it already has. A game that started long ago and is still not final stays in the worklist: its score day is read again after a wait, at most `MAX_UNRESOLVED_DAYS` days in one run, and the notes name the game.
+- `refresh` reads every source and appends each read with its fetch time. It exits 1 when a source failed, and it prints what each source wrote, the errors, the credits, and `backfill_complete`. The first backfill makes about 16,000 NHL requests at two a second, so it takes hours. A backfill reads one year at a time, newest year first. `--budget-seconds N` stops it after N seconds, and `backfill_complete` is then false. The budget also stops the MoneyPuck files: a run reads one stale MoneyPuck file at least, and it stops before the next one when the time is spent. A refresh skips a score day, boxscore, or MoneyPuck file whose reads failed in a row, and the notes name it. `--retry-skipped` reads those units again once, and one good read clears the skip. Run it again after a stop or an error: it skips what it already has. A game that started long ago and is still not final stays in the worklist: its score day is read again after a wait, at most `MAX_UNRESOLVED_DAYS` days in one run, and the notes name the game. After the MoneyPuck files, the notes count the rows that match no stored game and the rows whose game is not final yet. `refresh --starters-only` reads no MoneyPuck file, so it writes neither note.
 - `refresh --starters-only` reads only the schedule, the goalie sources, and the injuries. The report run uses it after the morning refresh.
-- `fit --through-season YYYYYYYY --features a,b` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, `rest`, and `attempt_form` (the leak test of #77).
-- `game GAME_ID [--level L]` prints the prediction of one stored game with the newest fit.
+- `fit --through-season YYYYYYYY --features a,b` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, `rest`, and `attempt_form` (the leak test of #77).
+- `game GAME_ID [--level L] [--fit-id N]` prints the prediction of one stored game with the fit labelled `live`, or with fit `N` when `--fit-id` is given.
 - `backtest [--games-out PATH] [--candidates {xg,attempt}]` runs the walk-forward backtest and prints a JSON report. `--games-out` writes one CSV row for each scored game and run. `--candidates attempt` replaces `xg_form` with the shot-attempt form, the leak test in #77.
 - `store upgrade [--db PATH]` moves a version 1 store to the current schema.
 It keeps every row and every fit ID.
@@ -193,6 +207,65 @@ The per-game CSV of a confirmation run is committed under
 `experiments/results/`, and the record stores its path relative to the repository root and its SHA-256 hash.
 `experiments check` also fails when a record that holds a result is deleted or renamed, when its status disagrees with its result, when a committed result was removed or replaced, and when two records share a number.
 It reads the git history, so a shallow clone stops with a message that asks for the full history.
+
+## Consumer API
+
+`sportsbettr` and `leaguecheatr` read the store through one supported module.
+The consumer never runs SQL, never imports an internal module, and never writes, migrates, fits, or refreshes the store.
+`open_store` is the only entry point, and it is exported from the package root.
+
+```python
+from datetime import UTC, date, datetime
+
+from hockey_model import FitRef, open_store
+
+with open_store(path_to_store, fit=FitRef(label="live")) as store:
+    print(store.store.path, store.store.schema_version)
+    for game in store.games_on_day(date(2026, 11, 4)):
+        print(game.game_id, game.away, "at", game.home, game.start, game.state)
+    result = store.predict(game_id, as_of=datetime(2026, 11, 4, 0, 0, tzinfo=UTC))
+    print(result.prediction.home_win, result.fit.features, result.fit.fit_sha256)
+```
+
+The consumer imports the supported names from the package root only.
+`hockey_model.store.fits` and the other internal modules are not part of the surface, even when a name appears in both places.
+`LIVE_LABEL` is `"live"`, and it names the fit that `hockey-model game` and `hockey-model daily` serve.
+
+The store opens read-only, over one read transaction, so every call of one consumer sees one state of the store.
+A producer may write at the same time.
+Call `refresh_snapshot()` to end the transaction and start a new one.
+The fit is pinned when the store opens, and it never changes for the life of the object.
+
+A missing file raises `StoreMissingError`, and the consumer never creates one.
+A schema version this package cannot read, a missing view, and an unknown fit or game raise `StoreVersionError`, `UnknownFitError`, or `UnknownGameError`.
+Every error names the fix, which is `hockey-model store upgrade` or `hockey-model refresh`, run by the producer.
+
+`result.outcome` is `"full_game_winner"`: one winner after overtime and the shootout.
+It is not a regulation, period, prop, futures, or in-play result.
+`result.prediction.home_goals` and `result.prediction.away_goals` are marginal intervals for one team's goals.
+They are not a joint score distribution: two marginals give no chance of a total, and no chance of a margin.
+`result.reconstruction` is `"restatement"`: the inputs are today's rows, not the rows that existed at `as_of`.
+A call with an `as_of` therefore does not prove an as-issued historical prediction.
+`result.made_after_start` is true when `as_of` is at or after the puck drop.
+
+A game inside the seasons that trained the fit is an in-sample result, and the fit has seen its outcome.
+`result.training` names the fit and the membership: `in_sample`, `out_of_sample`, or `unknown`.
+`result.training.fit_through_season` is the last season that trained the fit.
+A `fit_through_season` of `None` gives `unknown`, not `out_of_sample`.
+The check takes the season from the Eastern game day of the start.
+The check is conservative: a game of the cutoff season counts as in-sample, even when the fit read only part of that season.
+An `as_of` earlier than the game does not clear the marker, because the fit still trained on the game.
+
+### Install for a consumer
+
+The repository is public, so the install needs no token.
+Pin a tag or a commit, so a consumer never builds from a moving branch.
+
+```text
+uv add "hockey-model @ git+https://github.com/slackworks/hockey-model@<tag-or-commit>"
+```
+
+A consumer must not use a sibling checkout at a developer-specific absolute path.
 
 ## CLI
 

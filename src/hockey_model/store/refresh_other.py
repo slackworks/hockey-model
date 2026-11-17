@@ -17,6 +17,7 @@ from hockey_model.sources.moneypuck import (
 )
 from hockey_model.sources.starters import StarterRead
 from hockey_model.store.espn_writes import write_injury_reads
+from hockey_model.store.moneypuck_gaps import unmatched_moneypuck
 from hockey_model.store.moneypuck_writes import (
     write_goalie_games,
     write_team_games,
@@ -135,6 +136,16 @@ def moneypuck(run: RefreshRun) -> None:
         ok = run.attempt(MONEYPUCK, url, unit)
         tried += ok
         failures = 0 if ok else failures + 1
+    _note_unmatched(run)
+
+
+def _note_unmatched(run: RefreshRun) -> None:
+    """Note the MoneyPuck rows that the form readers skip, once the files are read."""
+    counts = unmatched_moneypuck(run.conn)
+    if counts.team_unknown or counts.goalie_unknown:
+        run.notes.append(counts.unknown_note())
+    if counts.team_not_final or counts.goalie_not_final:
+        run.notes.append(counts.pending_note())
 
 
 def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stamp: datetime) -> int:

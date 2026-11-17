@@ -17,13 +17,15 @@ from refresh_support import (
     minute_clock,
     score_requests,
 )
+from seeding import FETCHED
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
-from hockey_model.sources.moneypuck import TEAM_GAMES_URL, goalie_games_url
+from hockey_model.sources.moneypuck import TEAM_GAMES_URL, TeamGameRow, goalie_games_url
 from hockey_model.store import refresh_nhl
 from hockey_model.store.db import connect
-from hockey_model.store.refresh import refresh
+from hockey_model.store.moneypuck_writes import write_team_games
+from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import read_boxscores
 from hockey_model.store.refresh_other import _stop_for_time
@@ -313,3 +315,20 @@ def test_an_abandoned_team_file_follows_the_same_skip_rule_as_a_goalie_file(
     client = FakeClient()
     refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=retry)
     assert (TEAM_GAMES_URL in client.urls) is expected
+
+
+def test_a_refresh_names_the_moneypuck_rows_that_match_no_stored_game(
+    conn: sqlite3.Connection,
+) -> None:
+    report = refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    assert "moneypuck: 10 team-game rows and 0 goalie-game rows match no stored game" in (
+        report.notes
+    )
+
+
+def test_a_starters_only_refresh_does_not_note_moneypuck_rows(conn: sqlite3.Connection) -> None:
+    write_team_games(
+        conn, [TeamGameRow(999, "TOR", "2026-01-10", 2.5, 1.5, 50, 40, 30, 20)], FETCHED
+    )
+    report = refresh_starters(conn, FakeClient(), now=NOW)
+    assert not any(n.startswith("moneypuck:") for n in report.notes)

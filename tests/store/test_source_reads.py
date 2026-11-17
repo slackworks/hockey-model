@@ -11,7 +11,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from hockey_model.store.db import connect
-from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, abandoned_urls, record_read
+from hockey_model.store.source_reads import (
+    ABANDON_AFTER_FAILED_READS,
+    abandoned_urls,
+    failed_since,
+    failed_urls,
+    record_read,
+)
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 SOURCE = "nhl_scores"
@@ -56,3 +62,27 @@ def test_failures_within_a_few_hours_do_not_abandon_the_url(conn: sqlite3.Connec
 def test_another_source_does_not_abandon_the_url(conn: sqlite3.Connection) -> None:
     _record(conn, "u", [False, False])
     assert abandoned_urls(conn, "nhl_boxscores") == frozenset()
+
+
+def test_a_good_read_at_the_same_time_as_a_failed_one_wins(conn: sqlite3.Connection) -> None:
+    # One refresh takes one stamp, so two reads of a URL can share a fetch time. The later row
+    # is the good one, and the URL must not count as failed.
+    record_read(conn, SOURCE, "u", START, "HTTP 500")
+    record_read(conn, SOURCE, "u", START)
+    assert failed_urls(conn, SOURCE) == []
+    assert failed_since(conn, SOURCE, "u", START - timedelta(days=1)) is False
+
+
+def test_a_failed_read_at_the_same_time_as_a_good_one_wins(conn: sqlite3.Connection) -> None:
+    record_read(conn, SOURCE, "u", START)
+    record_read(conn, SOURCE, "u", START, "HTTP 500")
+    assert failed_urls(conn, SOURCE) == ["u"]
+    assert failed_since(conn, SOURCE, "u", START - timedelta(days=1)) is True
+
+
+def test_failed_urls_names_only_the_newest_read_of_each_url(conn: sqlite3.Connection) -> None:
+    _record(conn, "a", [True])
+    _record(conn, "b", [False])
+    _record(conn, "a", [False, False])
+    record_read(conn, SOURCE, "a", START + timedelta(days=3))
+    assert failed_urls(conn, SOURCE) == ["b"]

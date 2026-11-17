@@ -2,6 +2,28 @@
 
 from importlib.metadata import version
 
+from hockey_model.consumer import ConsumerStore, open_store
+from hockey_model.consumer_errors import (
+    StoreMissingError,
+    StoreVersionError,
+    UnknownFitError,
+    UnknownGameError,
+    UnsupportedCapabilityError,
+)
+from hockey_model.consumer_types import (
+    FULL_GAME_WINNER,
+    RESTATEMENT,
+    ConsumerPrediction,
+    FitInfo,
+    GameInfo,
+    GoalieLine,
+    GoalieXgLine,
+    InjuryLine,
+    SkaterLine,
+    StarterInfo,
+    StoreInfo,
+    TeamXgLine,
+)
 from hockey_model.game import (
     Game,
     GamePrediction,
@@ -10,6 +32,8 @@ from hockey_model.game import (
     MissingKind,
     StarterSource,
     StarterStatus,
+    TrainingInfo,
+    TrainingMembership,
     game_win_probability,
 )
 from hockey_model.identity import Catalog
@@ -25,6 +49,7 @@ from hockey_model.models import (
 )
 from hockey_model.projections import RATE_STATS, TeamProjection, project_player, project_team
 from hockey_model.roster import nhl_roster, validate_roster
+from hockey_model.store.fits import LIVE_LABEL, FitRef
 from hockey_model.types import (
     AmbiguousPlayerError,
     HockeyModelError,
@@ -46,15 +71,26 @@ from hockey_model.types import (
 __version__ = version("hockey-model")
 
 __all__ = [
+    "FULL_GAME_WINNER",
+    "LIVE_LABEL",
     "RATE_STATS",
+    "RESTATEMENT",
     "AmbiguousPlayerError",
     "Catalog",
+    "ConsumerPrediction",
+    "ConsumerStore",
+    "FitInfo",
+    "FitRef",
     "FixedStatModel",
     "Game",
+    "GameInfo",
     "GameModel",
     "GamePrediction",
+    "GoalieLine",
     "GoalieStart",
+    "GoalieXgLine",
     "HockeyModelError",
+    "InjuryLine",
     "JointModel",
     "MatchupModel",
     "MatchupResult",
@@ -69,19 +105,31 @@ __all__ = [
     "RateStatAggregationError",
     "Roster",
     "RosterSource",
+    "SkaterLine",
     "Slot",
     "SlotError",
+    "StarterInfo",
     "StarterSource",
     "StarterStatus",
     "Standing",
     "StandingsModel",
     "StatModel",
+    "TrainingInfo",
+    "TrainingMembership",
+    "StoreInfo",
+    "StoreMissingError",
+    "StoreVersionError",
     "Team",
     "TeamProjection",
+    "TeamXgLine",
+    "UnknownFitError",
+    "UnknownGameError",
     "UnknownPlayerError",
+    "UnsupportedCapabilityError",
     "game_win_probability",
     "matchup",
     "nhl_roster",
+    "open_store",
     "playoff_probability",
     "project_player",
     "project_team",

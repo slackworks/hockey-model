@@ -4,7 +4,7 @@ import math
 import sqlite3
 
 import pytest
-from seeding import add_game, add_goalie, add_goalie_form, add_team_form, utc
+from seeding import add_game, add_goalie, add_goalie_form, add_team_form, artifact, utc
 
 from hockey_model.game import DegradedInput, Game, MissingKind
 from hockey_model.game_model.elo import EloBook
@@ -74,17 +74,17 @@ def test_the_attempt_feature_reports_its_own_kind(store: sqlite3.Connection) -> 
 
 def test_the_prediction_carries_the_degraded_inputs(store: sqlite3.Connection) -> None:
     _form(store, AWAY, 3.0, 1.0)
-    result = NhlGameModel(store, XG_FIT, GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
+    result = NhlGameModel(store, artifact(XG_FIT), GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
     assert result.degraded_inputs == (DegradedInput("xg_form", MissingKind.XG_FORM, (HOME,)),)
     assert math.isfinite(result.home_win)
     assert 0.0 < result.home_win < 1.0
     # The neutral feature adds nothing, so the win chance is the Elo-only chance.
-    plain = NhlGameModel(store, ELO_ONLY, GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
+    plain = NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
     assert result.home_win == pytest.approx(plain.home_win)
 
 
 def test_a_fit_without_the_feature_has_no_degraded_win_input(store: sqlite3.Connection) -> None:
-    result = NhlGameModel(store, ELO_ONLY, GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
+    result = NhlGameModel(store, artifact(ELO_ONLY), GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
     assert result.degraded_inputs == ()
     # The goal rates still note the missing form, as before.
     assert any(m.kind is MissingKind.XG_FORM for m in result.missing)

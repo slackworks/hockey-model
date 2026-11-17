@@ -8,6 +8,7 @@ from typing import NamedTuple
 from hockey_model.sources.starters import StarterRead
 from hockey_model.store.db import StoreError
 from hockey_model.store.reads import franchise_codes
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import iso_utc
 
 # A source and the NHL feed can differ on a start time after a schedule change.
@@ -27,7 +28,7 @@ def _find_game(conn: sqlite3.Connection, read: StarterRead) -> int | None:
     A read with two candidate games is an error: it must not guess between them.
     """
     codes = franchise_codes(read.team)
-    marks = ",".join("?" for _ in codes)
+    marks = placeholders(codes)
     low = iso_utc(read.start - START_TOLERANCE)
     high = iso_utc(read.start + START_TOLERANCE)
     rows = conn.execute(

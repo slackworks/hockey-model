@@ -58,23 +58,31 @@ def newest_read(conn: sqlite3.Connection, source: str, url: str) -> datetime | N
 
 
 def failed_since(conn: sqlite3.Connection, source: str, url: str, since: datetime) -> bool:
-    """Return True when the newest read of ``url`` failed and came after ``since``."""
+    """Return True when the newest read of ``url`` failed and came after ``since``.
+
+    Two reads of one URL can share a fetch time, because a refresh takes its stamp from one
+    clock tick. The row id breaks the tie, so a good read that came after a failed one wins.
+    """
     row = conn.execute(
         "SELECT ok, fetched_at FROM source_reads WHERE source = ? AND url = ?"
-        " ORDER BY fetched_at DESC LIMIT 1",
+        " ORDER BY fetched_at DESC, rowid DESC LIMIT 1",
         (source, url),
     ).fetchone()
     return row is not None and not row[0] and parse_iso_utc(row[1]) > since
 
 
 def failed_urls(conn: sqlite3.Connection, source: str) -> list[str]:
-    """Return the URLs of ``source`` whose newest read failed, in name order."""
+    """Return the URLs of ``source`` whose newest read failed, in name order.
+
+    The row id breaks a tie on the fetch time, as ``failed_since`` does, so a good read that
+    came after a failed one at the same time does not list the URL.
+    """
     cursor = conn.execute(
-        "SELECT r.url FROM source_reads r JOIN"
-        " (SELECT url, MAX(fetched_at) AS newest FROM source_reads WHERE source = ?"
-        "  GROUP BY url) n ON r.url = n.url AND r.fetched_at = n.newest"
-        " WHERE r.source = ? AND r.ok = 0 ORDER BY r.url",
-        (source, source),
+        "SELECT r.url FROM source_reads r WHERE r.source = ? AND r.rowid ="
+        " (SELECT n.rowid FROM source_reads n WHERE n.source = r.source AND n.url = r.url"
+        "  ORDER BY n.fetched_at DESC, n.rowid DESC LIMIT 1)"
+        " AND r.ok = 0 ORDER BY r.url",
+        (source,),
     )
     return [url for (url,) in cursor]
 

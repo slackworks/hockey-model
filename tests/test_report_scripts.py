@@ -332,9 +332,8 @@ def test_prepare_writes_the_backtest_and_the_marker_and_drops_old_days(
         f"prepared-{DAY}",
         "store.db.backfilled",
     ]
-    assert any(
-        "uv run hockey-model fit --features xg_form,rest" in line for line in _calls(tmp_path)
-    )
+    expected = "uv run hockey-model fit --features xg_form,rest --label live"
+    assert any(expected in line for line in _calls(tmp_path))
 
 
 def test_prepare_fits_on_the_features_the_backtest_kept(fakes: Path, tmp_path: Path) -> None:
@@ -343,7 +342,7 @@ def test_prepare_fits_on_the_features_the_backtest_kept(fakes: Path, tmp_path: P
     env["FAKE_BACKTEST_JSON"] = json.dumps({"live_features": ["rest"], "tested_features": LIVE})
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     fits = [line for line in _calls(tmp_path) if "hockey-model fit" in line]
-    assert fits == ["uv run hockey-model fit --features rest"]
+    assert fits == ["uv run hockey-model fit --features rest --label live"]
 
 
 def test_prepare_fits_the_elo_alone_when_the_joint_test_failed(fakes: Path, tmp_path: Path) -> None:
@@ -353,7 +352,7 @@ def test_prepare_fits_the_elo_alone_when_the_joint_test_failed(fakes: Path, tmp_
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 0
     fits = [line for line in _calls(tmp_path) if "hockey-model fit" in line]
-    assert fits == ["uv run hockey-model fit --features "]
+    assert fits == ["uv run hockey-model fit --features  --label live"]
     assert "the fit is the Elo alone" in result.stderr
 
 
