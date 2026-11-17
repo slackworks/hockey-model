@@ -1,6 +1,7 @@
 """Tests for the store upgrade: a version 1 store moves to the current version, keeping rows."""
 
 import argparse
+import os
 import re
 import sqlite3
 import tempfile
@@ -151,6 +152,35 @@ def test_a_missing_file_is_refused_without_being_created(tmp_path: Path) -> None
     assert not path.exists()
 
 
+def test_if_missing_skip_returns_without_creating_the_file(tmp_path: Path) -> None:
+    """A first run upgrades nothing and continues to the refresh that writes the store."""
+    path = tmp_path / "absent.db"
+    report = upgrade_store(path, if_missing="skip")
+    assert (report.from_version, report.to_version, report.changed) == (None, SCHEMA_VERSION, False)
+    assert report.next_step is not None and "first refresh" in report.next_step
+    assert not path.exists()
+
+
+def test_a_directory_is_refused_even_when_a_missing_file_is_skipped(tmp_path: Path) -> None:
+    """A directory is not an absent store, so a skip would hide a wrong path."""
+    with pytest.raises(StoreError, match="not a regular file"):
+        upgrade_store(tmp_path, if_missing="skip")
+
+
+def test_an_unreadable_directory_is_named(tmp_path: Path) -> None:
+    """A parent that cannot be entered is not an absent store, so the error names it."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a directory that has no permission bits")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0)
+    try:
+        with pytest.raises(StoreError, match="cannot read the path"):
+            upgrade_store(blocked / "store.db", if_missing="skip")
+    finally:
+        blocked.chmod(0o755)
+
+
 def test_a_newer_store_is_refused(v1: Path) -> None:
     conn = sqlite3.connect(v1)
     conn.execute(f"UPDATE schema_version SET version = {SCHEMA_VERSION + 1}")
@@ -167,11 +197,41 @@ def test_the_open_path_refuses_version_1_and_names_the_upgrade(v1: Path) -> None
 
 
 def test_the_store_command_runs_the_upgrade_and_prints_the_report(v1: Path) -> None:
-    args = argparse.Namespace(command="store", store_command="upgrade", db=str(v1))
+    args = argparse.Namespace(
+        command="store", store_command="upgrade", db=str(v1), if_missing="fail"
+    )
     payload, code = run_store_command(args)
     assert code == 0
     assert isinstance(payload, dict)
     assert payload["to_version"] == SCHEMA_VERSION and payload["changed"] is True
+
+
+def test_the_store_command_skips_a_missing_file_when_asked(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        command="store",
+        store_command="upgrade",
+        db=str(tmp_path / "absent.db"),
+        if_missing="skip",
+    )
+    payload, code = run_store_command(args)
+    assert code == 0
+    assert isinstance(payload, dict)
+    assert payload["from_version"] is None and payload["changed"] is False
+    assert not (tmp_path / "absent.db").exists()
+
+
+def test_the_store_command_expands_a_tilde_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--db follows the same path rule as HOCKEY_MODEL_DB, which expands a home shortcut."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    args = argparse.Namespace(
+        command="store", store_command="upgrade", db="~/absent.db", if_missing="skip"
+    )
+    payload, code = run_store_command(args)
+    assert code == 0
+    assert isinstance(payload, dict)
+    assert payload["path"] == str(tmp_path / "absent.db")
 
 
 def test_the_store_command_needs_a_subcommand(v1: Path) -> None:

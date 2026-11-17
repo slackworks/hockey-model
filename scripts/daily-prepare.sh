@@ -60,8 +60,9 @@ store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$store_dir"
 
 # The cache restores a store that older code wrote. The upgrade keeps every row and writes a
-# backup, so the run continues on the same store instead of stopping at the version check.
-bash "$(dirname "$0")/upgrade-store.sh"
+# backup, so the run continues on the same store instead of stopping at the version check. A
+# missing store file is skipped, because the first backfill below writes a current version.
+uv run hockey-model store upgrade --if-missing skip >&2
 
 # The marker is written only after a backfill finishes. A store file without it is partial.
 if ! command -v jq >/dev/null; then

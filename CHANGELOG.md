@@ -41,7 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the November 2026 backtest report. The joint test passed with expected-goals form and rest, and the guess run vetoed goalie goals saved above expected. [docs:backtest]
 - Add `hockey-model backtest --candidates attempt`, which replaces the expected-goals form with a shot-attempt form for the leak test. [feat:backtest]
 - Add the experiment registry: records in `experiments/`, `hockey-model experiments check`, and `hockey-model experiments run`. A confirmation record scores only games after its data cutoff in the 2026-27 regular season and later, runs once, and refuses a cohort smaller than its minimum. An exploration record scores the seasons through 2025-26 and may run again. The checker validates every schema keyword, compares immutable fields with the commit that registered the record, ties `status` to `result`, and fails a record whose committed result was removed or replaced. [feat:experiments]
-- Add `hockey-model store upgrade`, which moves a version 1 store to the current schema. It keeps every row and fit ID, writes a backup first, and runs in one transaction. [feat:store]
+- Add `hockey-model store upgrade`, which moves a version 1 store to the current schema. It keeps every row and fit ID, writes a backup first, and runs in one transaction. `--if-missing skip` exits 0 when the store file does not exist, for a first run that writes one later. [feat:store]
 - Add a pre-push mutation check. It runs mutmut on the functions that a push changes, and it fails on a survivor or a timeout on a changed line, on any other incomplete result, and on a mutant whose line it cannot find. A timeout off the changed lines is listed and does not fail the push. [chore:test]
 - Add a scheduled check that alerts when a game day with games has no `reports-DATE` release, or when every game row of its report was made after the start. A day with no games raises no alert. [feat:report]
 
@@ -67,7 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Upgrade the restored store at the start of `daily-prepare.sh` and `daily-report.sh`. The store cache holds a file that older code wrote, and the schema version check refused it, so every scheduled prepare run from the version 3 bump to this fix stopped before it read a source and no daily report was written. [fix:store]
+- Upgrade the restored store at the start of `daily-prepare.sh` and `daily-report.sh`. The store cache holds a file that older code wrote, and the schema version check refused it, so every scheduled prepare run from the version 3 bump to this fix stopped before it read a source and no daily report was written. A missing store file is skipped with `store upgrade --if-missing skip`, because the first backfill writes a current version. [fix:store]
 - Leave the same count of bootstrap means outside each end of the interval. The upper end moved one rank lower, so a promotion needs a slightly stricter result. [fix:backtest]
 - Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
 - Stop a postponed row from hiding a late daily report in `check-daily-report.sh`. [fix:report]
