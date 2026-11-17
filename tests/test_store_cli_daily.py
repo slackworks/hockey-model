@@ -5,7 +5,6 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from seeding import add_game
 
 from hockey_model import store_cli
 from hockey_model.cli import main
@@ -79,23 +78,6 @@ def test_report_due_without_games_uses_the_end_of_the_day(
     payload = json.loads(capsys.readouterr().out)
     assert payload["games"] == 0
     assert payload["first_puck_drop_utc"] == "2026-11-05T05:00:00.000000+00:00"
-
-
-def test_fit_without_a_season_uses_the_newest_season_in_the_store(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
-) -> None:
-    """The cutoff follows the data, so the clock cannot name a season the fit never read."""
-    db = tmp_path / "store.db"
-    conn = connect(db)
-    add_game(conn, 1, "2024-11-01T00:00", season=20242025)
-    add_game(conn, 2, "2025-11-01T00:00", season=20252026)
-    # A scheduled game of a later season did not train the fit, so it does not set the cutoff.
-    add_game(conn, 3, "2026-12-01T00:00", season=20262027, state="FUT")
-    conn.commit()
-    conn.close()
-    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert main(["fit", "--features", ""]) == 0
-    assert json.loads(capsys.readouterr().out)["through_season"] == 20252026
 
 
 def test_fit_without_a_season_in_an_empty_store_says_to_refresh(

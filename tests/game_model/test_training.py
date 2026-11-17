@@ -99,6 +99,14 @@ def test_the_last_trained_season_is_the_newest_final_season(store: sqlite3.Conne
     assert last_trained_season(store) == 20162017
 
 
+def test_a_store_whose_only_season_is_the_first_fit_season_trains(
+    store: sqlite3.Connection,
+) -> None:
+    """FIT_FIRST itself is trainable, so the floor comparison must not drop it."""
+    add_game(store, 1, "2015-11-01T00:00", season=20152016)
+    assert last_trained_season(store) == 20152016
+
+
 def test_a_scheduled_game_does_not_set_the_last_trained_season(store: sqlite3.Connection) -> None:
     seed(store)
     add_game(store, 5, "2017-12-01T00:00", season=20172018, state="FUT")

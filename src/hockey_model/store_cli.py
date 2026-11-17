@@ -129,19 +129,22 @@ def parse_features(text: str | None) -> tuple[str, ...]:
 
 def _fit(args: argparse.Namespace) -> tuple[object, int]:
     features = parse_features(args.features)
-    through = args.through_season
     conn = connect(db_path_from_env(os.environ))
     try:
-        # The recorded cutoff follows the data, not the clock. A fit that records a season
-        # whose games it never read would mark the first games of that season in sample (#238).
-        if through is None:
-            newest = last_trained_season(conn)
-            if newest is None:
-                raise HockeyModelError(
-                    f"fit: the store holds no final game from {FIT_FIRST}; "
-                    "run `hockey-model refresh --backfill-from 2014-10-01`"
-                )
-            through = newest
+        # The cutoff follows the data, not the clock. A fit that records a season whose games
+        # it never read would name those games in sample (#238).
+        newest = last_trained_season(conn)
+        if newest is None:
+            raise HockeyModelError(
+                f"fit: the store holds no final game from {FIT_FIRST}; "
+                "run `hockey-model refresh --backfill-from 2014-10-01`"
+            )
+        through = newest if args.through_season is None else args.through_season
+        if through > newest:
+            raise HockeyModelError(
+                f"fit through {through}: the store holds no final game after {newest}; "
+                f"run `hockey-model refresh`, or pass --through-season {newest}"
+            )
         if features:
             rows = training_rows(conn, FIT_FIRST, through, GoalieMode.ACTUAL, names=features)
             if not rows:

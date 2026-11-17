@@ -79,13 +79,10 @@ class FitRecord:
 
     ``label`` names the fit for later selection. It is written in the same transaction as the
     fit row, so a reader never sees the label without the fit that it names.
-
-    ``fit_through_season`` is None when the store held no final game to derive a season from.
-    A reader MUST treat None as unknown, not as out of sample.
     """
 
     fit: LogisticFit
-    fit_through_season: int | None
+    fit_through_season: int
     created_at: datetime
     imputation: Sequence[Mapping[str, object]] = ()
     label: str | None = None

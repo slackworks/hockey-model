@@ -345,6 +345,20 @@ def test_the_eastern_game_day_decides_the_season_near_the_boundary(
     assert marker.membership is TrainingMembership.IN_SAMPLE
 
 
+def test_a_stored_game_uses_its_stored_season_not_the_game_day(
+    store: sqlite3.Connection,
+) -> None:
+    """The 2020 bubble is stored as 2019-20, and its September starts fall in 2020-21."""
+    add_game(store, 1, "2020-09-01T23:00", season=20192020)
+    played = Game(1, "TOR", "BOS", utc("2020-09-01T23:00"))
+    marker = (
+        NhlGameModel(store, artifact(ELO_ONLY, 20192020), GoalieMode.GUESS)
+        .predict(played, utc("2020-09-01T16:00"), 0.8)
+        .training
+    )
+    assert marker == TrainingInfo(1, 20192020, TrainingMembership.IN_SAMPLE)
+
+
 def test_a_team_whose_moneypuck_form_lags_gets_a_note(store: sqlite3.Connection) -> None:
     # TOR has a MoneyPuck row only for game 15, and games 17 and 18 are final. MTL is current.
     for day in (15, 17, 18):

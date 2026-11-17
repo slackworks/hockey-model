@@ -273,7 +273,7 @@ def _fit(features: str) -> list[str]:
     return ["fit", "--through-season", "20152016", "--features", features, "--label", "live"]
 
 
-def test_cli_fit_requires_through_season(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_fit_requires_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
     assert cli.main(["fit"]) == 2
 
@@ -330,15 +330,36 @@ def test_cli_fit_above_the_imputation_limit_exits_two_and_saves_no_fit(
     assert saved == 0
 
 
+def test_cli_fit_refuses_a_through_season_the_store_cannot_cover(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A cutoff past the newest stored final game would name untrained games in sample."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(["fit", "--through-season", "20262027", "--features", "rest"]) == 2
+    err = capsys.readouterr().err
+    assert "20262027" in err
+    assert "20152016" in err
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_cli_fit_with_empty_features_saves_the_elo_alone(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
-    code = cli.main(["fit", "--through-season", "20252026", "--features", ""])
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    code = cli.main(["fit", "--through-season", "20152016", "--features", ""])
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert (out["features"], out["elo_weight"], out["intercept"]) == ([], 1.0, 0.0)
     assert out["diagnostics"] is None
+    assert out["through_season"] == 20152016
 
 
 def test_cli_fit_without_features_is_an_argument_error(
