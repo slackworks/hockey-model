@@ -1,6 +1,7 @@
 """Tests for the thin JSON CLI wrapper."""
 
 import json
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -273,7 +274,7 @@ def _fit(features: str) -> list[str]:
     return ["fit", "--through-season", "20152016", "--features", features, "--label", "live"]
 
 
-def test_cli_fit_requires_through_season(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_fit_requires_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
     assert cli.main(["fit"]) == 2
 
@@ -330,15 +331,36 @@ def test_cli_fit_above_the_imputation_limit_exits_two_and_saves_no_fit(
     assert saved == 0
 
 
+def test_cli_fit_refuses_a_through_season_the_store_cannot_cover(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A cutoff past the newest stored final game would name untrained games in sample."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(["fit", "--through-season", "20262027", "--features", "rest"]) == 2
+    err = capsys.readouterr().err
+    assert "20262027" in err
+    assert "20152016" in err
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_cli_fit_with_empty_features_saves_the_elo_alone(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
-    code = cli.main(["fit", "--through-season", "20252026", "--features", ""])
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    code = cli.main(["fit", "--through-season", "20152016", "--features", ""])
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert (out["features"], out["elo_weight"], out["intercept"]) == ([], 1.0, 0.0)
     assert out["diagnostics"] is None
+    assert out["through_season"] == 20152016
 
 
 def test_cli_fit_without_features_is_an_argument_error(
@@ -492,6 +514,60 @@ def test_cli_game_marks_a_game_inside_the_fit_seasons(
     assert cli.main(["game", str(outside_id)]) == 0
     outside = json.loads(capsys.readouterr().out)["training"]
     assert outside["membership"] == "out_of_sample"
+
+
+def test_cli_fit_without_a_season_does_not_claim_the_next_season(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A default fit records the newest trained season, so a later game stays out of sample."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    outside_id = _game_ids(db)[1]
+    # No --through-season: the seeded final games are all 2015-16. The 2026-27 game is only
+    # scheduled, so the fit trained through 2015-16 and must not mark that game in sample.
+    assert cli.main(["fit", "--features", "rest", "--label", "live"]) == 0
+    assert json.loads(capsys.readouterr().out)["through_season"] == 20152016
+    assert cli.main(["game", str(outside_id)]) == 0
+    assert json.loads(capsys.readouterr().out)["training"]["membership"] == "out_of_sample"
+
+
+def test_cli_fit_records_the_start_of_the_newest_game_it_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(["fit", "--features", "rest"]) == 0
+    recorded = json.loads(capsys.readouterr().out)["trained_through"]
+    # The seeded history ends on 2015-12-15, and the game after it is still scheduled.
+    assert recorded == "2015-12-15T00:00:00.000000+00:00"
+
+
+def test_cli_a_live_fit_does_not_mark_a_later_game_of_its_season_in_sample(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The live case: the fit records today's season, and tonight's game is still not its data."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+
+    def later(conn: sqlite3.Connection) -> None:
+        # The seeded finals end on 2015-12-15, so this game starts after the fit read them.
+        add_game(conn, 9001, "2016-01-05T00:00", season=20152016, state="FUT")
+
+    conn = connect(db)
+    try:
+        later(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    # The fit reads the final games of 2015-16, so it records that season.
+    assert cli.main(["fit", "--features", "rest", "--label", "live"]) == 0
+    assert json.loads(capsys.readouterr().out)["through_season"] == 20152016
+    assert cli.main(["game", "9001"]) == 0
+    marker = json.loads(capsys.readouterr().out)["training"]
+    assert (marker["fit_through_season"], marker["membership"]) == (20152016, "out_of_sample")
 
 
 def test_cli_game_serves_the_fit_that_fit_id_names(

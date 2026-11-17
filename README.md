@@ -97,7 +97,8 @@ The note names the number of stored games in the gap and the two game ids.
 A MoneyPuck file is weekly, so a recent download can still stop several games short.
 
 `training` names the fit and whether the game trained it: `in_sample`, `out_of_sample`, or `unknown`.
-A fit that trained through the game's season names it `in_sample`, and such a result is not a forecast: the fit has seen the game's outcome.
+A game is `in_sample` when its season trained the fit and it started no later than the newest game that the fit read.
+Such a result is not a forecast: the fit has seen the game's outcome.
 `unknown` means the saved fit does not record the season it trained through, so a reader must not read it as out of sample.
 `game`, `daily`, and the consumer API carry the same field. The daily report Markdown puts an `in_sample` note on the game row.
 
@@ -140,7 +141,8 @@ Then `success` is false, `live_features` is empty, the interval is `null`, and `
 - `report-due [--date YYYY-MM-DD] [--force]` prints whether the first puck drop of the game day is still ahead of the run, plus `--margin-seconds`, so the current run may publish the day's report. Every trigger that starts before the first puck drop is due. The first run that publishes creates the release. Later runs before the first puck drop replace its files and notes, so a reader can see the release change until then. After the puck drop, runs skip the day. A run that starts after the puck drop publishes the first report of the day late, with a warning. A game day with no games publishes nothing. The output also says `prep_too_early` when the first puck drop is more than the prep window away, so a run that finds no prep marker skips instead of failing. Each build keeps its own `report-DATE-HHMMSSZ` files, so no published version is replaced. The triggers run at minute `TRIGGER_MINUTE_UTC` of each hour in `TRIGGER_HOURS_UTC` in `report_trigger.py`, and the cron in `.github/workflows/daily-report.yml` MUST list the same minute and hours. `scripts/trigger_hours.py` derives them from the season schedule. The design is in [docs/design/daily-report-triggers.md](docs/design/daily-report-triggers.md).
 - `report-decide` prints the publish step of one trigger from the facts that `scripts/report-gate.sh` read: `--due`, `--games`, `--date`, `--force`, `--dry-run`, and `--published`. With `--published unknown` it prints `lookup_needed`. When that is true, read the release and ask again with `--published true` or `false`. It prints `due`, `publish`, `reason`, `lookup_needed`, and `warning`.
 - To test the report by hand, run `gh workflow run daily-report -f force=true -f dry_run=true`. The run builds the report for the current game day, skips the trigger slot and the published-release check, and uploads the report as an artifact. It publishes no release.
-- `fit` without `--through-season` fits through the season that holds today, in UTC.
+- `fit` without `--through-season` fits through the newest season that holds a final game in the store, and records that season.
+An explicit `--through-season` newer than the newest stored final game is refused, so the saved cutoff never names a season that trained nothing.
 
 Two workflows publish the report. `daily-prepare` runs `scripts/daily-prepare.sh` each morning before the first trigger: it refreshes every source, runs the backtest, and fits the model on the `live_features` of that backtest. A backtest report without `live_features` stops the run. `daily-report` runs `scripts/report-gate.sh` at each trigger. When the gate is due, it runs `scripts/daily-report.sh`, which refreshes only the starters and predicts, and then `scripts/publish-daily-report.sh`. The release is tagged `reports-DATE` and holds the daily report, the backtest JSON (`backtest-DATE.json`), and the backtest per-game CSV (`backtest-games-DATE.csv`). When the morning run did not finish, the report run stops with exit code 1 and names the fix: run the `daily-prepare` workflow with that date, then run the report again.
 
@@ -248,12 +250,15 @@ They are not a joint score distribution: two marginals give no chance of a total
 A call with an `as_of` therefore does not prove an as-issued historical prediction.
 `result.made_after_start` is true when `as_of` is at or after the puck drop.
 
-A game inside the seasons that trained the fit is an in-sample result, and the fit has seen its outcome.
+A game that trained the fit is an in-sample result, and the fit has seen its outcome.
 `result.training` names the fit and the membership: `in_sample`, `out_of_sample`, or `unknown`.
 `result.training.fit_through_season` is the last season that trained the fit.
 A `fit_through_season` of `None` gives `unknown`, not `out_of_sample`.
-The check takes the season from the Eastern game day of the start.
-The check is conservative: a game of the cutoff season counts as in-sample, even when the fit read only part of that season.
+A fit also records a game cutoff, which is the start of the newest final game that it read.
+A game is `in_sample` when its season is the cutoff season or an earlier one, and its start is no later than that game cutoff.
+The game cutoff therefore marks the first game of a live fit's own season that the fit did not read.
+A game of the season before the first fit season is `out_of_sample`, even when its start is inside the cutoff, because no fit trains on it. The Elo burn-in season is the case that matters.
+The season comes from the stored season of the game when the store holds it, and from the Eastern game day of the start otherwise.
 An `as_of` earlier than the game does not clear the marker, because the fit still trained on the game.
 
 ### Install for a consumer

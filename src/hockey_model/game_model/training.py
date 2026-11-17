@@ -3,13 +3,15 @@
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from hockey_model.game import Game
 from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.features import FeatureRow, GoalieMode, build_features
-from hockey_model.game_model.seasons import ELO_BURN_IN
+from hockey_model.game_model.seasons import ELO_BURN_IN, FIT_FIRST
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import LATEST_GAME, final_games_before, player_catalog
+from hockey_model.store.timestamps import parse_iso_utc
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,3 +68,32 @@ def training_rows(
             rows.append(TrainingRow(game, features, _home_won(game)))
         book.update(game)
     return rows
+
+
+def last_trained_start(conn: sqlite3.Connection, through: int) -> datetime | None:
+    """Return the start of the newest final game that a fit through ``through`` reads.
+
+    A fit records this start as its game-level cutoff, because the season cutoff names every
+    game of the cutoff season. A game that starts after this moment was not final when the fit
+    ran, so it cannot be in sample (#238).
+    """
+    row = conn.execute(
+        "SELECT MAX(start_utc) FROM latest_final_games g WHERE g.season <= ?", (through,)
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return parse_iso_utc(str(row[0]))
+
+
+def last_trained_season(conn: sqlite3.Connection) -> int | None:
+    """Return the newest season that holds a final game, or None when no fit can train.
+
+    A fit records this season as its cutoff, so the cutoff is the newest season whose results
+    the fit read. The Elo replays the burn-in season too, but no feature row of that season
+    enters a fit, and ``FitArtifact.covers_game`` reports it out of sample.
+    """
+    row = conn.execute("SELECT MAX(season) FROM latest_final_games").fetchone()
+    if row is None or row[0] is None:
+        return None
+    newest = int(row[0])
+    return None if newest < FIT_FIRST else newest

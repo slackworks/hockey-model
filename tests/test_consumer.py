@@ -64,7 +64,12 @@ def _seed(path: Path) -> None:
         add_goalie(conn, 1, "TOR", 8478402, "Joseph Woll")
         add_team_form(conn, 1, "TOR", 3.5, 2.0)
         add_team_form(conn, 1, "BOS", 2.0, 3.0)
-        save_fit(conn, FitRecord(ELO_ONLY, 20252026, T0, label="live"))
+        # The fit ran after the final game 1, so it read that game and not the later game 2.
+        read_through = utc("2026-01-10T03:00")
+        save_fit(
+            conn,
+            FitRecord(ELO_ONLY, 20252026, T0, label="live", trained_through=read_through),
+        )
         add_game(conn, 2, "2026-01-20T23:00", "TOR", "BOS", state="FUT")
 
     _write(path, fill)
@@ -141,10 +146,12 @@ def test_a_missing_path_raises_and_creates_no_file(tmp_path: Path) -> None:
 
 
 def test_a_prediction_names_the_training_membership(store_path: Path) -> None:
-    """The seed fit trained through 2025-26, and both seeded games are in that season."""
+    """The seed fit read the games that were final when it ran, and no later one."""
     with open_store(store_path, fit=FitRef(label="live")) as consumer:
-        result = consumer.predict(2, as_of=NOW)
-    assert result.training == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
+        trained = consumer.predict(1, as_of=NOW)
+        later = consumer.predict(2, as_of=NOW)
+    assert trained.training == TrainingInfo(1, 20252026, TrainingMembership.IN_SAMPLE)
+    assert later.training == TrainingInfo(1, 20252026, TrainingMembership.OUT_OF_SAMPLE)
 
 
 def test_a_labelled_fit_wins_over_a_newer_unlabelled_fit(store_path: Path) -> None:

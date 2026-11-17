@@ -14,11 +14,20 @@ from hockey_model.store.timestamps import iso_utc
 
 FETCHED = datetime(2026, 11, 1, tzinfo=UTC)
 ARTIFACT_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+# A game cutoff later than any test game, so a fit that names a season read every game of it.
+LATEST = datetime(9000, 1, 1, tzinfo=UTC)
 
 
-def artifact(fit: LogisticFit, through: int | None = 20252026) -> FitArtifact:
-    """Return the saved-fit record that a model needs, for a fit that a test builds."""
-    return FitArtifact(1, fit, through, ARTIFACT_TIME)
+def artifact(
+    fit: LogisticFit, through: int | None = 20252026, trained_through: datetime | None = LATEST
+) -> FitArtifact:
+    """Return the saved-fit record that a model needs, for a fit that a test builds.
+
+    The game cutoff defaults to ``LATEST``, so a test that names a season gets a fit that read
+    every game of it, as the season bound alone used to mean. Pass ``trained_through`` to bind
+    the fit to a game, or ``None`` to let ``created_at`` be the bound.
+    """
+    return FitArtifact(1, fit, through, ARTIFACT_TIME, trained_through=trained_through)
 
 
 def utc(text: str) -> datetime:

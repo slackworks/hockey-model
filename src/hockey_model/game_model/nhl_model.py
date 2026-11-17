@@ -21,7 +21,12 @@ from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
 from hockey_model.store.fits import FitArtifact
 from hockey_model.store.moneypuck_gaps import mp_form_lag
-from hockey_model.store.reads import final_games_before, mp_team_form_before, team_games_before
+from hockey_model.store.reads import (
+    final_games_before,
+    game_row,
+    mp_team_form_before,
+    team_games_before,
+)
 from hockey_model.store.staleness import stale_sources
 from hockey_model.types import Projection
 
@@ -72,16 +77,15 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _training_info(artifact: FitArtifact, game: Game) -> TrainingInfo:
+def _training_info(artifact: FitArtifact, season: int, start: datetime) -> TrainingInfo:
     """Return the fit that made a prediction, and whether the game trained it.
 
-    The check takes the season from the Eastern game day of the start, as the schedule does.
-    The check is conservative: a fit that trained through a season names every game of that
-    season in-sample, even when the fit read only part of it. A fit that does not record its
-    cutoff gives ``unknown``. ``FitArtifact.covers_season`` holds the season bounds.
+    The check needs both bounds: the saved season, and the start of the newest game that the
+    fit read. The season alone names every later game of that season in sample, which is the
+    live-fit case (#238). A fit that does not record its season gives ``unknown``.
     """
     cutoff = artifact.fit_through_season
-    covered = artifact.covers_season(season_of(game_day_of(game.start)))
+    covered = artifact.covers_game(season, start)
     if covered is None:
         membership = TrainingMembership.UNKNOWN
     elif covered:
@@ -89,6 +93,19 @@ def _training_info(artifact: FitArtifact, game: Game) -> TrainingInfo:
     else:
         membership = TrainingMembership.OUT_OF_SAMPLE
     return TrainingInfo(artifact.fit_id, cutoff, membership)
+
+
+def _stored_game(conn: sqlite3.Connection, game: Game) -> tuple[int, datetime]:
+    """Return the stored season and start of ``game``, or those of its Eastern game day.
+
+    The stored season is the name the fit trained on. The 2020 bubble is the case that
+    differs: its games are stored under 20192020, and their September starts fall in the
+    Eastern game day of 2020-21.
+    """
+    row = game_row(conn, game.game_id)
+    if row is None:
+        return season_of(game_day_of(game.start)), game.start
+    return row.season, row.start
 
 
 def _clamp_notes(game: Game, home_rate: float, away_rate: float) -> list[MissingInput]:
@@ -167,5 +184,5 @@ class NhlGameModel:
             missing=tuple(missing),
             credits=credits,
             degraded_inputs=row.imputed,
-            training=_training_info(self._artifact, game),
+            training=_training_info(self._artifact, *_stored_game(self._conn, game)),
         )

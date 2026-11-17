@@ -47,6 +47,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- A fit with no `--through-season` records the newest season that holds a final game, not the season that holds today. The old cutoff named a season whose games the fit never read, so `result.training` marked the first games of that season in sample. [fix:model]
+- A fit also records a game cutoff, which is the start of the newest final game that it read, and `result.training` needs both bounds. The season alone still marked a live fit's later games in sample, so a game that starts after the fit read the store is now `out_of_sample`. A fit saved before this value existed uses its save time as the bound, because no game that starts after that time was final. The value is stored in the saved weights, so the schema version does not change. [fix:model]
+- `hockey-model fit` refuses an explicit `--through-season` newer than the newest stored final game, because that cutoff named seasons the fit never read. [fix:model]
+- `result.training.membership` uses the stored season of the game, not the season of its Eastern game day. The 2020 bubble is stored as 2019-20, and its September starts fall on the 2020-21 game day. [fix:model]
 - Lower `timeout_multiplier` for mutmut, so a hung mutant of `block_bootstrap_mean_ci` stops sooner and the pre-push mutation check finishes inside its limit. [chore:test]
 - Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
@@ -104,7 +108,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fail the mutation job when the report marks the run `execution_failed`. The gate read its own variable, so a bad stats file left the job green. [fix:ci]
 - Document an external clock that will start the daily report at each publish slot, with the GitHub schedule kept as a fallback. GitHub's schedule ran the 23:44 UTC slot about an hour late on two days. The clock runs only after the owner provisions it. [docs:report]
 - Stop a backfill from blaming `--budget-seconds` when a source failure stopped it before the budget ran out. [fix:report]
-- Read the MoneyPuck season and its staleness URLs from the Eastern game day, so they agree with the game cutoff near the season boundary. The dated score-day check reads the current season from the Eastern game day too. The fit default stays on the UTC date, which selects the same fit data near the boundary; #238 decides the date. [fix:store]
+- Read the MoneyPuck season and its staleness URLs from the Eastern game day, so they agree with the game cutoff near the season boundary. The dated score-day check reads the current season from the Eastern game day too. [fix:store]
 - Judge the mutation report on every ref, and read all four job results, so a failed shard, merge, or export names itself in the report instead of leaving a clean-looking counts table. The issue write stays on the default branch. [fix:ci]
 - Fail the mutation report when the open-report search reaches the `gh --limit` cap of 1000, because an open report past the cap would be missed and a second one would open. [fix:ci]
 - Name the unresolved days that the `MAX_UNRESOLVED_DAYS` bound leaves out of a refresh. [fix:store]

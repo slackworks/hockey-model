@@ -202,7 +202,7 @@ def _training_note(training: TrainingInfo | None) -> str:
         return ""
     return (
         f"in_sample: fit {training.fit_id} trained through season "
-        f"{training.fit_through_season}; this game is inside its training seasons"
+        f"{training.fit_through_season}; this game is inside its training data"
     )
 
 

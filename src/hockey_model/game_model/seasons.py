@@ -56,7 +56,7 @@ MIN_SEASON_COVERAGE = 0.95
 
 # A season is counted from this month of its first year until the same month a year later.
 # The cohorts, the season filter, and the MoneyPuck refresh count the season from the Eastern
-# game day. The fit default is the exception, as its open issue records.
+# game day. A fit cutoff comes from the stored season of its games, not from this date.
 SEASON_START_MONTH = 9
 
 
