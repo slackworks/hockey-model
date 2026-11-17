@@ -313,6 +313,12 @@ def test_a_game_in_the_season_after_the_cutoff_is_out_of_sample(
     assert marker.membership is TrainingMembership.OUT_OF_SAMPLE
 
 
+def test_a_burn_in_season_game_is_out_of_sample(store: sqlite3.Connection) -> None:
+    """The fit reads no game of 2014-15, so the Elo burn-in season did not train it."""
+    marker = _training(store, 20252026, start="2015-01-20T00:00")
+    assert marker.membership is TrainingMembership.OUT_OF_SAMPLE
+
+
 def test_a_fit_with_no_cutoff_says_the_membership_is_unknown(
     store: sqlite3.Connection,
 ) -> None:

@@ -78,12 +78,13 @@ def _training_info(artifact: FitArtifact, game: Game) -> TrainingInfo:
     The check takes the season from the Eastern game day of the start, as the schedule does.
     The check is conservative: a fit that trained through a season names every game of that
     season in-sample, even when the fit read only part of it. A fit that does not record its
-    cutoff gives ``unknown``.
+    cutoff gives ``unknown``. ``FitArtifact.covers_season`` holds the season bounds.
     """
     cutoff = artifact.fit_through_season
-    if cutoff is None:
+    covered = artifact.covers_season(season_of(game_day_of(game.start)))
+    if covered is None:
         membership = TrainingMembership.UNKNOWN
-    elif season_of(game_day_of(game.start)) <= cutoff:
+    elif covered:
         membership = TrainingMembership.IN_SAMPLE
     else:
         membership = TrainingMembership.OUT_OF_SAMPLE
