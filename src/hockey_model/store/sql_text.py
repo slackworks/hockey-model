@@ -1,9 +1,9 @@
 """SQL text that several store readers share."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable
 
 
-def placeholders(values: Sequence[object]) -> str:
+def placeholders(values: Iterable[object]) -> str:
     """Return one ``?`` for each value, joined by commas, for an ``IN (`` list.
 
     Callers that build a SQL string and a parameter tuple must expand the values in the same
