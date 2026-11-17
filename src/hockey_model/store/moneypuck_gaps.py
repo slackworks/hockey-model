@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from hockey_model.store.reads import franchise_codes, result_cutoff
+from hockey_model.store.sql_text import placeholders
 
 # The MoneyPuck files name a game by its NHL id. A row is useful only when the store holds
 # that game and the game is over, because the form reader joins the final games.
@@ -101,7 +102,7 @@ def mp_form_lag(conn: sqlite3.Connection, team: str, before: datetime) -> FormLa
     never compares its form against a game that it cannot know.
     """
     codes = franchise_codes(team)
-    marks = ",".join("?" for _ in codes)
+    marks = placeholders(codes)
     cutoff = result_cutoff(before)
     side = f"(g.home IN ({marks}) OR g.away IN ({marks}))"
     newest_final = conn.execute(

@@ -12,6 +12,7 @@ from hockey_model.consumer_types import GoalieXgLine, InjuryLine, StoreInfo, Tea
 from hockey_model.store.db import SCHEMA_VERSION
 from hockey_model.store.reads import franchise_codes, injury_snapshot_before, result_cutoff
 from hockey_model.store.source_reads import LIVE_FEED_MAX_AGE
+from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.utc import require_utc
 
@@ -27,7 +28,7 @@ def team_xg_games(
     require_utc(before, "before")
     _require_count(count, "team MoneyPuck games")
     codes = franchise_codes(team)
-    marks = ",".join("?" for _ in codes)
+    marks = placeholders(codes)
     cursor = conn.execute(
         "SELECT m.game_id, m.team, m.game_date, m.xg_for, m.xg_against"
         " FROM latest_mp_team_games m JOIN latest_final_games g ON g.game_id = m.game_id"
