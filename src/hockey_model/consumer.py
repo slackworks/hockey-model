@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from hockey_model.consumer_errors import StoreMissingError, StoreVersionError, UnknownGameError
+from hockey_model.consumer_reads import (
+    goalie_xg_games,
+    injuries,
+    store_info,
+    team_xg_games,
+)
 from hockey_model.consumer_types import (
     FULL_GAME_WINNER,
     RESTATEMENT,
@@ -36,7 +42,6 @@ from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.store.db import SCHEMA_VERSION
 from hockey_model.store.fits import FitArtifact, FitRef, load_fit
-from hockey_model.store.reads import RESULT_DELAY, franchise_codes, injury_snapshot_before
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.utc import require_utc
 
@@ -72,16 +77,36 @@ def open_store(path: Path, *, fit: FitRef) -> ConsumerStore:
             f"open store {str(path)!r}: no store file there; the consumer never creates one. "
             "Point the path at a store that `hockey-model refresh` wrote"
         )
-    target = f"file:{urllib.parse.quote(str(path))}?mode=ro"
-    conn = sqlite3.connect(target, uri=True, autocommit=False)
+    conn = _connect_read_only(path)
     try:
         _check_schema(conn, path)
         _begin_snapshot(conn)
         artifact = load_fit(conn, fit)
+        return ConsumerStore(conn, path, artifact)
     except BaseException:
         conn.close()
         raise
-    return ConsumerStore(conn, path, artifact)
+
+
+def _connect_read_only(path: Path) -> sqlite3.Connection:
+    """Open ``path`` for reading only. Never create the file."""
+    target = f"file:{urllib.parse.quote(str(path))}?mode=ro"
+    try:
+        return sqlite3.connect(target, uri=True, autocommit=False)
+    except sqlite3.Error as exc:
+        raise StoreVersionError(_open_failure_fix(path, exc)) from exc
+
+
+def _open_failure_fix(path: Path, exc: sqlite3.Error) -> str:
+    """Name an open failure and its fix. A lock and a damaged file need different fixes."""
+    name = getattr(exc, "sqlite_errorname", "")
+    if name == "SQLITE_NOTADB":
+        fix = "the file is not a SQLite store, so use the path of a hockey-model store"
+    elif name in {"SQLITE_BUSY", "SQLITE_LOCKED"}:
+        fix = "another process holds the store; stop it, then open the store again"
+    else:
+        fix = "check the file permissions, then open the store again"
+    return f"open store {str(path)!r}: {exc}; {fix}"
 
 
 def _check_schema(conn: sqlite3.Connection, path: Path) -> None:
@@ -90,10 +115,7 @@ def _check_schema(conn: sqlite3.Connection, path: Path) -> None:
     try:
         row = conn.execute("SELECT version FROM schema_version").fetchone()
     except sqlite3.Error as exc:
-        raise StoreVersionError(
-            f"open store {str(path)!r}: cannot read schema_version: {exc}; "
-            "the file is not a hockey-model store"
-        ) from exc
+        raise StoreVersionError(_open_failure_fix(path, exc)) from exc
     if row is None:
         raise StoreVersionError(
             f"open store {str(path)!r}: schema_version is empty; "
@@ -128,7 +150,7 @@ class ConsumerStore:
         self._path = path
         self._artifact = artifact
         self._fit = _fit_info(artifact)
-        self._store = _store_info(conn, path)
+        self._store = store_info(conn, path)
 
     def __enter__(self) -> ConsumerStore:
         return self
@@ -157,7 +179,7 @@ class ConsumerStore:
         """
         self._conn.rollback()
         _begin_snapshot(self._conn)
-        self._store = _store_info(self._conn, self._path)
+        self._store = store_info(self._conn, self._path)
 
     def game(self, game_id: int) -> GameInfo:
         """Return one game as the newest read of the feed describes it."""
@@ -173,7 +195,8 @@ class ConsumerStore:
         return tuple(_game_info(row) for row in rows)
 
     def skater_games(self, game_id: int) -> tuple[SkaterLine, ...]:
-        """Return every skater line of one stored game."""
+        """Return every skater line of one stored game. An unknown game raises."""
+        self._require_game(game_id)
         rows = self._conn.execute(
             "SELECT team, nhl_id, toi_seconds, goals, assists FROM skater_games"
             " WHERE game_id = ? ORDER BY team, nhl_id",
@@ -185,7 +208,8 @@ class ConsumerStore:
         )
 
     def goalie_games(self, game_id: int) -> tuple[GoalieLine, ...]:
-        """Return every goalie line of one stored game."""
+        """Return every goalie line of one stored game. An unknown game raises."""
+        self._require_game(game_id)
         rows = self._conn.execute(
             "SELECT team, nhl_id, toi_seconds, started FROM goalie_games"
             " WHERE game_id = ? ORDER BY team, nhl_id",
@@ -197,67 +221,34 @@ class ConsumerStore:
         )
 
     def team_xg_games(self, team: str, *, before: datetime, count: int) -> tuple[TeamXgLine, ...]:
-        """Return the newest MoneyPuck team games of a franchise that were over before ``before``.
-
-        The team codes of the whole franchise are read, so a team that moved keeps its history.
-        """
-        require_utc(before, "before")
-        codes = franchise_codes(team)
-        marks = ",".join("?" for _ in codes)
-        cursor = self._conn.execute(
-            "SELECT m.game_id, m.team, m.game_date, m.xg_for, m.xg_against"
-            " FROM latest_mp_team_games m JOIN latest_final_games g ON g.game_id = m.game_id"
-            f" WHERE m.team IN ({marks}) AND g.start_utc <= ?"
-            " AND m.xg_for IS NOT NULL AND m.xg_against IS NOT NULL"
-            " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-            (*codes, _result_cutoff(before), count),
-        )
-        return tuple(
-            TeamXgLine(game_id, code, date.fromisoformat(day), xg_for, xg_against)
-            for game_id, code, day, xg_for, xg_against in cursor
-        )
+        """Return the newest MoneyPuck team games of a franchise, over before ``before``."""
+        return team_xg_games(self._conn, team, before=before, count=count)
 
     def goalie_xg_games(
         self, nhl_id: int, *, before: datetime, count: int
     ) -> tuple[GoalieXgLine, ...]:
         """Return the newest MoneyPuck goalie games of a goalie that were over before ``before``."""
-        require_utc(before, "before")
-        cursor = self._conn.execute(
-            "SELECT m.game_id, m.nhl_id, m.xg_against, m.goals_against"
-            " FROM latest_mp_goalie_games m JOIN latest_final_games g ON g.game_id = m.game_id"
-            " WHERE m.nhl_id = ? AND g.start_utc <= ?"
-            " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
-            (nhl_id, _result_cutoff(before), count),
-        )
-        return tuple(
-            GoalieXgLine(game_id, player, xg_against, goals_against)
-            for game_id, player, xg_against, goals_against in cursor
-        )
+        return goalie_xg_games(self._conn, nhl_id, before=before, count=count)
 
     def injuries(self, *, as_of: datetime) -> tuple[InjuryLine, ...]:
         """Return the newest injury list that the producer read before ``as_of``."""
-        require_utc(as_of, "as_of")
-        stamp = injury_snapshot_before(self._conn, as_of)
-        if stamp is None:
-            return ()
-        rows = self._conn.execute(
-            "SELECT team, player_name, status, return_date FROM injury_reads WHERE fetched_at = ?"
-            " ORDER BY team, player_name",
-            (iso_utc(stamp),),
-        )
-        return tuple(
-            InjuryLine(team, name, status, None if day is None else date.fromisoformat(day), stamp)
-            for team, name, status, day in rows
-        )
+        return injuries(self._conn, as_of=as_of)
 
     def starter(self, game_id: int, team: str, *, as_of: datetime) -> StarterInfo:
         """Return the goalie expected to start for ``team``, and how sure the store is.
 
         The order is the order of the live model: a confirmed read, then the boxscore starter
         of a game that has started, then a likely read, then the goalie with the most starts.
+        A team that is not in the game raises ``ValueError``.
         """
         require_utc(as_of, "as_of")
-        game = _game_of(self._require_game(game_id))
+        info = self._require_game(game_id)
+        if team not in (info.home, info.away):
+            raise ValueError(
+                f"read starter of game {game_id}: team {team!r} is not in the game; "
+                f"use {info.home!r} or {info.away!r}"
+            )
+        game = _game_of(info)
         goalie, notes = resolve_goalie(self._conn, game, team, as_of, use_reads=True)
         confirmed = goalie is not None and goalie.status is StarterStatus.CONFIRMED
         return StarterInfo(game_id, team, goalie, confirmed, notes)
@@ -295,11 +286,6 @@ class ConsumerStore:
         return _game_info(row)
 
 
-def _result_cutoff(before: datetime) -> str:
-    """Return the limit on the start of a game that was over before ``before``."""
-    return iso_utc(before - RESULT_DELAY)
-
-
 def _game_of(info: GameInfo) -> Game:
     """Return the model view of one stored game."""
     return Game(info.game_id, info.home, info.away, info.start)
@@ -334,15 +320,4 @@ def _fit_info(artifact: FitArtifact) -> FitInfo:
         identity.features,
         identity.fit_sha256,
         artifact.created_at,
-    )
-
-
-def _store_info(conn: sqlite3.Connection, path: Path) -> StoreInfo:
-    """Return the path, the schema version, and the newest good read of each source."""
-    rows = conn.execute(
-        "SELECT source, MAX(fetched_at) FROM source_reads WHERE ok = 1 GROUP BY source"
-        " ORDER BY source"
-    )
-    return StoreInfo(
-        str(path), SCHEMA_VERSION, tuple((source, parse_iso_utc(stamp)) for source, stamp in rows)
     )

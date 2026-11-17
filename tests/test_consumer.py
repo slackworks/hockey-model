@@ -1,6 +1,7 @@
 """Tests for the read-only consumer API (#80)."""
 
 import sqlite3
+import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from seeding import FETCHED, add_game, add_goalie, add_injury, add_team_form, utc
 
 import hockey_model
@@ -26,6 +29,7 @@ from hockey_model.sources.nhl import GameRow
 from hockey_model.store.db import SCHEMA_VERSION, connect
 from hockey_model.store.fits import FitRecord, FitRef, save_fit
 from hockey_model.store.nhl_writes import write_games
+from hockey_model.store.source_reads import record_read
 from hockey_model.types import HockeyModelError
 
 DAY = date(2026, 1, 20)
@@ -254,7 +258,7 @@ def test_a_missing_view_raises(store_path: Path) -> None:
 def test_a_file_that_is_not_a_store_raises(tmp_path: Path) -> None:
     path = tmp_path / "notes.db"
     path.write_bytes(b"not a database")
-    with pytest.raises(StoreVersionError, match="not a hockey-model store"):
+    with pytest.raises(StoreVersionError, match="not a SQLite store.*hockey-model store"):
         open_store(path, fit=FitRef(label="live"))
 
 
@@ -305,6 +309,89 @@ def test_the_newest_injury_list_before_the_cutoff_is_read(store_path: Path) -> N
     assert (line.team, line.player_name, line.status) == ("TOR", "Auston Matthews", "OUT")
     assert line.return_date is None
     assert line.read_at == utc("2026-01-20T09:00")
+
+
+def test_an_injury_list_older_than_the_live_feed_limit_is_not_used(store_path: Path) -> None:
+    # The store read the list three days before the cutoff. It can still name a healed player,
+    # so the read returns no line. StoreInfo names the read, so a caller sees why.
+    _write(
+        store_path,
+        lambda conn: add_injury(conn, "TOR", "Auston Matthews", "OUT", "2026-01-17T12:00"),
+    )
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        assert consumer.injuries(as_of=NOW) == ()
+        reads = dict(consumer.store.newest_reads)
+        assert reads["espn_injuries"] == utc("2026-01-17T12:00")
+
+
+def test_store_info_lists_a_source_that_every_read_of_failed(store_path: Path) -> None:
+    # `moneypuck` has one failed read and no good one. The source is named, with no time, so a
+    # caller can tell it apart from a source that the store never read.
+    _write(
+        store_path,
+        lambda conn: record_read(conn, "moneypuck", "u", NOW, error="HTTP 503"),
+    )
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        reads = dict(consumer.store.newest_reads)
+    assert reads["moneypuck"] is None
+    assert "nhl_scores" not in reads
+
+
+@pytest.mark.parametrize("count", [-1])
+def test_a_negative_count_is_refused(store_path: Path, count: int) -> None:
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        with pytest.raises(ValueError, match="count must be 0 or more"):
+            consumer.team_xg_games("TOR", before=NOW, count=count)
+        with pytest.raises(ValueError, match="count must be 0 or more"):
+            consumer.goalie_xg_games(8478402, before=NOW, count=count)
+
+
+def test_a_line_read_of_an_unknown_game_raises(store_path: Path) -> None:
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        with pytest.raises(UnknownGameError, match="game 99"):
+            consumer.skater_games(99)
+        with pytest.raises(UnknownGameError, match="game 99"):
+            consumer.goalie_games(99)
+
+
+def test_a_starter_of_a_team_outside_the_game_raises(store_path: Path) -> None:
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        with pytest.raises(ValueError, match="team 'EDM' is not in the game.*'TOR' or 'BOS'"):
+            consumer.starter(2, "EDM", as_of=NOW)
+
+
+def test_a_goalie_xg_row_with_a_missing_value_is_skipped(store_path: Path) -> None:
+    # A MoneyPuck row can carry no expected goals for one goalie. The result type needs a
+    # number, so the row is skipped, as the team reader skips it.
+    def fill(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO mp_goalie_games (game_id, nhl_id, team, xg_against, goals_against,"
+            " fetched_at) VALUES (1, 8478402, 'TOR', NULL, 3, ?)",
+            ("2026-01-11T00:00:00.000000+00:00",),
+        )
+
+    _write(store_path, fill)
+    with open_store(store_path, fit=FitRef(label="live")) as consumer:
+        assert consumer.goalie_xg_games(8478402, before=NOW, count=1) == ()
+
+
+@given(
+    st.text(
+        alphabet=st.characters(
+            whitelist_categories=None, min_codepoint=0x20, max_codepoint=0x7E
+        ).filter(lambda char: char not in "/\\"),
+        min_size=1,
+        max_size=24,
+    )
+)
+def test_a_store_path_with_any_ascii_name_opens(name: str) -> None:
+    """The connection URI quotes the path, so a name with `?`, `#`, or `%` is a plain name."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / f"{name}.db"
+        _seed(path)
+        with open_store(path, fit=FitRef(label="live")) as consumer:
+            assert consumer.game(1).game_id == 1
+            assert consumer.store.path == str(path)
 
 
 def test_close_ends_the_transaction_without_a_context_manager(store_path: Path) -> None:
