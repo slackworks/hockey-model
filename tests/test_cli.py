@@ -494,6 +494,26 @@ def test_cli_game_marks_a_game_inside_the_fit_seasons(
     assert outside["membership"] == "out_of_sample"
 
 
+def test_cli_game_serves_the_fit_that_fit_id_names(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A research fit with no label still predicts when `--fit-id` names it."""
+    db = tmp_path / "store.db"
+    _store_with_games(db)
+    monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
+    assert cli.main(_fit("rest")) == 0
+    capsys.readouterr()
+    assert (
+        cli.main(
+            ["fit", "--through-season", "20152016", "--features", "xg_form", "--label", "research"]
+        )
+        == 0
+    )
+    research = json.loads(capsys.readouterr().out)["fit_id"]
+    assert cli.main(["game", str(_game_ids(db)[1]), "--fit-id", str(research)]) == 0
+    assert json.loads(capsys.readouterr().out)["training"]["fit_id"] == research
+
+
 def test_cli_game_rejects_a_fit_id_of_zero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
