@@ -48,6 +48,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - A fit with no `--through-season` records the newest season that holds a final game, not the season that holds today. The old cutoff named a season whose games the fit never read, so `result.training` marked the first games of that season in sample. [fix:model]
+- `hockey-model fit` refuses an explicit `--through-season` newer than the newest stored final game, because that cutoff named seasons the fit never read. [fix:model]
+- `result.training.membership` uses the stored season of the game, not the season of its Eastern game day. The 2020 bubble is stored as 2019-20, and its September starts fall on the 2020-21 game day. [fix:model]
 - Lower `timeout_multiplier` for mutmut, so a hung mutant of `block_bootstrap_mean_ci` stops sooner and the pre-push mutation check finishes inside its limit. [chore:test]
 - Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
