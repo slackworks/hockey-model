@@ -337,3 +337,16 @@ def test_the_eastern_game_day_decides_the_season_near_the_boundary(
     """A 02:00 UTC game on Sep 1 is Aug 31 in the East, so it is still season 2025-26."""
     marker = _training(store, 20252026, start="2026-09-01T02:00")
     assert marker.membership is TrainingMembership.IN_SAMPLE
+
+
+def test_a_team_whose_moneypuck_form_lags_gets_a_note(store: sqlite3.Connection) -> None:
+    # TOR has a MoneyPuck row only for game 15, and games 17 and 18 are final. MTL is current.
+    for day in (15, 17, 18):
+        add_game(store, day, f"2026-01-{day}T00:00", home="TOR", away="MTL")
+        add_team_form(store, day, "MTL", 2.0, 3.0)
+    add_team_form(store, 15, "TOR", 3.5, 2.0)
+    played = Game(100, "TOR", "MTL", START)
+    notes = [m.note for m in model(store).predict(played, AS_OF, 0.8).missing]
+    assert [note for note in notes if "MoneyPuck form" in note] == [
+        "MoneyPuck form is 2 stored games behind; newest MoneyPuck game 15, newest final game 18"
+    ]

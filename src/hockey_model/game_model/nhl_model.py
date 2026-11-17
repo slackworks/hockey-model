@@ -20,6 +20,7 @@ from hockey_model.game_model.seasons import ELO_BURN_IN, season_of
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
 from hockey_model.store.fits import FitArtifact
+from hockey_model.store.moneypuck_gaps import mp_form_lag
 from hockey_model.store.reads import final_games_before, mp_team_form_before, team_games_before
 from hockey_model.store.staleness import stale_sources
 from hockey_model.types import Projection
@@ -133,6 +134,10 @@ class NhlGameModel:
             if not used_xg:
                 note = "the expected goals come from actual goals, not MoneyPuck expected goals"
                 notes.append(MissingInput(MissingKind.XG_FORM, team, note))
+            else:
+                lag = mp_form_lag(self._conn, team, cutoff)
+                if lag is not None:
+                    notes.append(MissingInput(MissingKind.STALE_SOURCE, team, lag.note()))
             rates.append((attack + defence) / 2)
         return rates[0], rates[1], notes, home_xg or away_xg
 
