@@ -59,6 +59,37 @@ def make_v2_store(path: Path) -> Path:
     return path
 
 
+def make_v2_store_preflag(path: Path) -> Path:
+    """Write a version 2 store with the table shape that commit 62cc6fb replaced.
+
+    The four count columns are there and ``attempts_known`` is not. That is the shape the
+    code wrote before 62cc6fb, and it kept the version at 2.
+    """
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE fit_labels")
+    conn.execute("DROP TABLE mp_team_games")
+    conn.execute(
+        "CREATE TABLE mp_team_games ("
+        " game_id INTEGER, team TEXT, game_date TEXT, xg_for REAL, xg_against REAL,"
+        " shot_attempts_for INTEGER, shot_attempts_against INTEGER,"
+        " unblocked_for INTEGER, unblocked_against INTEGER, fetched_at TEXT NOT NULL,"
+        " PRIMARY KEY (game_id, team, fetched_at))"
+    )
+    conn.execute(
+        "INSERT INTO mp_team_games VALUES (2002, 'BOS', '2026-01-05', 3.1, 0.9,"
+        " 10, 11, 12, 13, '2026-01-06T00:00:00Z')"
+    )
+    conn.execute("UPDATE schema_version SET version = 2")
+    conn.execute(
+        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
+        " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
 def rows(path: Path, sql: str) -> list[tuple]:
     conn = sqlite3.connect(path)
     try:
@@ -358,7 +389,29 @@ def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
     assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
     assert version_of(v2) == SCHEMA_VERSION
-    # The 2->3 step adds the label table and leaves every attempt count alone.
+    # The 2->3 step adds the label table, and the 3->4 rebuild leaves every count alone.
+    assert report.next_step is None
+
+
+def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
+    tmp_path: Path,
+) -> None:
+    """Version 2 covered two table shapes. The earlier one has no attempts_known column.
+
+    Commit 62cc6fb added the flag to schema.sql without a version bump, so a store that
+    the earlier code wrote is still version 2 and cannot answer a query that names the
+    flag. The 3->4 step must add it and derive it from the counts.
+    """
+    v2 = make_v2_store_preflag(tmp_path / "store.db")
+    report = upgrade_store(v2)
+    assert (report.from_version, report.to_version) == (2, SCHEMA_VERSION)
+    assert version_of(v2) == SCHEMA_VERSION
+    assert "attempts_known" in [row[1] for row in rows(v2, "PRAGMA table_info(mp_team_games)")]
+    assert rows(
+        v2,
+        "SELECT game_id, team, shot_attempts_for, unblocked_against, attempts_known"
+        " FROM mp_team_games",
+    ) == [(2002, "BOS", 10, 13, 1)]
     assert report.next_step is None
 
 

@@ -9,6 +9,12 @@ between the backup and the migration.
 A version 1 store has no attempt counts. The upgrade rebuilds ``mp_team_games`` so that its
 rows keep their values, the counts are NULL, and ``attempts_known`` is 0. No count is
 filled in, because the value at the old fetch time is unknown.
+
+A version 2 store may also have no ``attempts_known`` column. Version 2 covered two table
+shapes: the four count columns first, then the flag too. Commit ``62cc6fb`` added the flag
+to ``schema.sql`` without a version bump, so a store that the earlier code wrote is version
+2 and cannot answer a query that names the flag. The 3->4 step rebuilds the table from the
+shape the store actually has.
 """
 
 import argparse
@@ -22,8 +28,15 @@ from stat import S_ISREG
 from hockey_model.store.db import SCHEMA_VERSION, StoreError
 from hockey_model.store.timestamps import iso_utc
 
-_MP_TEAM_GAMES_V2 = """
-CREATE TABLE mp_team_games_v2 (
+
+def _mp_team_games_ddl(table: str) -> str:
+    """Return the current ``mp_team_games`` DDL under another table name.
+
+    The 1->2 and the 3->4 steps both rebuild this table. One definition keeps the two
+    results identical, and the test compares each result against a fresh store.
+    """
+    return f"""
+CREATE TABLE {table} (
     game_id INTEGER,
     team TEXT,
     game_date TEXT,
@@ -44,6 +57,18 @@ CREATE TABLE mp_team_games_v2 (
 )
 """
 
+
+_MP_TEAM_GAMES_V2 = _mp_team_games_ddl("mp_team_games_v2")
+_MP_TEAM_GAMES_V4 = _mp_team_games_ddl("mp_team_games_v4")
+# A stored row is known when it carries all four counts. The flag is derived, so the
+# rebuild writes it from the counts instead of trusting a column that a version 2 store
+# may not have.
+_V4_COUNT = (
+    "CASE WHEN shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL"
+    " AND unblocked_for IS NOT NULL AND unblocked_against IS NOT NULL"
+    " THEN 1 ELSE 0 END"
+)
+
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -62,6 +87,20 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         " label TEXT NOT NULL,"
         " fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id),"
         " set_at TEXT NOT NULL)",
+    ),
+    # A version 2 store that the earlier code wrote has no attempts_known column, so a
+    # rebuild is the one change that works for both version 2 shapes. It derives the flag
+    # from the counts, which is the same test the readers use.
+    3: (
+        _MP_TEAM_GAMES_V4,
+        "INSERT INTO mp_team_games_v4 (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " attempts_known, fetched_at) SELECT game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        f" {_V4_COUNT}, fetched_at FROM mp_team_games",
+        "DROP TABLE mp_team_games",
+        "ALTER TABLE mp_team_games_v4 RENAME TO mp_team_games",
+        "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
     ),
 }
 _LEDGER = (
@@ -275,9 +314,9 @@ def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
     """Return True when the upgrade left a MoneyPuck attempt count empty.
 
     The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
-    A store that started at version 2 or later keeps its counts, so a later step needs no
-    reread even though it changed the schema. A reread adds a counted row beside the old one,
-    so the check reads the newest read of each team game, as the model does.
+    A later step keeps the counts it finds, so it carries no reread instruction of its own.
+    A reread adds a counted row beside the old one, so the check reads the newest read of
+    each team game, as the model does.
     """
     if stored < _EMPTY_ATTEMPTS_FROM + 1:
         return True
