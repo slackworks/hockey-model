@@ -77,6 +77,8 @@ done
 
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
+# shellcheck source=scripts/release-exists.sh
+source "$(dirname "$0")/release-exists.sh"
 if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
   echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
@@ -140,14 +142,17 @@ decided() {
 
 decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
-  # Ask for the one tag. "release not found" means the day is not published yet; any
-  # other failure (auth, network) stops the run. check-daily-report.sh has the same
-  # lookup, so change both together.
-  view_err="$(gh release view "$tag" 2>&1 >/dev/null)" && published=true || published=false
-  if [[ "$published" == false && "$view_err" != *"release not found"* ]]; then
-    echo "report-gate: gh release view $tag failed: $view_err" >&2
+  # Ask for the one tag. A 404 means the day is not published yet; any other answer (auth,
+  # network) stops the run. check-daily-report.sh has the same lookup, so change both together.
+  answer="$(release_status "$tag")"
+  case "$answer" in
+  published) published=true ;;
+  missing) published=false ;;
+  *)
+    echo "report-gate: the release lookup for $tag failed: ${answer#failed: }" >&2
     exit 1
-  fi
+    ;;
+  esac
   decision="$(decided "$published")" || exit 1
 fi
 warning="$(jq -r '.warning // ""' <<<"$decision")"

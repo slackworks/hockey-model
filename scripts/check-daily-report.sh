@@ -40,6 +40,8 @@ done
 
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
+# shellcheck source=scripts/release-exists.sh
+source "$(dirname "$0")/release-exists.sh"
 if ! is_valid_day "$day"; then
   echo "check-daily-report: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
@@ -61,18 +63,21 @@ if [[ "$games" == "0" ]]; then
   exit 0
 fi
 
-# "release not found" means no report was published. Any other failure stops the check, so
-# an auth or network error is not read as a missing report. report-gate.sh has the same
-# lookup, so change both together.
-view_err="$(gh release view "$tag" 2>&1 >/dev/null)" && published=true || published=false
-if [[ "$published" == false ]]; then
-  if [[ "$view_err" != *"release not found"* ]]; then
-    echo "check-daily-report: gh release view $tag failed: $view_err" >&2
-    exit 1
-  fi
+# A 404 means no report was published. Any other answer stops the check, so an auth or
+# network error is not read as a missing report. report-gate.sh has the same lookup, so
+# change both together.
+answer="$(release_status "$tag")"
+case "$answer" in
+published) ;;
+missing)
   echo "::error::check-daily-report: $day has $games game(s) and no report release ($tag)." >&2
   exit 1
-fi
+  ;;
+*)
+  echo "check-daily-report: the release lookup for $tag failed: ${answer#failed: }" >&2
+  exit 1
+  ;;
+esac
 
 mkdir -p "$work_dir"
 report="$work_dir/report-$day.json"

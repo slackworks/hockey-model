@@ -97,7 +97,7 @@ def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
         "reason": "late",
         "date": DAY,
     }
-    assert "gh release view" in "\n".join(_calls(tmp_path))
+    assert "gh api --include" in "\n".join(_calls(tmp_path))
     assert "::warning::" in result.stderr
     assert "has passed or is less than" in result.stderr
     assert "2026-11-05T00:00:00Z" in result.stderr

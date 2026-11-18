@@ -53,6 +53,8 @@ if [[ -z "$day" || -z "$report_dir" ]]; then
 fi
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
+# shellcheck source=scripts/release-exists.sh
+source "$(dirname "$0")/release-exists.sh"
 if ! is_valid_day "$day"; then
   echo "publish-daily-report: --date '$day' is not a real date YYYY-MM-DD" >&2
   exit 2
@@ -125,7 +127,9 @@ publish_version() {
   exit 1
 }
 
-if view_err="$(gh release view "$tag" 2>&1 >/dev/null)"; then
+answer="$(release_status "$tag")"
+case "$answer" in
+published)
   # The release exists. The alias and the backtest files move to this build with --clobber.
   existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
   check_dir="$report_dir/published-check"
@@ -134,12 +138,15 @@ if view_err="$(gh release view "$tag" 2>&1 >/dev/null)"; then
   publish_version "$version_json"
   gh release upload "$tag" "${latest[@]}" --clobber
   gh release edit "$tag" --notes-file "$notes"
-elif [[ "$view_err" == *"release not found"* ]]; then
+  ;;
+missing)
   gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
     --notes-file "$notes"
-else
-  echo "publish-daily-report: gh release view $tag failed: $view_err" >&2
+  ;;
+*)
+  echo "publish-daily-report: the release lookup for $tag failed: ${answer#failed: }" >&2
   exit 1
-fi
+  ;;
+esac

@@ -20,8 +20,9 @@ TAG = f"reports-{DAY}"
 def fakes(tmp_path: Path) -> Path:
     """Write fake `gh` and `uv`. Both record their arguments in calls.log.
 
-    `gh release view TAG` succeeds for a tag in FAKE_RELEASES. `gh release download` writes
-    FAKE_REPORT_JSON to the --output path, or fails when FAKE_DOWNLOAD_FAIL is set.
+    `gh api --include .../releases/tags/TAG` answers 200 for a tag in FAKE_RELEASES and 404
+    otherwise. `gh release download` writes FAKE_REPORT_JSON to the --output path, or fails
+    when FAKE_DOWNLOAD_FAIL is set.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -29,10 +30,15 @@ def fakes(tmp_path: Path) -> Path:
     gh.write_text(
         "#!/usr/bin/env bash\n"
         'echo "gh $*" >> "$FAKE_CALLS"\n'
-        'if [[ "$1 $2" == "release view" ]]; then\n'
-        '  if grep -qxF "$3" <<<"${FAKE_RELEASES:-}"; then exit 0; fi\n'
+        'if [[ "$1" == "api" ]]; then\n'
+        '  path="${!#}"\n'
+        '  tag="${path##*/tags/}"\n'
+        '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'
+        '    echo "HTTP/2.0 200 OK"\n'
+        "    exit 0\n"
+        "  fi\n"
         '  if [[ -n "${FAKE_VIEW_ERR:-}" ]]; then echo "$FAKE_VIEW_ERR" >&2; exit 1; fi\n'
-        '  echo "release not found" >&2\n'
+        '  echo "HTTP/2.0 404 Not Found"\n'
         "  exit 1\n"
         "fi\n"
         'if [[ "$1 $2" == "release download" ]]; then\n'
@@ -107,6 +113,15 @@ def test_a_day_with_games_and_no_release_fails(fakes: Path, tmp_path: Path) -> N
     assert f"no report release ({TAG})" in result.stderr
 
 
+def test_the_release_lookup_asks_the_api_and_not_the_release_command(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """A message-text match breaks when gh changes its words, so the check reads the status."""
+    _run(tmp_path, _env(fakes, tmp_path), "--date", DAY)
+    assert "gh api --include repos/{owner}/{repo}/releases/tags/" in _calls(tmp_path)
+    assert "release view" not in _calls(tmp_path)
+
+
 def test_a_release_lookup_failure_for_another_reason_stops_the_check(
     fakes: Path, tmp_path: Path
 ) -> None:
@@ -114,6 +129,17 @@ def test_a_release_lookup_failure_for_another_reason_stops_the_check(
     result = _run(tmp_path, env, "--date", DAY)
     assert result.returncode == 1
     assert "failed: auth failed" in result.stderr
+    assert "::error::" not in result.stderr
+
+
+def test_an_http_status_other_than_404_is_not_read_as_a_missing_release(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """A 500 is a broken lookup, and the check must not report it as an absent release."""
+    env = _env(fakes, tmp_path, FAKE_VIEW_ERR="wrote HTTP/2.0 500 Internal Server Error")
+    result = _run(tmp_path, env, "--date", DAY)
+    assert result.returncode == 1
+    assert "500" in result.stderr
     assert "::error::" not in result.stderr
 
 
