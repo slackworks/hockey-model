@@ -25,7 +25,7 @@ Do not add these names to `KNOWN_SOURCES` in `store/source_reads.py` (issue body
 
 ## Tables
 
-Schema version 7, through `hockey-model store upgrade`.
+Schema version 8, through `hockey-model store upgrade`.
 Every derived row names the observation it came from, so a rebuild can replace one derivation.
 
 ```sql
