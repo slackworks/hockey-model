@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from stat import S_ISREG
 
 from hockey_model.store.db import SCHEMA_VERSION, StoreError
 from hockey_model.store.timestamps import iso_utc
@@ -75,6 +76,13 @@ _NEXT_STEP = (
     "run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest; "
     "until it runs, the attempt-form features are empty and every game counts as missing"
 )
+_SKIP_NOTE = "no store file there yet; the first refresh creates it at the current version"
+# Only the 1->2 step leaves the attempt counts empty. A store that started at version 2 or
+# later already has its counts, so a later step carries no reread instruction.
+_EMPTY_ATTEMPTS_FROM = 1
+# The view, not the table: a reread appends a counted row and leaves the v1 row in place, so
+# a table count would ask for the reread again forever.
+_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM latest_mp_team_games WHERE attempts_known = 0"
 
 
 @dataclass(frozen=True)
@@ -82,24 +90,47 @@ class UpgradeReport:
     """The outcome of one upgrade run.
 
     ``backup_path`` is the backup this run wrote. When nothing changed, it is the backup of
-    the last upgrade that the ledger records, or None when there is none.
+    the last upgrade that the ledger records, or None when there is none. The workflow drops
+    that file after the run, so a no-op report can name a backup that is gone.
+    ``from_version`` is None when there is no store file and the caller allowed a skip.
+    ``next_step`` is a command to run, or None. ``note`` is a statement about the run.
     """
 
     path: str
-    from_version: int
+    from_version: int | None
     to_version: int
     changed: bool
     backup_path: str | None
     next_step: str | None = None
+    note: str | None = None
 
 
-def _check_path(path: Path) -> None:
-    """Refuse a missing file. ``sqlite3.connect`` would create an empty one."""
-    if not path.is_file():
+def _check_path(path: Path, if_missing: str) -> bool:
+    """Return True when the caller allows a skip of an absent store. Refuse any other path.
+
+    ``sqlite3.connect`` would create an empty file. This function is the one place that
+    decides whether a store exists, so a caller does not resolve the path a second way.
+    """
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        if if_missing == "skip":
+            return True
         raise StoreError(
             f"upgrade store {str(path)!r}: no store file there; check the path given to --db "
             "or HOCKEY_MODEL_DB"
+        ) from None
+    except OSError as exc:
+        raise StoreError(
+            f"upgrade store {str(path)!r}: cannot read the path: {exc}; check the "
+            "permissions of the directory that holds it"
+        ) from exc
+    if not S_ISREG(mode):
+        raise StoreError(
+            f"upgrade store {str(path)!r}: the path is not a regular file, such as a "
+            "directory; name the store file, such as <dir>/store.db"
         )
+    return False
 
 
 def _lock(conn: sqlite3.Connection, path: Path) -> None:
@@ -209,9 +240,14 @@ def _rebuild_views(conn: sqlite3.Connection, path: Path, backup: Path) -> None:
         ) from exc
 
 
-def upgrade_store(path: Path) -> UpgradeReport:
-    """Upgrade the store at ``path`` to ``SCHEMA_VERSION``. Return what it did."""
-    _check_path(path)
+def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
+    """Upgrade the store at ``path`` to ``SCHEMA_VERSION``. Return what it did.
+
+    ``if_missing`` accepts ``fail``, which names an absent store, or ``skip``, which returns
+    an unchanged report so a first run can continue to the refresh that creates the store.
+    """
+    if _check_path(path, if_missing):
+        return UpgradeReport(str(path), None, SCHEMA_VERSION, False, None, note=_SKIP_NOTE)
     conn = sqlite3.connect(path, isolation_level=None)
     try:
         # The write lock is held before the version is read and before the copy is made.
@@ -229,9 +265,24 @@ def upgrade_store(path: Path) -> UpgradeReport:
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
         _rebuild_views(conn, path, backup)
+        next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
     finally:
         conn.close()
-    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), _NEXT_STEP)
+    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step)
+
+
+def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
+    """Return True when the upgrade left a MoneyPuck attempt count empty.
+
+    The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
+    A store that started at version 2 or later keeps its counts, so a later step needs no
+    reread even though it changed the schema. A reread adds a counted row beside the old one,
+    so the check reads the newest read of each team game, as the model does.
+    """
+    if stored < _EMPTY_ATTEMPTS_FROM + 1:
+        return True
+    row = conn.execute(_EMPTY_ATTEMPTS_SQL).fetchone()
+    return row is not None and int(row[0]) > 0
 
 
 def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
@@ -247,10 +298,16 @@ def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
         metavar="PATH",
         help="store file to upgrade; default is HOCKEY_MODEL_DB",
     )
+    upgrade.add_argument(
+        "--if-missing",
+        choices=("fail", "skip"),
+        default="fail",
+        help="'skip' exits 0 when the store file does not exist; the default 'fail' names it",
+    )
 
 
 def run_store_group(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
     """Run a ``store`` subcommand and return its JSON payload and exit code."""
     if args.store_command != "upgrade":
         raise StoreError("store: name a subcommand, such as `hockey-model store upgrade`")
-    return asdict(upgrade_store(db_path)), 0
+    return asdict(upgrade_store(db_path, if_missing=args.if_missing)), 0

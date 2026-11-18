@@ -122,7 +122,10 @@ run_step() {
   fi
 }
 
+# The cache may restore a store that older code wrote, because the prepare run can save one.
+# The upgrade keeps every row and writes a backup, so the steps below read a current store.
 start=$SECONDS
+run_step upgrade uv run hockey-model store upgrade
 run_step refresh uv run hockey-model refresh --starters-only
 run_step predict uv run hockey-model daily --date "$day" --out-dir "$out_dir"
 cp "$store_dir/backtest-$day.json" "$store_dir/backtest-games-$day.csv" "$out_dir/"

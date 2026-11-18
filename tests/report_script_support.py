@@ -32,6 +32,11 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
     return env
 
 
+def store_path(tmp_path: Path) -> Path:
+    """Return the store file that the daily scripts name in a test."""
+    return tmp_path / "store" / "store.db"
+
+
 def _calls(tmp_path: Path) -> list[str]:
     log = tmp_path / "calls.log"
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []

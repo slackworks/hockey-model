@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-from report_script_support import DAY, LIVE, TAG, _calls, _env, _run
+from report_script_support import DAY, LIVE, TAG, _calls, _env, _run, store_path
 
 # The mutation run copies src and tests only, so the scripts are not there to test.
 if "mutants" in Path(__file__).resolve().parts:
@@ -219,10 +219,6 @@ def test_gate_help_names_every_option(fakes: Path, tmp_path: Path) -> None:
 # --- prepare and daily run ----------------------------------------------------
 
 
-def _store(tmp_path: Path) -> Path:
-    return tmp_path / "store" / "store.db"
-
-
 def test_prepare_needs_the_store_path(fakes: Path, tmp_path: Path) -> None:
     result = _run("daily-prepare.sh", _env(fakes, tmp_path), "--date", DAY)
     assert result.returncode == 2
@@ -230,7 +226,7 @@ def test_prepare_needs_the_store_path(fakes: Path, tmp_path: Path) -> None:
 
 
 def test_prepare_backfills_until_the_marker_exists(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     first = _run("daily-prepare.sh", env, "--date", DAY)
     assert first.returncode == 0, first.stderr
     assert "backfilling from 2014-10-01" in first.stderr
@@ -248,7 +244,7 @@ def test_prepare_exits_75_and_writes_no_marker_when_the_backfill_stops(
     fakes: Path, tmp_path: Path
 ) -> None:
     env = _env(
-        fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), FAKE_BACKFILL_COMPLETE="false"
+        fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), FAKE_BACKFILL_COMPLETE="false"
     )
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 75, result.stderr
@@ -260,7 +256,7 @@ def test_prepare_exits_75_and_writes_no_marker_when_the_backfill_stops(
 def test_prepare_prints_the_refresh_report_when_the_refresh_fails(
     fakes: Path, tmp_path: Path
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), FAKE_REFRESH_FAIL="1")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), FAKE_REFRESH_FAIL="1")
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 1
     assert "boom" in result.stdout
@@ -283,7 +279,7 @@ BAD_DAYS = [
 def test_prepare_refuses_a_date_that_is_not_a_real_date(
     fakes: Path, tmp_path: Path, bad: str
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     result = _run("daily-prepare.sh", env, "--date", bad)
     assert result.returncode == 2
     assert "not a real date" in result.stderr
@@ -294,7 +290,7 @@ def test_prepare_refuses_a_date_that_is_not_a_real_date(
 def test_report_refuses_a_date_that_is_not_a_real_date(
     fakes: Path, tmp_path: Path, bad: str
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     result = _run("daily-report.sh", env, "--date", bad, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 2
     assert "not a real date" in result.stderr
@@ -303,12 +299,12 @@ def test_report_refuses_a_date_that_is_not_a_real_date(
 
 @pytest.mark.parametrize("good", ["2024-02-29", "2000-02-29", "2026-12-31", "2026-11-05"])
 def test_prepare_accepts_a_real_date(fakes: Path, tmp_path: Path, good: str) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", good).returncode == 0
 
 
 def test_prepare_passes_the_budget_from_the_environment(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), BACKFILL_BUDGET_S="60")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), BACKFILL_BUDGET_S="60")
     _run("daily-prepare.sh", env, "--date", DAY)
     assert "uv run hockey-model refresh --backfill-from 2014-10-01 --budget-seconds 60" in _calls(
         tmp_path
@@ -323,7 +319,7 @@ def test_prepare_writes_the_backtest_and_the_marker_and_drops_old_days(
     (store_dir / "store.db.backfilled").touch()
     (store_dir / "prepared-2026-11-03").touch()
     (store_dir / "backtest-2026-11-03.json").write_text("{}", encoding="utf-8")
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert sorted(path.name for path in store_dir.iterdir()) == [
@@ -338,7 +334,7 @@ def test_prepare_writes_the_backtest_and_the_marker_and_drops_old_days(
 
 def test_prepare_fits_on_the_features_the_backtest_kept(fakes: Path, tmp_path: Path) -> None:
     """The served fit uses live_features, so a vetoed candidate never reaches the report."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["FAKE_BACKTEST_JSON"] = json.dumps({"live_features": ["rest"], "tested_features": LIVE})
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     fits = [line for line in _calls(tmp_path) if "hockey-model fit" in line]
@@ -347,7 +343,7 @@ def test_prepare_fits_on_the_features_the_backtest_kept(fakes: Path, tmp_path: P
 
 def test_prepare_fits_the_elo_alone_when_the_joint_test_failed(fakes: Path, tmp_path: Path) -> None:
     """An empty live_features list is the raw Elo: the fit command gets an empty value."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["FAKE_BACKTEST_JSON"] = json.dumps({"live_features": []})
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 0
@@ -360,7 +356,7 @@ def test_prepare_stops_when_the_backtest_names_no_live_features(
     fakes: Path, tmp_path: Path
 ) -> None:
     """A report without live_features is an error, not a fit on a guess."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["FAKE_BACKTEST_JSON"] = "{}"
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 1
@@ -370,7 +366,7 @@ def test_prepare_stops_when_the_backtest_names_no_live_features(
 
 
 def test_prepare_stops_at_a_failed_refresh(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     failing = fakes / "uv"
     failing.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
@@ -392,7 +388,7 @@ def test_daily_run_needs_the_store_path(fakes: Path, tmp_path: Path) -> None:
 
 
 def test_daily_run_needs_a_date(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     result = _run("daily-report.sh", env, "--out-dir", "x")
     assert result.returncode == 2
     assert "--date and --out-dir are required" in result.stderr
@@ -401,21 +397,22 @@ def test_daily_run_needs_a_date(fakes: Path, tmp_path: Path) -> None:
 def test_daily_run_after_the_morning_refreshes_only_the_starters(
     fakes: Path, tmp_path: Path
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     (tmp_path / "calls.log").unlink()
     out = tmp_path / "out"
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
     assert result.returncode == 0, result.stderr
     calls = _calls(tmp_path)
-    assert calls[0] == "uv run hockey-model refresh --starters-only"
+    assert calls[0] == "uv run hockey-model store upgrade"
+    assert calls[1] == "uv run hockey-model refresh --starters-only"
     assert not any(" hockey-model fit" in line or " backtest " in line for line in calls)
     assert (out / f"backtest-{DAY}.json").exists()
     assert (out / f"backtest-games-{DAY}.csv").exists()
 
 
 def test_daily_run_without_the_morning_fails_and_runs_nothing(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     out = tmp_path / "out"
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
     assert result.returncode == 1
@@ -433,7 +430,7 @@ def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
     env = _env(
         fakes,
         tmp_path,
-        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         FAKE_DUE_JSON=json.dumps(
             {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
         ),
@@ -459,7 +456,7 @@ def test_prepare_stops_when_live_features_holds_a_value_that_is_not_a_name(
     fakes: Path, tmp_path: Path
 ) -> None:
     """A null in the list would vanish in a join and change the feature set."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["FAKE_BACKTEST_JSON"] = json.dumps({"live_features": [None, "rest"]})
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 1
@@ -471,7 +468,7 @@ def test_prepare_stops_when_live_features_is_an_object_of_names(
     fakes: Path, tmp_path: Path
 ) -> None:
     """An object of strings would iterate as a list of names, so only an array may pass."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["FAKE_BACKTEST_JSON"] = json.dumps({"live_features": {"a": "rest"}})
     result = _run("daily-prepare.sh", env, "--date", DAY)
     assert result.returncode == 1
@@ -493,7 +490,7 @@ def test_a_flag_without_its_value_is_a_usage_error(
     fakes: Path, tmp_path: Path, script: str, flag: str, message: str
 ) -> None:
     """The check is explicit, so the semgrep bash parser reads the script, and the exit is 2."""
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     result = _run(script, env, flag)
     assert result.returncode == 2
     assert message in result.stderr
@@ -512,7 +509,7 @@ def _slow_uv(fakes: Path, tmp_path: Path) -> Path:
 
 
 def test_daily_run_logs_each_step_with_its_seconds(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 0, result.stderr
@@ -524,7 +521,7 @@ def test_daily_run_logs_each_step_with_its_seconds(fakes: Path, tmp_path: Path) 
 def test_daily_run_fails_loudly_when_the_report_passes_the_budget(
     fakes: Path, tmp_path: Path
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), REPORT_BUDGET_S="0")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), REPORT_BUDGET_S="0")
     env["PATH"] = f"{_slow_uv(fakes, tmp_path)}{os.pathsep}{env['PATH']}"
     assert _run("daily-prepare.sh", env | {"REPORT_BUDGET_S": "600"}, "--date", DAY).returncode == 0
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
@@ -537,7 +534,7 @@ def test_daily_run_fails_loudly_when_the_report_passes_the_budget(
 def test_daily_run_refuses_a_budget_that_is_not_whole_seconds(
     fakes: Path, tmp_path: Path, bad: str
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), REPORT_BUDGET_S=bad)
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), REPORT_BUDGET_S=bad)
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 2
     assert "REPORT_BUDGET_S must be whole seconds" in result.stderr
@@ -553,7 +550,7 @@ def test_a_failed_step_names_itself_and_stops_the_run(fakes: Path, tmp_path: Pat
         encoding="utf-8",
     )
     (failing / "uv").chmod(0o755)
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["PATH"] = f"{failing}{os.pathsep}{env['PATH']}"
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
@@ -563,7 +560,7 @@ def test_a_failed_step_names_itself_and_stops_the_run(fakes: Path, tmp_path: Pat
 
 
 def test_a_complete_report_writes_the_marker(fakes: Path, tmp_path: Path) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     out = tmp_path / "out"
     assert _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out)).returncode == 0
@@ -579,7 +576,7 @@ def test_a_report_cut_short_writes_no_marker(fakes: Path, tmp_path: Path) -> Non
         encoding="utf-8",
     )
     (failing / "uv").chmod(0o755)
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     env["PATH"] = f"{failing}{os.pathsep}{env['PATH']}"
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     out = tmp_path / "out"
@@ -596,7 +593,7 @@ def test_a_rerun_clears_the_previous_marker_before_it_writes(fakes: Path, tmp_pa
         encoding="utf-8",
     )
     (failing / "uv").chmod(0o755)
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)))
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     out = tmp_path / "out"
     assert _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out)).returncode == 0
@@ -629,7 +626,7 @@ def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_p
     env = _env(
         fakes,
         tmp_path,
-        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         FAKE_DUE_JSON=json.dumps(
             {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": "true"}
         ),
@@ -642,7 +639,7 @@ def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_p
 def test_daily_run_fails_when_report_due_fails_without_a_marker(
     fakes: Path, tmp_path: Path
 ) -> None:
-    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(_store(tmp_path)), FAKE_UV_FAIL="1")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)), FAKE_UV_FAIL="1")
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 1
     assert "report-due failed" in result.stderr
@@ -653,7 +650,7 @@ def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_pat
     env = _env(
         fakes,
         tmp_path,
-        HOCKEY_MODEL_DB=str(_store(tmp_path)),
+        HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         GITHUB_STEP_SUMMARY=str(summary),
         FAKE_DUE_JSON=json.dumps(
             {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}

@@ -315,7 +315,7 @@ def _experiments(args: argparse.Namespace) -> tuple[object, int]:
 
 def _store(args: argparse.Namespace) -> tuple[object, int]:
     """Handle the store subcommands. The file is --db, or HOCKEY_MODEL_DB."""
-    path = Path(args.db) if args.db else db_path_from_env(os.environ)
+    path = Path(args.db).expanduser() if args.db else db_path_from_env(os.environ)
     return run_store_group(args, path)
 
 

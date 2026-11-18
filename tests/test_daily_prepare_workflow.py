@@ -9,6 +9,7 @@ from hockey_model.report_trigger import TRIGGER_HOURS_UTC
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = ROOT / ".github" / "workflows" / "daily-prepare.yml"
+REPORT = ROOT / ".github" / "workflows" / "daily-report.yml"
 _CRON = re.compile(r'cron: "[0-9]{1,2} ([0-9]{1,2}) \* \* \*"')
 _TIMEOUT = re.compile(r"timeout-minutes: ([0-9]+)")
 
@@ -38,3 +39,14 @@ def test_prepare_timeout_fits_the_window_before_the_next_trigger() -> None:
 
 def test_window_is_three_hours_for_the_eight_am_prepare() -> None:
     assert window_minutes(8) == 180
+
+
+@pytest.mark.parametrize("workflow", [PREPARE, REPORT])
+def test_the_saved_cache_keeps_no_upgrade_backup(workflow: Path) -> None:
+    """The cache saves the store even after a failure, so a backup must not enter it."""
+    _skip_without_workflows()
+    text = workflow.read_text(encoding="utf-8")
+    drop = text.find('rm -f "$RUNNER_TEMP"/hockey-model/*.bak')
+    save = text.find("actions/cache/save")
+    assert drop != -1, "the workflow must drop the upgrade backup before it saves the cache"
+    assert save != -1 and drop < save, "the backup drop must run before the cache save"

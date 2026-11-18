@@ -1,6 +1,7 @@
 """Tests for the store upgrade: a version 1 store moves to the current version, keeping rows."""
 
 import argparse
+import os
 import re
 import sqlite3
 import tempfile
@@ -151,6 +152,36 @@ def test_a_missing_file_is_refused_without_being_created(tmp_path: Path) -> None
     assert not path.exists()
 
 
+def test_if_missing_skip_returns_without_creating_the_file(tmp_path: Path) -> None:
+    """A first run upgrades nothing and continues to the refresh that writes the store."""
+    path = tmp_path / "absent.db"
+    report = upgrade_store(path, if_missing="skip")
+    assert (report.from_version, report.to_version, report.changed) == (None, SCHEMA_VERSION, False)
+    assert report.next_step is None
+    assert report.note is not None and "first refresh" in report.note
+    assert not path.exists()
+
+
+def test_a_directory_is_refused_even_when_a_missing_file_is_skipped(tmp_path: Path) -> None:
+    """A directory is not an absent store, so a skip would hide a wrong path."""
+    with pytest.raises(StoreError, match="not a regular file"):
+        upgrade_store(tmp_path, if_missing="skip")
+
+
+def test_an_unreadable_directory_is_named(tmp_path: Path) -> None:
+    """A parent that cannot be entered is not an absent store, so the error names it."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a directory that has no permission bits")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0)
+    try:
+        with pytest.raises(StoreError, match="cannot read the path"):
+            upgrade_store(blocked / "store.db", if_missing="skip")
+    finally:
+        blocked.chmod(0o755)
+
+
 def test_a_newer_store_is_refused(v1: Path) -> None:
     conn = sqlite3.connect(v1)
     conn.execute(f"UPDATE schema_version SET version = {SCHEMA_VERSION + 1}")
@@ -167,11 +198,41 @@ def test_the_open_path_refuses_version_1_and_names_the_upgrade(v1: Path) -> None
 
 
 def test_the_store_command_runs_the_upgrade_and_prints_the_report(v1: Path) -> None:
-    args = argparse.Namespace(command="store", store_command="upgrade", db=str(v1))
+    args = argparse.Namespace(
+        command="store", store_command="upgrade", db=str(v1), if_missing="fail"
+    )
     payload, code = run_store_command(args)
     assert code == 0
     assert isinstance(payload, dict)
     assert payload["to_version"] == SCHEMA_VERSION and payload["changed"] is True
+
+
+def test_the_store_command_skips_a_missing_file_when_asked(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        command="store",
+        store_command="upgrade",
+        db=str(tmp_path / "absent.db"),
+        if_missing="skip",
+    )
+    payload, code = run_store_command(args)
+    assert code == 0
+    assert isinstance(payload, dict)
+    assert payload["from_version"] is None and payload["changed"] is False
+    assert not (tmp_path / "absent.db").exists()
+
+
+def test_the_store_command_expands_a_tilde_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--db follows the same path rule as HOCKEY_MODEL_DB, which expands a home shortcut."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    args = argparse.Namespace(
+        command="store", store_command="upgrade", db="~/absent.db", if_missing="skip"
+    )
+    payload, code = run_store_command(args)
+    assert code == 0
+    assert isinstance(payload, dict)
+    assert payload["path"] == str(tmp_path / "absent.db")
 
 
 def test_the_store_command_needs_a_subcommand(v1: Path) -> None:
@@ -297,6 +358,50 @@ def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
     assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
     assert version_of(v2) == SCHEMA_VERSION
+    # The 2->3 step adds the label table and leaves every attempt count alone.
+    assert report.next_step is None
+
+
+def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction(
+    tmp_path: Path,
+) -> None:
+    """A row the 1->2 step wrote keeps NULL counts, so the reread is a real step to take."""
+    v2 = make_v2_store(tmp_path / "store.db")
+    conn = sqlite3.connect(v2)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " '2026-01-02T00:00:00Z', 0)"
+    )
+    conn.commit()
+    conn.close()
+    report = upgrade_store(v2)
+    assert report.next_step is not None
+    assert "hockey-model refresh --reread-moneypuck" in report.next_step
+
+
+def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Path) -> None:
+    """A store that started at v1 ran the 1->2 step, then reread MoneyPuck, then upgrades again.
+
+    The reread appends a counted row and keeps the v1 row, so a count of the table would
+    still see an empty row and ask for a reread that has already happened.
+    """
+    v2 = make_v2_store(tmp_path / "store.db")
+    conn = sqlite3.connect(v2)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " '2026-01-02T00:00:00Z', 0)"
+    )
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " 1, 2, 3, 4, '2026-01-03T00:00:00Z', 1)"
+    )
+    conn.commit()
+    conn.close()
+    assert upgrade_store(v2).next_step is None
 
 
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
