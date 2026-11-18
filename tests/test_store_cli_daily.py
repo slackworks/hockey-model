@@ -53,6 +53,26 @@ def test_report_due_keys_the_slate_to_its_eastern_game_day(
     assert payload["due"] is True
 
 
+def test_report_due_counts_the_games_that_fall_outside_the_window(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A feed with the wrong date drops every game, so the count must reach the caller."""
+    feed = {
+        date(2026, 11, 4): [
+            _row(1, "2026-11-05T00:00"),
+            _row(2, "2026-11-05T06:00"),
+            _row(3, "2026-11-05T08:00"),
+        ],
+    }
+    _feed(monkeypatch, feed)
+    assert main(["report-due", "--date", "2026-11-04", "--force"]) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert (payload["games"], payload["games_outside_window"]) == (1, 2)
+    assert "2 feed game(s) start outside" in captured.err
+    assert "2, 3" in captured.err
+
+
 def test_report_due_prints_only_the_gate_fields(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -63,11 +83,13 @@ def test_report_due_prints_only_the_gate_fields(
         "date",
         "tag",
         "games",
+        "games_outside_window",
         "first_puck_drop_utc",
         "puck_drop_passed",
         "prep_too_early",
         "due",
     }
+    assert payload["games_outside_window"] == 0
 
 
 def test_report_due_without_games_uses_the_end_of_the_day(

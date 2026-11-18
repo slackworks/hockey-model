@@ -58,7 +58,14 @@ if ! jq -e '(.games | type == "number") and (.tag | type == "string")' <<<"$stat
 fi
 games="$(jq -r '.games' <<<"$status_json")"
 tag="$(jq -r '.tag' <<<"$status_json")"
+outside="$(jq -r '.games_outside_window // 0' <<<"$status_json")"
 if [[ "$games" == "0" ]]; then
+  # A feed that lists the day under the wrong date drops every game, and that is not an off
+  # day. Only a feed with no game at all passes the day.
+  if [[ "$outside" != "0" ]]; then
+    echo "::error::check-daily-report: $day has no game inside its window, and the feed lists $outside game(s) outside it. The feed date is probably wrong; check report-due's stderr for the game ids." >&2
+    exit 1
+  fi
   echo "ok $day: the schedule lists no games, so no report is expected"
   exit 0
 fi

@@ -227,24 +227,25 @@ def _daily(args: argparse.Namespace) -> tuple[object, int]:
     }, 0
 
 
-def _game_day_games(day: date, closes: datetime) -> list[GameRow]:
-    """Return the games of the Eastern game ``day`` from its score feed.
+def _game_day_games(day: date, closes: datetime) -> tuple[list[GameRow], int]:
+    """Return the games of the Eastern game ``day`` from its score feed, and the drop count.
 
     The feed already groups games by Eastern date. The window check keeps a game whose
-    start the feed lists under the wrong date out of the report.
+    start the feed lists under the wrong date out of the report. The count of those games
+    goes back to the caller, because a feed with a wrong date must not pass as an off day.
     """
     opens = game_day_window(day)[0]
     feed = fetch_score_day(HttpClient(), day)
     games = [game for game in feed if opens <= game.start < closes]
-    # A dropped game is named, so a feed with a wrong date does not pass as an off day.
-    dropped = [str(game.game_id) for game in feed if not opens <= game.start < closes]
-    if dropped:
+    outside = [game for game in feed if not opens <= game.start < closes]
+    if outside:
+        ids = ", ".join(str(game.game_id) for game in outside)
         print(
-            f"report-due: {len(dropped)} feed game(s) start outside {day}'s window and are "
-            f"not counted: {', '.join(dropped)}",
+            f"report-due: {len(outside)} feed game(s) start outside {day}'s window and are "
+            f"not counted: {ids}",
             file=sys.stderr,
         )
-    return games
+    return games, len(outside)
 
 
 def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
@@ -269,12 +270,13 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
     now = datetime.now(UTC)
     day = args.date if args.date is not None else game_day_of(now)
     closes = game_day_window(day)[1]
-    games = _game_day_games(day, closes)
+    games, outside = _game_day_games(day, closes)
     first = first_puck_drop(closes, [game.start for game in games])
     return {
         "date": day.isoformat(),
         "tag": report_tag(day),
         "games": len(games),
+        "games_outside_window": outside,
         "first_puck_drop_utc": iso_utc(first),
         "puck_drop_passed": now >= first,
         "prep_too_early": day == game_day_of(now) and prep_too_early(now, first),

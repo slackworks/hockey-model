@@ -106,6 +106,15 @@ def test_a_day_with_no_games_raises_no_alert(fakes: Path, tmp_path: Path) -> Non
     assert "gh " not in _calls(tmp_path)
 
 
+def test_a_feed_whose_games_all_fall_outside_the_window_fails(fakes: Path, tmp_path: Path) -> None:
+    """A feed under the wrong date drops every game, and that must not pass as an off day."""
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 2})
+    result = _run(tmp_path, _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY)
+    assert result.returncode == 1, result.stdout
+    assert "::error::" in result.stderr
+    assert "lists 2 game(s) outside it" in result.stderr
+
+
 def test_a_day_with_games_and_no_release_fails(fakes: Path, tmp_path: Path) -> None:
     result = _run(tmp_path, _env(fakes, tmp_path), "--date", DAY)
     assert result.returncode == 1
