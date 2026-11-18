@@ -59,6 +59,46 @@ def _open_failure_fix(path: Path, exc: sqlite3.Error) -> str:
     return f"open store {str(path)!r}: {text}; {fix}"
 
 
+def sqlite_failure_fix(exc: sqlite3.Error, path: Path | None = None) -> str:
+    """Name the cause of a SQLite error that escaped the store layer, and the fix.
+
+    The store layer raises ``StoreError`` for every cause it can name. This function covers
+    the error that gets past it. The message never guesses: when no code fits, it states the
+    error and names the store, with no claim about the path or the permissions.
+    """
+    name = getattr(exc, "sqlite_errorname", "")
+    where = "" if path is None else f" for the store {str(path)!r}"
+    if name == "SQLITE_CORRUPT" or name == "SQLITE_NOTADB":
+        return f"the file{where} is not a readable SQLite store ({exc}); use a new path"
+    if _is_schema_error(name, exc):
+        return (
+            f"the store{where} does not match the code's schema ({exc}); upgrade it with "
+            "`hockey-model store upgrade`. The upgrade keeps every row and writes a backup first."
+        )
+    if name in {"SQLITE_BUSY", "SQLITE_LOCKED"}:
+        return f"another process holds the store{where}; stop it, then run the command again"
+    if name == "SQLITE_FULL":
+        return f"the disk{where} is full; free space, then run the command again"
+    if name == "SQLITE_READONLY":
+        return (
+            f"the store{where} is read-only; change the permissions of the file and its "
+            "directory, then run the command again"
+        )
+    return f"{exc}{where}; no known cause fits this error. Report it with this line."
+
+
+def _is_schema_error(name: str, exc: sqlite3.Error) -> bool:
+    """Return True when the error says a column or a table that the code names is absent.
+
+    SQLite raises a plain ``SQLITE_ERROR`` for these, so the message text is the only signal
+    that separates them from any other statement failure.
+    """
+    if name != "SQLITE_ERROR":
+        return False
+    text = str(exc)
+    return "no such column" in text or "no such table" in text
+
+
 def _prepare(conn: sqlite3.Connection, path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
