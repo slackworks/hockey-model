@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -85,6 +86,31 @@ def make_v2_store_preflag(path: Path) -> Path:
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
         " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
     )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def make_v3_store(path: Path) -> Path:
+    """Write a version 3 store: the shape that the store cache holds today.
+
+    The flag is there, and one row carries a count set while the flag says unknown. The
+    3->4 step must keep that row's flag and derive the other one.
+    """
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " fetched_at, attempts_known) VALUES (3001, 'NYR', '2026-01-09', 2.0, 1.0,"
+        " 20, 21, 22, 23, '2026-01-10T00:00:00Z', 1)"
+    )
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " fetched_at, attempts_known) VALUES (3002, 'NYR', '2026-01-11', 1.0, 1.0,"
+        " '2026-01-12T00:00:00Z', 0)"
+    )
+    conn.execute("UPDATE schema_version SET version = 3")
     conn.commit()
     conn.close()
     return path
@@ -354,6 +380,12 @@ def test_an_unknown_attempt_column_is_refused_before_any_sql_runs(v1: Path) -> N
         conn.close()
 
 
+def _index_names(path: Path) -> set[str]:
+    """Return the index names of the store, without SQLite's automatic key indexes."""
+    found = rows(path, "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+    return {row[0] for row in found}
+
+
 def _table_sql(path: Path) -> str:
     """Return the table's SQL with comments, quotes, and whitespace removed, for comparison."""
     text = rows(
@@ -415,6 +447,66 @@ def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
     assert report.next_step is None
 
 
+def test_a_version_3_store_keeps_the_flag_it_has_and_derives_the_other(
+    tmp_path: Path,
+) -> None:
+    """Version 3 is the shape the store cache holds, so 3->4 is the transition that runs."""
+    v3 = make_v3_store(tmp_path / "store.db")
+    report = upgrade_store(v3)
+    assert (report.from_version, report.to_version) == (3, SCHEMA_VERSION)
+    assert rows(v3, "SELECT game_id, attempts_known FROM mp_team_games ORDER BY game_id") == [
+        (3001, 1),
+        (3002, 0),
+    ]
+    assert version_of(v3) == SCHEMA_VERSION
+
+
+def test_a_version_3_store_gains_the_current_table_sql(tmp_path: Path) -> None:
+    fresh = tmp_path / "fresh.db"
+    connect(fresh).close()
+    v3 = make_v3_store(tmp_path / "upgraded.db")
+    upgrade_store(v3)
+    assert _table_sql(v3) == _table_sql(fresh)
+
+
+def test_a_version_2_store_without_the_flag_gains_the_current_table_sql(
+    tmp_path: Path,
+) -> None:
+    """The preflag path runs the same rebuild, so it needs the same comparison."""
+    fresh = tmp_path / "fresh.db"
+    connect(fresh).close()
+    upgraded = make_v2_store_preflag(tmp_path / "upgraded.db")
+    upgrade_store(upgraded)
+    assert _table_sql(upgraded) == _table_sql(fresh)
+
+
+def test_an_upgraded_store_has_the_same_indexes_as_a_fresh_one(tmp_path: Path) -> None:
+    """Five indexes reached schema.sql after version 1, so no early store had them.
+
+    The v1 fixture holds every index, so the drop below makes the real early shape. Without
+    it this test passes on a store that the migration never indexed.
+    """
+    early = (
+        "games_start",
+        "goalie_games_team",
+        "mp_goalie_games_player",
+        "starter_reads_game",
+        "injury_reads_time",
+    )
+    fresh = tmp_path / "fresh.db"
+    connect(fresh).close()
+    upgraded = make_v1_store(tmp_path / "upgraded.db")
+    conn = sqlite3.connect(upgraded)
+    for name in early:
+        conn.execute(f"DROP INDEX {name}")
+    conn.commit()
+    conn.close()
+
+    upgrade_store(upgraded)
+    assert _index_names(upgraded) == _index_names(fresh)
+    assert set(early) <= _index_names(upgraded)
+
+
 def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction(
     tmp_path: Path,
 ) -> None:
@@ -455,6 +547,61 @@ def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Pa
     conn.commit()
     conn.close()
     assert upgrade_store(v2).next_step is None
+
+
+def test_a_table_name_that_is_not_an_identifier_is_refused() -> None:
+    """The DDL builder interpolates its argument, so a bad name must stop before any SQL."""
+    for bad in ("mp; DROP TABLE games", "a b", "", "1t", 'x"'):
+        with pytest.raises(StoreError, match="is not a table name"):
+            upgrade._mp_team_games_ddl(bad)
+
+
+def test_a_damaged_ledger_is_named_instead_of_read_as_no_backup(v1: Path) -> None:
+    """A no-op report names the last backup, so a ledger read must not answer None on error."""
+    upgrade_store(v1)
+    conn = sqlite3.connect(v1)
+    conn.execute("DROP TABLE schema_migrations")
+    conn.execute("CREATE TABLE schema_migrations (wrong TEXT)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(StoreError, match="cannot read the upgrade ledger") as info:
+        upgrade_store(v1)
+    assert "damaged" in str(info.value)
+
+
+def test_a_store_with_no_ledger_reports_no_backup(v1: Path) -> None:
+    """The first upgrade has no ledger yet, so a no-op must not fail on the missing table."""
+    conn = sqlite3.connect(v1)
+    conn.execute("UPDATE schema_version SET version = 4")
+    conn.commit()
+    conn.close()
+    report = upgrade_store(v1)
+    assert (report.changed, report.backup_path) == (False, None)
+
+
+class _BrokenRollback:
+    """A connection whose transaction is open and whose rollback fails."""
+
+    in_transaction = True
+
+    def execute(self, *_args: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+
+def test_a_failing_rollback_is_named_beside_the_cause() -> None:
+    """A lost rollback is the one case where the store may be part migrated."""
+    broken = cast("sqlite3.Connection", _BrokenRollback())
+    outcome = upgrade._rollback(broken)
+    assert outcome == (
+        "the rollback also failed: disk I/O error; the store may be partly migrated."
+    )
+
+
+def test_a_rollback_that_runs_reports_the_store_unchanged(v1: Path) -> None:
+    conn = sqlite3.connect(v1, isolation_level=None)
+    conn.execute("BEGIN IMMEDIATE")
+    assert upgrade._rollback(conn) == "the store is unchanged."
+    conn.close()
 
 
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
