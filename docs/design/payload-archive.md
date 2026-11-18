@@ -30,7 +30,7 @@ A source that is not in the list MUST be named in a test as "not archived", with
 
 ## Storage
 
-Schema version 4 (after version 3 of the MoneyPuck design), through `hockey-model store upgrade`.
+Schema version 6 (after version 5 of the MoneyPuck design), through `hockey-model store upgrade`.
 
 ```sql
 CREATE TABLE payloads (
@@ -96,7 +96,7 @@ Rules:
 - A changed boxscore adds revision 2. `boxscore_rows(..., policy=AsOf(t))` before the revisit returns revision 1.
 - A malformed response stores status `shape_error` and keeps the bytes. An HTTP failure stores `http_error` and no bytes.
 - An ESPN fixture that holds `pickcenter`, `odds`, and `againstTheSpread` at two depths: the stored body has none of them (decompress and search the bytes).
-- The upgrade from version 3 keeps every row, writes revision 1 for every final boxscore, and a second upgrade run is refused with the existing message.
+- The upgrade from version 5 keeps every row, writes revision 1 for every final boxscore, and a second upgrade run is refused with the existing message.
 - The backtest report and CSV on the seeded store are byte-identical before and after.
 
 ## Size

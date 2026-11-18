@@ -56,12 +56,15 @@ A design is a snapshot. When the code must differ for a correctness reason, chan
 
 Several designs add tables through `hockey-model store upgrade`. Take the versions in this order, so two pull requests never claim one number:
 
-1. Version 3: [moneypuck-situations.md](moneypuck-situations.md).
-2. Version 4: [payload-archive.md](payload-archive.md).
-3. Version 5: [pbp-shift-dataset.md](pbp-shift-dataset.md).
-4. Then [consumer-api.md](consumer-api.md) (`fit_labels`), [shot-model.md](shot-model.md), and [aging-adjustments.md](aging-adjustments.md) (`player_bio`), in the order they merge.
+1. Version 3: shipped. [consumer-api.md](consumer-api.md) added `fit_labels`.
+2. Version 4: shipped. The `mp_team_games` rebuild that adds `attempts_known` to a version 2 store that has no such column.
+3. Version 5: [moneypuck-situations.md](moneypuck-situations.md).
+4. Version 6: [payload-archive.md](payload-archive.md).
+5. Version 7: [pbp-shift-dataset.md](pbp-shift-dataset.md).
+6. Then [shot-model.md](shot-model.md) and [aging-adjustments.md](aging-adjustments.md) (`player_bio`), in the order they merge.
 
 When a design merges out of this order, it takes the next free version and updates this list.
+A shipped version keeps its number, so a later design pays the cost of the renumber.
 
 ## Library replacements of existing code
 

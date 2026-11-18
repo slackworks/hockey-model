@@ -67,6 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Move the store to schema version 4, which adds `attempts_known` to a version 2 store that the earlier code wrote without it. Commit `62cc6fb` added the column to the schema without a version bump, so `hockey-model store upgrade` called such a store current and the first attempt-count query failed with `no such column: attempts_known`. The new step rebuilds `mp_team_games` and derives the flag from the counts. [fix:store]
 - Upgrade the restored store at the start of `daily-prepare.sh` and `daily-report.sh`. The store cache holds a file that older code wrote, and the schema version check refused it, so every scheduled prepare run from the version 3 bump to this fix stopped before it read a source and no daily report was written. A missing store file is skipped with `store upgrade --if-missing skip`, because the first backfill writes a current version. [fix:store]
 - Leave the same count of bootstrap means outside each end of the interval. The upper end moved one rank lower, so a promotion needs a slightly stricter result. [fix:backtest]
 - Judge source staleness in one pass over the read log, so the daily predict step takes seconds and not minutes on a backfilled store. The build job no longer fails its report budget on this step. [fix:report]
