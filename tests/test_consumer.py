@@ -252,7 +252,9 @@ def test_a_wrong_schema_version_raises(store_path: Path) -> None:
     conn.execute("UPDATE schema_version SET version = 2")
     conn.commit()
     conn.close()
-    with pytest.raises(StoreVersionError, match="schema version 2 is not version 3.*upgrade"):
+    with pytest.raises(
+        StoreVersionError, match=f"schema version 2 is not version {SCHEMA_VERSION}.*upgrade"
+    ):
         open_store(store_path, fit=FitRef(label="live"))
 
 

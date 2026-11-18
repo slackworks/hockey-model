@@ -9,9 +9,13 @@ between the backup and the migration.
 A version 1 store has no attempt counts. The upgrade rebuilds ``mp_team_games`` so that its
 rows keep their values, the counts are NULL, and ``attempts_known`` is 0. No count is
 filled in, because the value at the old fetch time is unknown.
+
+A version 2 store may also have no ``attempts_known`` column. Version 2 covered two table
+shapes, and the 3->4 step rebuilds the table from the shape the store actually has.
 """
 
 import argparse
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -22,8 +26,20 @@ from stat import S_ISREG
 from hockey_model.store.db import SCHEMA_VERSION, StoreError
 from hockey_model.store.timestamps import iso_utc
 
-_MP_TEAM_GAMES_V2 = """
-CREATE TABLE mp_team_games_v2 (
+
+def _mp_team_games_ddl(table: str) -> str:
+    """Return the current ``mp_team_games`` DDL under another table name.
+
+    The 1->2 and the 3->4 steps both rebuild this table. One definition keeps the two
+    results identical, and the test compares each result against a fresh store.
+    """
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise StoreError(
+            f"rebuild mp_team_games: {table!r} is not a table name; a name holds letters, "
+            "digits, and underscores only. Pass a literal from this module."
+        )
+    return f"""
+CREATE TABLE {table} (
     game_id INTEGER,
     team TEXT,
     game_date TEXT,
@@ -44,6 +60,18 @@ CREATE TABLE mp_team_games_v2 (
 )
 """
 
+
+_MP_TEAM_GAMES_V2 = _mp_team_games_ddl("mp_team_games_v2")
+_MP_TEAM_GAMES_V4 = _mp_team_games_ddl("mp_team_games_v4")
+# A stored row is known when it carries all four counts. The flag is derived, so the
+# rebuild writes it from the counts instead of trusting a column that a version 2 store
+# may not have.
+_V4_COUNT = (
+    "CASE WHEN shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL"
+    " AND unblocked_for IS NOT NULL AND unblocked_against IS NOT NULL"
+    " THEN 1 ELSE 0 END"
+)
+
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -63,6 +91,29 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         " fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id),"
         " set_at TEXT NOT NULL)",
     ),
+    # A version 2 store that the earlier code wrote has no attempts_known column, so a
+    # rebuild is the one change that works for both version 2 shapes. It derives the flag
+    # from the counts, which is the same test the readers use.
+    #
+    # The five indexes below reached schema.sql after version 1 and no step created them, so
+    # an upgraded store read every table that lacks one as a full scan. A test compares the
+    # index names of an upgraded store with a fresh one.
+    3: (
+        _MP_TEAM_GAMES_V4,
+        "INSERT INTO mp_team_games_v4 (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " attempts_known, fetched_at) SELECT game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        f" {_V4_COUNT}, fetched_at FROM mp_team_games",
+        "DROP TABLE mp_team_games",
+        "ALTER TABLE mp_team_games_v4 RENAME TO mp_team_games",
+        "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
+        "CREATE INDEX IF NOT EXISTS games_start ON games (start_utc)",
+        "CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started)",
+        "CREATE INDEX IF NOT EXISTS mp_goalie_games_player ON mp_goalie_games (nhl_id)",
+        "CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team)",
+        "CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at)",
+    ),
 }
 _LEDGER = (
     "CREATE TABLE IF NOT EXISTS schema_migrations ("
@@ -77,8 +128,9 @@ _NEXT_STEP = (
     "until it runs, the attempt-form features are empty and every game counts as missing"
 )
 _SKIP_NOTE = "no store file there yet; the first refresh creates it at the current version"
-# Only the 1->2 step leaves the attempt counts empty. A store that started at version 2 or
-# later already has its counts, so a later step carries no reread instruction.
+# Only the 1->2 step writes an empty count. The decision to ask for a reread is taken from
+# the data below, because a version 2 store that a 1->2 step made can reach a later version
+# with its counts still NULL.
 _EMPTY_ATTEMPTS_FROM = 1
 # The view, not the table: a reread appends a counted row and leaves the v1 row in place, so
 # a table count would ask for the reread again forever.
@@ -161,14 +213,24 @@ def _read_version(conn: sqlite3.Connection, path: Path) -> int:
     return int(row[0])
 
 
-def _last_backup(conn: sqlite3.Connection) -> str | None:
+# The two statements that read the ledger, and the one that reports each failure. A missing
+# table is the expected first-run case. Any other error means the file itself is in doubt, so
+# it must not read as "this store has no backup".
+_LEDGER_EXISTS = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+_LAST_BACKUP = "SELECT backup_path FROM schema_migrations ORDER BY rowid DESC LIMIT 1"
+
+
+def _last_backup(conn: sqlite3.Connection, path: Path) -> str | None:
     """Return the backup named by the newest ledger row, or None when there is no ledger."""
-    try:
-        row = conn.execute(
-            "SELECT backup_path FROM schema_migrations ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-    except sqlite3.OperationalError:
+    if conn.execute(_LEDGER_EXISTS).fetchone() is None:
         return None
+    try:
+        row = conn.execute(_LAST_BACKUP).fetchone()
+    except sqlite3.Error as exc:
+        raise StoreError(
+            f"upgrade store {str(path)!r}: cannot read the upgrade ledger: {exc}; the file "
+            "may be damaged. Start from a copy and run the upgrade again."
+        ) from exc
     return None if row is None else str(row[0])
 
 
@@ -219,13 +281,26 @@ def _apply(conn: sqlite3.Connection, path: Path, stored: int, backup: Path) -> N
         conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
     except sqlite3.Error as exc:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
         raise StoreError(
-            f"upgrade store {str(path)!r}: {exc}; the store is unchanged. The backup is "
+            f"upgrade store {str(path)!r}: {exc}; {_rollback(conn)} The backup is "
             f"{str(backup)!r}. Fix the cause, move the backup aside, then run the "
             "upgrade again."
         ) from exc
+
+
+def _rollback(conn: sqlite3.Connection) -> str:
+    """Roll the changes back, and return a sentence that states the outcome.
+
+    A rollback that fails is the one case where the store may be part migrated, so its error
+    must reach the operator beside the cause and the backup, not replace them.
+    """
+    if not conn.in_transaction:
+        return "the store is unchanged."
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.Error as exc:
+        return f"the rollback also failed: {exc}; the store may be partly migrated."
+    return "the store is unchanged."
 
 
 def _rebuild_views(conn: sqlite3.Connection, path: Path, backup: Path) -> None:
@@ -255,7 +330,7 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
         stored = _read_version(conn, path)
         if stored == SCHEMA_VERSION:
             conn.execute("COMMIT")
-            return UpgradeReport(str(path), stored, SCHEMA_VERSION, False, _last_backup(conn))
+            return UpgradeReport(str(path), stored, SCHEMA_VERSION, False, _last_backup(conn, path))
         if stored > SCHEMA_VERSION or stored not in MIGRATIONS:
             conn.execute("ROLLBACK")
             raise StoreError(
@@ -275,9 +350,10 @@ def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
     """Return True when the upgrade left a MoneyPuck attempt count empty.
 
     The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
-    A store that started at version 2 or later keeps its counts, so a later step needs no
-    reread even though it changed the schema. A reread adds a counted row beside the old one,
-    so the check reads the newest read of each team game, as the model does.
+    The answer comes from the data, not from the starting version, because a version 2 store
+    that the 1->2 step made can reach a later version with its counts still NULL. A reread
+    adds a counted row beside the old one, so the check reads the newest read of each team
+    game, as the model does.
     """
     if stored < _EMPTY_ATTEMPTS_FROM + 1:
         return True
