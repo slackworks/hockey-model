@@ -380,6 +380,30 @@ def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction
     assert "hockey-model refresh --reread-moneypuck" in report.next_step
 
 
+def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Path) -> None:
+    """A store that started at v1 ran the 1->2 step, then reread MoneyPuck, then upgrades again.
+
+    The reread appends a counted row and keeps the v1 row, so a count of the table would
+    still see an empty row and ask for a reread that has already happened.
+    """
+    v2 = make_v2_store(tmp_path / "store.db")
+    conn = sqlite3.connect(v2)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " '2026-01-02T00:00:00Z', 0)"
+    )
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
+        " 1, 2, 3, 4, '2026-01-03T00:00:00Z', 1)"
+    )
+    conn.commit()
+    conn.close()
+    assert upgrade_store(v2).next_step is None
+
+
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
     upgrade_store(v1)
     assert upgrade_store(v1).next_step is None

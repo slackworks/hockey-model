@@ -80,7 +80,9 @@ _SKIP_NOTE = "no store file there yet; the first refresh creates it at the curre
 # Only the 1->2 step leaves the attempt counts empty. A store that started at version 2 or
 # later already has its counts, so a later step carries no reread instruction.
 _EMPTY_ATTEMPTS_FROM = 1
-_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM mp_team_games WHERE attempts_known = 0"
+# The view, not the table: a reread appends a counted row and leaves the v1 row in place, so
+# a table count would ask for the reread again forever.
+_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM latest_mp_team_games WHERE attempts_known = 0"
 
 
 @dataclass(frozen=True)
@@ -274,7 +276,8 @@ def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
 
     The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
     A store that started at version 2 or later keeps its counts, so a later step needs no
-    reread even though it changed the schema.
+    reread even though it changed the schema. A reread adds a counted row beside the old one,
+    so the check reads the newest read of each team game, as the model does.
     """
     if stored < _EMPTY_ATTEMPTS_FROM + 1:
         return True
