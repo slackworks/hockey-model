@@ -12,6 +12,10 @@ filled in, because the value at the old fetch time is unknown.
 
 A version 2 store may also have no ``attempts_known`` column. Version 2 covered two table
 shapes, and the 3->4 step rebuilds the table from the shape the store actually has.
+
+The version stamp is written in the same transaction as every change, so a stamp cannot name
+a shape the store does not hold. A stamp that is already ahead of the shape is caught by a
+column probe, and the upgrade reruns every change from version 1.
 """
 
 import argparse
@@ -24,6 +28,8 @@ from pathlib import Path
 from stat import S_ISREG
 
 from hockey_model.store.db import SCHEMA_VERSION, StoreError
+from hockey_model.store.shape import Requirement, earned_version
+from hockey_model.store.sql_text import statements as script_statements
 from hockey_model.store.timestamps import iso_utc
 
 
@@ -63,6 +69,27 @@ CREATE TABLE {table} (
 
 _MP_TEAM_GAMES_V2 = _mp_team_games_ddl("mp_team_games_v2")
 _MP_TEAM_GAMES_V4 = _mp_team_games_ddl("mp_team_games_v4")
+# The 4->5 step rebuilds these two tables for the same reason the 3->4 step rebuilds
+# mp_team_games: schema.sql changed without a migration step, so an upgraded store kept the
+# weaker shape. Both tables hold no key that a rebuild must preserve beyond the fit ids.
+_SOURCE_READS_V5 = """
+CREATE TABLE source_reads_v5 (
+    source TEXT,
+    url TEXT,
+    fetched_at TEXT NOT NULL,
+    ok INTEGER,
+    error TEXT
+)
+"""
+_MODEL_FITS_V5 = """
+CREATE TABLE model_fits_v5 (
+    fit_id INTEGER PRIMARY KEY,
+    fit_through_season INTEGER,
+    features TEXT,
+    weights TEXT,
+    created_at TEXT NOT NULL
+)
+"""
 # A stored row is known when it carries all four counts. The flag is derived, so the
 # rebuild writes it from the counts instead of trusting a column that a version 2 store
 # may not have.
@@ -114,7 +141,28 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team)",
         "CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at)",
     ),
+    # d05eb1a added NOT NULL to these two columns without a migration step, so a store that
+    # predates it accepts a row that a fresh store rejects. Both columns are written by every
+    # writer, so no stored row holds a NULL and the rebuild copies every row.
+    4: (
+        _SOURCE_READS_V5,
+        "INSERT INTO source_reads_v5 (source, url, fetched_at, ok, error)"
+        " SELECT source, url, fetched_at, ok, error FROM source_reads",
+        "DROP TABLE source_reads",
+        "ALTER TABLE source_reads_v5 RENAME TO source_reads",
+        _MODEL_FITS_V5,
+        "INSERT INTO model_fits_v5 (fit_id, fit_through_season, features, weights, created_at)"
+        " SELECT fit_id, fit_through_season, features, weights, created_at FROM model_fits",
+        "DROP TABLE model_fits",
+        "ALTER TABLE model_fits_v5 RENAME TO model_fits",
+    ),
 }
+# d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
+# NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.
+_NULLABLE_BEFORE_V5: tuple[tuple[str, str], ...] = (
+    ("source_reads", "fetched_at"),
+    ("model_fits", "created_at"),
+)
 _LEDGER = (
     "CREATE TABLE IF NOT EXISTS schema_migrations ("
     " from_version INTEGER NOT NULL, to_version INTEGER NOT NULL,"
@@ -265,13 +313,39 @@ def _drop_views(conn: sqlite3.Connection) -> None:
         conn.execute(f"DROP VIEW IF EXISTS {name}")
 
 
+def _refuse_a_null_column(conn: sqlite3.Connection, path: Path) -> None:
+    """Stop the upgrade when a row holds a NULL that the current shape refuses.
+
+    The 4->5 step adds NOT NULL to two columns that an earlier store wrote without it. The
+    rebuild cannot fill a NULL with a true value, so it names the table and the count instead.
+    """
+    for table, column in _NULLABLE_BEFORE_V5:
+        query = f"SELECT COUNT(*) FROM {table} WHERE {column} IS NULL"
+        count = int(conn.execute(query).fetchone()[0])
+        if count:
+            raise StoreError(
+                f"upgrade store {str(path)!r}: {table} holds {count} rows with a NULL "
+                f"{column}, and the current shape needs a value there; the rebuild cannot "
+                "invent one. Set the value in those rows, then run the upgrade again."
+            )
+
+
 def _apply(conn: sqlite3.Connection, path: Path, stored: int, backup: Path) -> None:
-    """Run the changes and the ledger row, then commit. Roll back on any error."""
+    """Run every change, the views, the ledger row, and the stamp, then commit.
+
+    The view rebuild runs inside the transaction. A view that names a column the new shape
+    lacks raises here, before the stamp is written, so the store cannot be left stamped at a
+    version whose shape it does not hold.
+    """
     try:
         _drop_views(conn)
+        if stored < 5:
+            _refuse_a_null_column(conn, path)
         for version in range(stored, SCHEMA_VERSION):
             for statement in MIGRATIONS[version]:
                 conn.execute(statement)
+        for statement in script_statements(_VIEWS_PATH.read_text(encoding="utf-8")):
+            conn.execute(statement)
         conn.execute(_LEDGER)
         conn.execute(
             "INSERT INTO schema_migrations (from_version, to_version, applied_at, backup_path)"
@@ -280,7 +354,7 @@ def _apply(conn: sqlite3.Connection, path: Path, stored: int, backup: Path) -> N
         )
         conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         raise StoreError(
             f"upgrade store {str(path)!r}: {exc}; {_rollback(conn)} The backup is "
             f"{str(backup)!r}. Fix the cause, move the backup aside, then run the "
@@ -303,18 +377,6 @@ def _rollback(conn: sqlite3.Connection) -> str:
     return "the store is unchanged."
 
 
-def _rebuild_views(conn: sqlite3.Connection, path: Path, backup: Path) -> None:
-    """Rebuild the views after the commit. A failure here leaves the upgrade in place."""
-    try:
-        conn.executescript(_VIEWS_PATH.read_text(encoding="utf-8"))
-    except (sqlite3.Error, OSError) as exc:
-        raise StoreError(
-            f"upgrade store {str(path)!r}: the schema is upgraded, but the views failed to "
-            f"rebuild: {exc}. The backup is {str(backup)!r}. Open the store once with the "
-            "current hockey-model to rebuild the views."
-        ) from exc
-
-
 def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
     """Upgrade the store at ``path`` to ``SCHEMA_VERSION``. Return what it did.
 
@@ -327,23 +389,59 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
     try:
         # The write lock is held before the version is read and before the copy is made.
         _lock(conn, path)
-        stored = _read_version(conn, path)
+        stored, note = _start_version(conn, path)
         if stored == SCHEMA_VERSION:
             conn.execute("COMMIT")
-            return UpgradeReport(str(path), stored, SCHEMA_VERSION, False, _last_backup(conn, path))
-        if stored > SCHEMA_VERSION or stored not in MIGRATIONS:
-            conn.execute("ROLLBACK")
-            raise StoreError(
-                f"upgrade store {str(path)!r}: no upgrade path from version {stored} to "
-                f"{SCHEMA_VERSION}; use a hockey-model that reads version {stored}, or a new path"
+            return UpgradeReport(
+                str(path), stored, SCHEMA_VERSION, False, _last_backup(conn, path), note=note
             )
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
-        _rebuild_views(conn, path, backup)
         next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
     finally:
         conn.close()
-    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step)
+    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step, note)
+
+
+def _start_version(conn: sqlite3.Connection, path: Path) -> tuple[int, str | None]:
+    """Return the version to migrate from, and a note when the stamp was not trusted.
+
+    A stamp at the current version is checked against the shape before it is believed. A
+    stamp that names a shape the store does not hold is discounted to the version the shape
+    earns, so every change between the two runs again. A version this code cannot reach is
+    refused here, while the transaction is still open and nothing has changed.
+    """
+    stored = _read_version(conn, path)
+    note: str | None = None
+    if stored > SCHEMA_VERSION:
+        raise StoreError(
+            f"upgrade store {str(path)!r}: no upgrade path from version {stored} to "
+            f"{SCHEMA_VERSION}; use a hockey-model that reads version {stored}, or a new path"
+        )
+    earned, missing = earned_version(conn)
+    if earned < stored:
+        stored, note = earned, _stamp_ahead_note(path, earned, missing)
+    if stored == SCHEMA_VERSION:
+        return stored, note
+    if stored not in MIGRATIONS:
+        raise StoreError(
+            f"upgrade store {str(path)!r}: no upgrade path from version {stored} to "
+            f"{SCHEMA_VERSION}; use a hockey-model that reads version {stored}, or a new path"
+        )
+    return stored, note
+
+
+def _stamp_ahead_note(path: Path, earned: int, missing: Requirement | None) -> str:
+    """Name the store whose stamp was ahead of its shape, the missing column, and the version."""
+    if missing is None:
+        short = "no column is missing"
+    else:
+        short = f"version {missing.version} needs {missing.table}.{missing.column}"
+    return (
+        f"the stamp of {str(path)!r} named a newer version than its tables hold; the tables "
+        f"earn version {earned}, because {short}. Every change from version {earned} runs "
+        "again, and the ledger records it."
+    )
 
 
 def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:

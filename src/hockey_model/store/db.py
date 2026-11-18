@@ -7,7 +7,7 @@ from pathlib import Path
 from hockey_model.types import HockeyModelError
 
 DB_ENV = "HOCKEY_MODEL_DB"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 _VIEWS_PATH = Path(__file__).with_name("views.sql")
 

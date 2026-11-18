@@ -14,7 +14,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from seeding import add_game, add_team_form
 
-from hockey_model.store import upgrade
+from hockey_model.store import sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.store.upgrade import upgrade_store
@@ -35,7 +35,11 @@ def make_v1_store(path: Path, mp_rows: list[tuple] = V1_MP_ROWS) -> Path:
     conn = sqlite3.connect(path)
     conn.executescript(V1_SCHEMA.read_text(encoding="utf-8"))
     conn.execute("INSERT INTO schema_version (version) VALUES (1)")
-    conn.executemany("INSERT INTO mp_team_games VALUES (?, ?, ?, ?, ?, ?)", mp_rows)
+    conn.executemany(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against, fetched_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        mp_rows,
+    )
     conn.execute(
         "INSERT INTO model_fits (fit_id, fit_through_season, features, weights, created_at)"
         " VALUES (7, 20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
@@ -483,8 +487,8 @@ def test_a_version_2_store_without_the_flag_gains_the_current_table_sql(
 def test_an_upgraded_store_has_the_same_indexes_as_a_fresh_one(tmp_path: Path) -> None:
     """Five indexes reached schema.sql after version 1, so no early store had them.
 
-    The v1 fixture holds every index, so the drop below makes the real early shape. Without
-    it this test passes on a store that the migration never indexed.
+    The v1 fixture holds the first schema, which has no index at all, so this test fails on a
+    migration that never creates one.
     """
     early = (
         "games_start",
@@ -496,11 +500,7 @@ def test_an_upgraded_store_has_the_same_indexes_as_a_fresh_one(tmp_path: Path) -
     fresh = tmp_path / "fresh.db"
     connect(fresh).close()
     upgraded = make_v1_store(tmp_path / "upgraded.db")
-    conn = sqlite3.connect(upgraded)
-    for name in early:
-        conn.execute(f"DROP INDEX {name}")
-    conn.commit()
-    conn.close()
+    assert _index_names(upgraded) == set()
 
     upgrade_store(upgraded)
     assert _index_names(upgraded) == _index_names(fresh)
@@ -569,13 +569,11 @@ def test_a_damaged_ledger_is_named_instead_of_read_as_no_backup(v1: Path) -> Non
     assert "damaged" in str(info.value)
 
 
-def test_a_store_with_no_ledger_reports_no_backup(v1: Path) -> None:
-    """The first upgrade has no ledger yet, so a no-op must not fail on the missing table."""
-    conn = sqlite3.connect(v1)
-    conn.execute("UPDATE schema_version SET version = 4")
-    conn.commit()
-    conn.close()
-    report = upgrade_store(v1)
+def test_a_store_with_no_ledger_reports_no_backup(tmp_path: Path) -> None:
+    """A fresh store has the current shape and no ledger, so its upgrade is a no-op."""
+    path = tmp_path / "fresh.db"
+    connect(path).close()
+    report = upgrade_store(path)
     assert (report.changed, report.backup_path) == (False, None)
 
 
@@ -607,6 +605,115 @@ def test_a_rollback_that_runs_reports_the_store_unchanged(v1: Path) -> None:
 def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
     upgrade_store(v1)
     assert upgrade_store(v1).next_step is None
+
+
+def test_an_upgraded_store_holds_the_current_shape_of_the_two_rebuilt_tables(
+    tmp_path: Path,
+) -> None:
+    """The v1 fixture carries the nullable columns and no NOT NULL, which d05eb1a later added."""
+    fresh = tmp_path / "fresh.db"
+    connect(fresh).close()
+    upgraded = make_v1_store(tmp_path / "upgraded.db")
+    upgrade_store(upgraded)
+    for table in ("source_reads", "model_fits"):
+        pragma = f"SELECT name, \"notnull\" FROM pragma_table_info('{table}') ORDER BY cid"
+        assert rows(upgraded, pragma) == rows(fresh, pragma)
+        assert ("fetched_at", 1) in rows(upgraded, pragma) or ("created_at", 1) in rows(
+            upgraded, pragma
+        )
+
+
+def test_the_rebuild_keeps_every_source_read_and_fit_row(tmp_path: Path) -> None:
+    path = make_v1_store(tmp_path / "store.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error)"
+        " VALUES ('nhl', 'https://example.test/a', '2026-01-01T00:00:00Z', 1, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error)"
+        " VALUES ('espn', 'https://example.test/b', '2026-01-02T00:00:00Z', 0, 'timeout')"
+    )
+    conn.commit()
+    conn.close()
+    upgrade_store(path)
+    assert rows(path, "SELECT source, url, ok, error FROM source_reads ORDER BY url") == [
+        ("nhl", "https://example.test/a", 1, None),
+        ("espn", "https://example.test/b", 0, "timeout"),
+    ]
+    assert rows(path, "SELECT fit_id, features FROM model_fits") == [(7, '["rest"]')]
+
+
+def test_a_null_in_a_rebuilt_column_stops_the_upgrade_and_names_the_table(
+    tmp_path: Path,
+) -> None:
+    """The rebuild adds NOT NULL, so a stored NULL has no value it could copy into the shape."""
+    path = make_v1_store(tmp_path / "store.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error)"
+        " VALUES ('nhl', 'https://example.test/a', NULL, 1, NULL)"
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(StoreError, match=r"source_reads holds 1 rows with a NULL fetched_at"):
+        upgrade_store(path)
+    assert version_of(path) == 1
+
+
+def test_the_script_splitter_keeps_each_statement_whole() -> None:
+    """executescript commits, so a script runs one statement at a time inside the transaction."""
+    assert sql_text.statements("CREATE TABLE a (x TEXT);\nCREATE VIEW b AS SELECT 1;\n") == (
+        "CREATE TABLE a (x TEXT);",
+        "CREATE VIEW b AS SELECT 1;",
+    )
+    assert sql_text.statements("\n-- a comment only\n") == ()
+
+
+def test_the_script_splitter_refuses_a_statement_with_no_end() -> None:
+    """A missing semicolon would run as a silent no-op, so the split names it."""
+    with pytest.raises(StoreError, match="the last statement is incomplete"):
+        sql_text.statements("CREATE TABLE a (x TEXT)")
+
+
+def test_a_stamp_ahead_of_the_shape_runs_every_change_again(tmp_path: Path) -> None:
+    """The run 44345179216 state: the stamp says 4 and the tables hold the version 1 shape."""
+    path = make_v1_store(tmp_path / "store.db")
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE schema_version SET version = 4")
+    conn.commit()
+    conn.close()
+    report = upgrade_store(path)
+    assert (report.from_version, report.changed) == (1, True)
+    assert report.note is not None
+    assert "version 2 needs mp_team_games.shot_attempts_for" in report.note
+    assert version_of(path) == SCHEMA_VERSION
+    assert "attempts_known" in [row[1] for row in rows(path, "PRAGMA table_info(mp_team_games)")]
+
+
+def test_a_stamp_ahead_by_one_reruns_only_the_change_it_lost(tmp_path: Path) -> None:
+    """A store stamped 5 that lacks the NOT NULL of version 5 earns 4 and reruns the 4->5 step."""
+    path = tmp_path / "store.db"
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE source_reads")
+    conn.execute(
+        "CREATE TABLE source_reads (source TEXT, url TEXT, fetched_at TEXT, ok INTEGER, error TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error)"
+        " VALUES ('nhl', 'https://example.test/a', '2026-01-01T00:00:00Z', 1, NULL)"
+    )
+    conn.commit()
+    conn.close()
+    report = upgrade_store(path)
+    assert (report.from_version, report.changed) == (4, True)
+    assert report.note is not None
+    assert "version 5 needs source_reads.fetched_at" in report.note
+    pragma = "SELECT name, \"notnull\" FROM pragma_table_info('source_reads')"
+    assert ("fetched_at", 1) in rows(path, pragma)
+    assert rows(path, "SELECT source, url FROM source_reads") == [("nhl", "https://example.test/a")]
+    assert version_of(path) == SCHEMA_VERSION
 
 
 def test_the_reread_flag_makes_moneypuck_stale_even_when_fresh() -> None:
