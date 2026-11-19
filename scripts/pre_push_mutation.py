@@ -158,7 +158,28 @@ def pushed_ref() -> str | None:
     script carries no ref, and the check falls back to HEAD.
     """
     ref = os.environ.get(PUSHED_REF_ENV)
-    return ref or None
+    return parsed_ref(Path.cwd(), ref) if ref else None
+
+
+def parsed_ref(repo: Path, value: str) -> str:
+    """Return the branch name that ``value`` names. Accept a branch name or a commit sha.
+
+    prek sets the variable to a branch name when it names one, and to a commit sha when the
+    push names none. A sha is checked for a branch that holds it, so the check still names a
+    branch when it can.
+    """
+    if value.startswith("refs/heads/"):
+        return value
+    if re.fullmatch(r"[0-9a-f]{40}", value):
+        return branch_at(repo, value) or value
+    return value
+
+
+def branch_at(repo: Path, sha: str) -> str | None:
+    """Return the local branch that holds ``sha``, or None when no branch does."""
+    done = _git_run(repo, "for-each-ref", "--points-at", sha, "--format=%(refname)", "refs/heads")
+    branches = done.stdout.split() if done.returncode == 0 else []
+    return branches[0] if branches else None
 
 
 def resolve_base(repo: Path, ref: str | None = None) -> tuple[str, str]:

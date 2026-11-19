@@ -70,6 +70,12 @@ def _commit(repo: Path, files: dict[str, str | None], message: str) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_pushed_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A prek run exports this, and it would point these tests at the outer repository's ref.
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A repo whose base commit is the default branch on origin, with a feature commit on top."""
@@ -444,14 +450,32 @@ def test_the_plan_subcommand_prints_the_mutant_globs(
 
 
 def test_the_pushed_ref_comes_from_the_variable_that_prek_sets(
-    mod: ModuleType, monkeypatch: pytest.MonkeyPatch
+    mod: ModuleType, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # prek reads the ref lines itself and closes the hook's stdin, so it republishes the
     # pushed ref in PRE_COMMIT_TO_REF. This test pins the variable name (#252).
-    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    monkeypatch.chdir(repo)
     assert mod.pushed_ref() is None
-    monkeypatch.setenv("PRE_COMMIT_TO_REF", "refs/heads/feat")
-    assert mod.pushed_ref() == "refs/heads/feat"
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "refs/heads/main")
+    assert mod.pushed_ref() == "refs/heads/main"
+
+
+def test_a_commit_sha_names_the_branch_that_holds_it(
+    mod: ModuleType, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A push of a sha rather than a branch is common, and prek forwards it as it is.
+    monkeypatch.chdir(repo)
+    sha = _git(repo, "rev-parse", "HEAD").strip()
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", sha)
+    assert mod.pushed_ref() == "refs/heads/main"
+
+
+def test_a_sha_in_no_branch_stays_a_sha(
+    mod: ModuleType, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "0" * 40)
+    assert mod.pushed_ref() == "0" * 40
 
 
 def test_an_empty_pushed_ref_is_no_ref(mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
