@@ -18,9 +18,9 @@ A push that changes no covered function, such as a docs-only or a test-only push
 A deleted file selects nothing, because its mutants no longer exist.
 A renamed file counts as added at its new path.
 
-The check gates HEAD against its tracking branch. It ignores the refs that git passes on
-stdin, so it is right for one checkout that pushes its own branch. A push of another
-branch from the same checkout is gated against HEAD, not against that branch.
+The check gates the ref the push carries. prek closes a hook's stdin, so the ref arrives
+in ``PRE_COMMIT_TO_REF`` rather than on stdin. A ref that is not the one HEAD holds is
+refused, because mutmut reads the working tree and a mutant name does not carry its module.
 
 Subcommands:
 
@@ -67,6 +67,9 @@ INCOMPLETE = frozenset(
 PASSING = frozenset({"killed", "caught by type check"})
 # mutmut joins the parts of a method name with this character and prefixes "x".
 METHOD_SEPARATOR = "ǁ"
+# prek closes a hook's stdin, so it republishes the pushed ref in this variable. The name
+# is pre-commit's, and prek keeps it for compatibility.
+PUSHED_REF_ENV = "PRE_COMMIT_TO_REF"
 HUNK_NEW = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 HUNK_OLD = re.compile(r"^@@ -(\d+)")
 RESULT_LINE = re.compile(r"^\s+(?P<name>\S+): (?P<status>.+)$")
@@ -135,22 +138,56 @@ def remote_default_branch(repo: Path) -> str:
     return done.stdout.strip().removeprefix("refs/remotes/")
 
 
-def resolve_base(repo: Path) -> tuple[str, str]:
-    """Return ``(merge base sha, label)`` of HEAD with its tracking branch or the default.
+def head_ref(repo: Path) -> str:
+    """Return the full ref name that HEAD points at, such as ``refs/heads/main``."""
+    done = _git_run(repo, "symbolic-ref", "--quiet", "HEAD")
+    if done.returncode != 0:
+        raise PushCheckError(
+            "HEAD is detached, so the check cannot tell which branch this push carries. "
+            "Run `git switch <branch>`, then push again."
+        )
+    return done.stdout.strip()
 
-    A first push has no tracking branch, so the default branch is the base there. The label
-    names which one was used, so the log shows the size of the check.
+
+def pushed_ref() -> str | None:
+    """Return the ref this push carries, or None when no push named one.
+
+    git writes ``<local ref> SP <local sha> SP <remote ref> SP <remote sha>`` to the
+    pre-push hook's stdin. prek consumes that line itself and closes the hook's stdin, so
+    it republishes the ref as ``PRE_COMMIT_TO_REF`` instead (#252). A direct run of this
+    script carries no ref, and the check falls back to HEAD.
     """
+    ref = os.environ.get(PUSHED_REF_ENV)
+    return ref or None
+
+
+def resolve_base(repo: Path, ref: str | None = None) -> tuple[str, str]:
+    """Return ``(merge base sha, label)`` for the commit range that the push carries.
+
+    ``ref`` is the ref that the push names. The default ref is HEAD. A ref that is not HEAD
+    is refused for two reasons: mutmut runs on the working tree, which holds HEAD, and a
+    mutant name does not carry its module, so two branches' mutants cannot be told apart.
+    """
+    ref = ref or "HEAD"
     tracked = tracking_ref(repo)
     target, label = (
-        (tracked, "tracking branch")
-        if tracked
-        else (
-            remote_default_branch(repo),
-            "default branch",
-        )
+        (tracked, "tracking branch") if tracked else (remote_default_branch(repo), "default branch")
     )
-    return git(repo, "merge-base", "HEAD", target).strip(), label
+    return git(repo, "merge-base", ref, target).strip(), label
+
+
+def require_head(repo: Path, ref: str | None) -> None:
+    """Refuse a push whose ref is not the one that HEAD holds."""
+    if ref is None:
+        return
+    current = head_ref(repo)
+    if ref == current:
+        return
+    raise PushCheckError(
+        f"the push carries {ref}, but HEAD holds {current} and mutmut runs on the working "
+        f"tree. Push this branch from its own checkout, or run `git switch {current[11:]}` "
+        "and push again."
+    )
 
 
 def changed_files(repo: Path, base: str) -> list[FileChange]:
@@ -456,7 +493,9 @@ def gate(
 def run_check(repo: Path) -> int:
     """Run the changed-code check and return the exit code."""
     started = time.monotonic()
-    base, label = resolve_base(repo)
+    ref = pushed_ref()
+    require_head(repo, ref)
+    base, label = resolve_base(repo, ref)
     print(f"pre-push mutation: base {base[:12]} ({label})", file=sys.stderr)
     clean_worktree(repo)
     for path, lines in uncovered_changes(repo, base).items():
@@ -516,7 +555,9 @@ def main(argv: list[str] | None = None) -> int:
         repo = Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip())
         if args.command == "run":
             return run_check(repo)
-        base, _ = resolve_base(repo)
+        ref = pushed_ref()
+        require_head(repo, ref)
+        base, _ = resolve_base(repo, ref)
         for path, target, _ in covered_targets(repo, base):
             print(mutant_glob(path, target.qualname))
         return 0

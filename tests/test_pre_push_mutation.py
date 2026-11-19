@@ -443,6 +443,54 @@ def test_the_plan_subcommand_prints_the_mutant_globs(
     assert capsys.readouterr().out.strip() == ("hockey_model.sources.shapes.x_top__mutmut_*")
 
 
+def test_the_pushed_ref_comes_from_the_variable_that_prek_sets(
+    mod: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # prek reads the ref lines itself and closes the hook's stdin, so it republishes the
+    # pushed ref in PRE_COMMIT_TO_REF. This test pins the variable name (#252).
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    assert mod.pushed_ref() is None
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "refs/heads/feat")
+    assert mod.pushed_ref() == "refs/heads/feat"
+
+
+def test_an_empty_pushed_ref_is_no_ref(mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "")
+    assert mod.pushed_ref() is None
+
+
+def test_head_ref_names_the_branch_that_head_holds(mod: ModuleType, repo: Path) -> None:
+    assert mod.head_ref(repo) == "refs/heads/main"
+
+
+def test_a_detached_head_is_a_named_error(mod: ModuleType, repo: Path) -> None:
+    _git(repo, "checkout", "-q", "--detach")
+    with pytest.raises(mod.PushCheckError, match="git switch"):
+        mod.head_ref(repo)
+
+
+def test_a_push_of_another_branch_is_refused_with_the_fix(mod: ModuleType, repo: Path) -> None:
+    # mutmut reads the working tree, which holds HEAD. Gating another ref would compare
+    # that ref's diff against HEAD's mutants (#252).
+    with pytest.raises(mod.PushCheckError, match="HEAD holds refs/heads/main"):
+        mod.require_head(repo, "refs/heads/other")
+
+
+def test_a_push_of_the_head_branch_is_allowed(mod: ModuleType, repo: Path) -> None:
+    mod.require_head(repo, "refs/heads/main")
+
+
+def test_a_run_with_no_pushed_ref_is_allowed(mod: ModuleType, repo: Path) -> None:
+    # A direct run of the script carries no ref, and it checks HEAD.
+    mod.require_head(repo, None)
+
+
+def test_the_base_is_the_merge_base_of_the_pushed_ref(mod: ModuleType, repo: Path) -> None:
+    base_sha = _git(repo, "rev-parse", "HEAD").strip()
+    _commit(repo, {SOURCE: BASE_SOURCE.replace("+ 1", "+ 2")}, "feature")
+    assert mod.resolve_base(repo, "refs/heads/main") == (base_sha, "default branch")
+
+
 def test_a_path_outside_a_repository_is_a_named_error(
     mod: ModuleType,
     tmp_path: Path,
