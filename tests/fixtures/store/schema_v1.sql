@@ -1,6 +1,6 @@
--- Source tables are append-only: each read carries fetched_at as ISO UTC, and a later
--- read adds a row. The exceptions are skater_games and goalie_games, which are written
--- once per game from a final boxscore and keyed on the game.
+-- The first schema this package wrote, at commit c47f438. A store that the first release
+-- created has exactly this shape: nullable fetched_at and created_at, no indexes, and the
+-- MoneyPuck team goal columns. The upgrade must reach the current shape from here.
 
 CREATE TABLE schema_version (
     version INTEGER NOT NULL
@@ -9,7 +9,7 @@ CREATE TABLE schema_version (
 CREATE TABLE source_reads (
     source TEXT,
     url TEXT,
-    fetched_at TEXT NOT NULL,
+    fetched_at TEXT,
     ok INTEGER,
     error TEXT
 );
@@ -66,6 +66,8 @@ CREATE TABLE mp_team_games (
     game_date TEXT,
     xg_for REAL,
     xg_against REAL,
+    goals_for INTEGER,
+    goals_against INTEGER,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (game_id, team, fetched_at)
 );
@@ -104,13 +106,5 @@ CREATE TABLE model_fits (
     fit_through_season INTEGER,
     features TEXT,
     weights TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT
 );
-
--- Indexes for the as-of reads, which filter by time, team, and player.
-CREATE INDEX IF NOT EXISTS games_start ON games (start_utc);
-CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started);
-CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team);
-CREATE INDEX IF NOT EXISTS mp_goalie_games_player ON mp_goalie_games (nhl_id);
-CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team);
-CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at);

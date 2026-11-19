@@ -6,7 +6,8 @@
 #
 # Exits 0 when the day needs no alert: it has no games, or its report has a pre-start row.
 # Exits 1 when the day has games and no release, or when every game row of its report was
-# made after the start. The alert is one ::error:: line on stderr.
+# made after the start, or when the day has no game inside its window and the feed lists a
+# game outside it. The alert is one ::error:: line on stderr.
 # Exits 2 on bad arguments. Exits 1 when a GitHub or report-due call fails.
 set -euo pipefail
 
@@ -40,6 +41,8 @@ done
 
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
+# shellcheck source=scripts/release-exists.sh
+source "$(dirname "$0")/release-exists.sh"
 if ! is_valid_day "$day"; then
   echo "check-daily-report: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
@@ -49,30 +52,41 @@ status_json="$(uv run hockey-model report-due --date "$day")" || {
   echo "check-daily-report: report-due failed for $day; its error is above" >&2
   exit 1
 }
-if ! jq -e '(.games | type == "number") and (.tag | type == "string")' <<<"$status_json" \
-  >/dev/null; then
-  echo "check-daily-report: report-due payload lacks games or tag: $status_json" >&2
+if ! jq -e '(.games | type == "number") and (.tag | type == "string")
+  and (.games_outside_window | type == "number")' <<<"$status_json" >/dev/null; then
+  echo "check-daily-report: report-due payload lacks games, tag, or games_outside_window:" \
+    "$status_json" >&2
   exit 1
 fi
 games="$(jq -r '.games' <<<"$status_json")"
 tag="$(jq -r '.tag' <<<"$status_json")"
+outside="$(jq -r '.games_outside_window' <<<"$status_json")"
 if [[ "$games" == "0" ]]; then
+  # A feed that lists the day under the wrong date drops every game, and that is not an off
+  # day. Only a feed with no game at all passes the day.
+  if [[ "$outside" != "0" ]]; then
+    echo "::error::check-daily-report: $day has no game inside its window, and the feed lists $outside game(s) outside it. The feed date is probably wrong; check report-due's stderr for the game ids." >&2
+    exit 1
+  fi
   echo "ok $day: the schedule lists no games, so no report is expected"
   exit 0
 fi
 
-# "release not found" means no report was published. Any other failure stops the check, so
-# an auth or network error is not read as a missing report. report-gate.sh has the same
-# lookup, so change both together.
-view_err="$(gh release view "$tag" 2>&1 >/dev/null)" && published=true || published=false
-if [[ "$published" == false ]]; then
-  if [[ "$view_err" != *"release not found"* ]]; then
-    echo "check-daily-report: gh release view $tag failed: $view_err" >&2
-    exit 1
-  fi
+# A 404 means no report was published. Any other answer stops the check, so an auth or
+# network error is not read as a missing report. report-gate.sh has the same lookup, so
+# change both together.
+answer="$(release_status "$tag")"
+case "$answer" in
+published) ;;
+missing)
   echo "::error::check-daily-report: $day has $games game(s) and no report release ($tag)." >&2
   exit 1
-fi
+  ;;
+*)
+  echo "check-daily-report: the release lookup for $tag failed: ${answer#failed: }" >&2
+  exit 1
+  ;;
+esac
 
 mkdir -p "$work_dir"
 report="$work_dir/report-$day.json"

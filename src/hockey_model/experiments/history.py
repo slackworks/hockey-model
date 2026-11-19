@@ -198,6 +198,10 @@ def _is_work_tree(repo_root: Path) -> bool:
 
     A directory outside any repository is False. A missing git binary or any other
     git failure raises, so a broken git never passes as an untracked record.
+
+    The error text is not read, because its wording changes with the git version and the
+    locale. A directory under a ``.git`` entry is a repository, so a git failure there is a
+    real error. A failure with no such entry is a plain directory.
     """
     try:
         result = subprocess.run(
@@ -210,9 +214,9 @@ def _is_work_tree(repo_root: Path) -> bool:
         raise HockeyModelError(f"run git in {repo_root}: git is not installed") from exc
     if result.returncode == 0:
         return result.stdout.strip() == "true"
-    if "not a git repository" in result.stderr:
-        return False
-    raise HockeyModelError(f"git rev-parse in {repo_root} failed: {result.stderr.strip()}")
+    if any((parent / ".git").exists() for parent in (repo_root, *repo_root.parents)):
+        raise HockeyModelError(f"git rev-parse in {repo_root} failed: {result.stderr.strip()}")
+    return False
 
 
 def _git(args: list[str], repo_root: Path) -> str:

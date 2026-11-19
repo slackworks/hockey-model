@@ -77,9 +77,10 @@ The goal projections in `prediction` are marginal intervals. The docstring and t
 2. Open `sqlite3.connect(f"file:{urllib.parse.quote(str(path))}?mode=ro", uri=True, autocommit=False)`. Do not pass `immutable=1`: a producer can write the WAL store at the same time.
 3. Run `PRAGMA query_only = ON`.
 4. Read `schema_version`. A value other than `SCHEMA_VERSION` raises `StoreVersionError` with the found and the expected version and the fix (`hockey-model store upgrade`, run by the producer).
-5. Check that every view in `views.sql` exists in `sqlite_master`. A missing view raises `StoreVersionError` that names the view. The consumer MUST NOT run `views.sql`.
-6. Read one row to start the read transaction. With `autocommit=False` the transaction stays open, so every later read sees one snapshot of the WAL store. `refresh_snapshot` calls `rollback()` and reads one row again.
-7. Resolve `fit` once (see below) and keep it for the life of the object.
+5. Run the shape probe in `store/shape.py`. It reads the columns and the NOT NULL rules that each version added. A stamp that names a version the tables do not hold raises `StoreVersionError` that names the first missing column and the version the tables earn. A store refused here fails at open, not at a later `no such column`.
+6. Check that every view in `views.sql` exists in `sqlite_master`. A missing view raises `StoreVersionError` that names the view. The consumer MUST NOT run `views.sql`.
+7. Read one row to start the read transaction. With `autocommit=False` the transaction stays open, so every later read sees one snapshot of the WAL store. `refresh_snapshot` calls `rollback()` and reads one row again.
+8. Resolve `fit` once (see below) and keep it for the life of the object.
 
 Do not change `store/db.py::connect`. The producer path keeps its DDL and WAL setup.
 

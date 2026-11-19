@@ -27,9 +27,10 @@ def store(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 def fakes(tmp_path: Path) -> Path:
     """Write fake `gh` and `uv` commands. Each records its arguments in calls.log.
 
-    `gh release view TAG` succeeds for a tag in FAKE_RELEASES and otherwise prints
-    "release not found", as the real command does. `gh release create` refuses a tag that
-    already exists. FAKE_GH_FAIL makes every gh call fail with an auth error.
+    `gh api --include .../releases/tags/TAG` answers 200 for a tag in FAKE_RELEASES and 404
+    otherwise, as the real command does. `gh release view TAG` answers the same way for the
+    asset read. `gh release create` refuses a tag that already exists. FAKE_GH_FAIL makes
+    every gh call fail with an auth error.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -40,6 +41,20 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
         # The mutation report reads the open issue list. The default is an empty list.
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
+        'if [[ "$1" == "api" ]]; then\n'
+        '  path="${!#}"\n'
+        # The release lookup reads the repository first, so a token that cannot see the
+        # repository is not read as a missing release.
+        '  if [[ "$path" != */tags/* ]]; then\n'
+        '    if [[ -n "${FAKE_NO_REPO:-}" ]]; then echo "HTTP/2.0 404 Not Found"; exit 1; fi\n'
+        '    echo "HTTP/2.0 200 OK"\n'
+        "    exit 0\n"
+        "  fi\n"
+        '  tag="${path##*/tags/}"\n'
+        '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then echo "HTTP/2.0 200 OK"; exit 0; fi\n'
+        '  echo "HTTP/2.0 404 Not Found"\n'
+        "  exit 1\n"
+        "fi\n"
         'tag="${3:-}"\n'
         'if [[ "$1 $2" == "release view" ]]; then\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'

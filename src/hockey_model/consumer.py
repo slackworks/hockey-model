@@ -42,6 +42,7 @@ from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.store.db import SCHEMA_VERSION
 from hockey_model.store.fits import FitArtifact, FitRef, load_fit
+from hockey_model.store.shape import earned_version
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.utc import require_utc
 
@@ -117,9 +118,26 @@ def _open_failure_fix(path: Path, exc: sqlite3.Error) -> str:
             "beside a WAL store; give the directory write permission, or run "
             "`PRAGMA journal_mode=DELETE` on the store as the producer"
         )
+    elif name == "SQLITE_ERROR" and _names_an_absent_object(exc):
+        # SQLite raises a plain SQLITE_ERROR for a table or column the code names and the file
+        # lacks, and the producer's upgrade is the fix for that.
+        fix = (
+            "the file does not hold the shape that this version reads; the producer runs "
+            "`hockey-model store upgrade`"
+        )
     else:
         fix = "check the file permissions, then open the store again"
     return f"open store {str(path)!r}: {exc}; {fix}"
+
+
+def _names_an_absent_object(exc: sqlite3.Error) -> bool:
+    """Return True when the error says a column or a table that the code names is absent.
+
+    SQLite raises a plain ``SQLITE_ERROR`` for these, so the message text is the only signal
+    that separates them from any other statement failure.
+    """
+    text = str(exc)
+    return "no such column" in text or "no such table" in text
 
 
 def _check_schema(conn: sqlite3.Connection, path: Path) -> None:
@@ -140,6 +158,13 @@ def _check_schema(conn: sqlite3.Connection, path: Path) -> None:
             f"open store {str(path)!r}: schema version {found} is not version "
             f"{SCHEMA_VERSION}; the producer runs `hockey-model store upgrade`, and the "
             "consumer reads the store only after that run"
+        )
+    earned, gap = earned_version(conn)
+    if gap is not None and earned < SCHEMA_VERSION:
+        raise StoreVersionError(
+            f"open store {str(path)!r}: the stamp says version {SCHEMA_VERSION}, but "
+            f"{gap.table} lacks {gap.column}, so the tables hold version {earned}; the "
+            "producer runs `hockey-model store upgrade`, which runs every step again"
         )
     views = {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='view'")}
     missing = sorted(REQUIRED_VIEWS - views)

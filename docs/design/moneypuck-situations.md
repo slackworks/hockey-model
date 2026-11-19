@@ -34,7 +34,7 @@ Keep the two lists as tuples of `(csv_name, column_name, kind)` in the new parse
 
 ## Storage
 
-Schema version 5, added through `hockey-model store upgrade` (`store/upgrade.py`), with the backup and the one-transaction rule that the upgrade already has.
+Schema version 6, added through `hockey-model store upgrade` (`store/upgrade.py`), with the backup and the one-transaction rule that the upgrade already has.
 
 ```sql
 CREATE TABLE mp_team_situations (
@@ -73,7 +73,7 @@ An empty cell is NULL, never zero.
 - The fixtures `tests/fixtures/moneypuck/all_teams_sample.csv` and `goalies_2025_sample.zip` already hold all five situations. Parse them and assert the values of one hand-checked row for each situation.
 - A renamed column raises `SourceShapeError` with the full message (owner rule in #31).
 - An empty cell is stored as NULL.
-- `store upgrade` from version 4 keeps every row and every fit ID, and adds the empty tables.
+- `store upgrade` from version 5 keeps every row and every fit ID, and adds the empty tables.
 - The backtest report and CSV on the seeded store are byte-identical before and after.
 
 ## Limits that each user of this data MUST state

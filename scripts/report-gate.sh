@@ -22,8 +22,9 @@
 #   already-published   the day has a release and this run does not replace it
 #   no-games            the schedule lists no games, so nothing publishes
 #   dry-run             the report is built and not published
-# Exits non-zero when the schedule payload is malformed, the release lookup fails, or the
-# decision step fails or prints a payload that lacks a field.
+# Exits non-zero when the schedule payload is malformed, the release lookup fails, the
+# decision step fails or prints a payload that lacks a field, or the day has no game inside
+# its window while the feed lists a game outside it.
 set -euo pipefail
 
 day=""
@@ -77,6 +78,8 @@ done
 
 # shellcheck source=scripts/valid-day.sh
 source "$(dirname "$0")/valid-day.sh"
+# shellcheck source=scripts/release-exists.sh
+source "$(dirname "$0")/release-exists.sh"
 if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
   echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
@@ -99,14 +102,31 @@ status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
 }
 required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
+required+=' and (.games_outside_window | type == "number")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
-  echo "report-gate: report-due payload lacks due, tag, games, or date: $status_json" >&2
+  echo "report-gate: report-due payload lacks due, tag, games, date, or" \
+    "games_outside_window: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
 due="$(jq -r '.due' <<<"$status_json")"
 games="$(jq -r '.games' <<<"$status_json")"
 day="$(jq -r '.date' <<<"$status_json")"
+outside="$(jq -r '.games_outside_window' <<<"$status_json")"
+# A feed that lists the day under the wrong date drops every game, and the gate must not
+# read that as an off day. check-daily-report.sh refuses the same state.
+if [[ "$games" == "0" && "$outside" != "0" ]]; then
+  echo "report-gate: $day has no game inside its window, and the feed lists $outside" \
+    "game(s) outside it. The feed date is probably wrong; check report-due's stderr for" \
+    "the game ids." >&2
+  exit 1
+fi
+# A game outside the window is a dropped row even when other games remain, so the report
+# would publish a partial day. Say so, and let the operator decide whether to force it.
+if [[ "$outside" != "0" ]]; then
+  echo "report-gate: warning: $day drops $outside feed game(s) that fall outside its" \
+    "window; see report-due's stderr for the game ids" >&2
+fi
 # Optional: only the late-run warning names it.
 first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
 
@@ -140,14 +160,17 @@ decided() {
 
 decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
-  # Ask for the one tag. "release not found" means the day is not published yet; any
-  # other failure (auth, network) stops the run. check-daily-report.sh has the same
-  # lookup, so change both together.
-  view_err="$(gh release view "$tag" 2>&1 >/dev/null)" && published=true || published=false
-  if [[ "$published" == false && "$view_err" != *"release not found"* ]]; then
-    echo "report-gate: gh release view $tag failed: $view_err" >&2
+  # Ask for the one tag. A 404 means the day is not published yet; any other answer (auth,
+  # network) stops the run. check-daily-report.sh has the same lookup, so change both together.
+  answer="$(release_status "$tag")"
+  case "$answer" in
+  published) published=true ;;
+  missing) published=false ;;
+  *)
+    echo "report-gate: the release lookup for $tag failed: ${answer#failed: }" >&2
     exit 1
-  fi
+    ;;
+  esac
   decision="$(decided "$published")" || exit 1
 fi
 warning="$(jq -r '.warning // ""' <<<"$decision")"

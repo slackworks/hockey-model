@@ -1,0 +1,62 @@
+"""Read the table shape that a version stamp claims to describe.
+
+The stamp is a number that the code writes. The shape is what the tables hold. A failed
+upgrade can leave the two apart, so the upgrade reads the shape before it trusts the stamp.
+"""
+
+import sqlite3
+from typing import NamedTuple
+
+
+class Requirement(NamedTuple):
+    """One column that a schema version added, and whether it must refuse NULL."""
+
+    version: int
+    table: str
+    column: str
+    not_null: bool
+
+
+# The column that each version added, in version order. A store that lacks one of these does
+# not hold that version's shape. The probe reads column names on purpose: a full schema diff
+# would restate schema.sql and drift from it.
+REQUIREMENTS: tuple[Requirement, ...] = (
+    Requirement(2, "mp_team_games", "shot_attempts_for", False),
+    Requirement(3, "fit_labels", "label", False),
+    Requirement(4, "mp_team_games", "attempts_known", False),
+    Requirement(5, "source_reads", "fetched_at", True),
+    Requirement(5, "model_fits", "created_at", True),
+)
+# The shape before the first requirement, which is the first schema this package wrote. A store
+# with no schema_version row is refused before this module runs.
+_OLDEST_SHAPE = 1
+
+
+def holds(conn: sqlite3.Connection, requirement: Requirement) -> bool:
+    """Return True when the table has the column, with NOT NULL when the requirement asks.
+
+    ``PRAGMA table_info`` names the column at index 1 and its NOT NULL flag at index 3. The
+    table name comes from ``REQUIREMENTS``, so the string join cannot carry a second statement.
+    """
+    pragma = "PRAGMA table_info(" + requirement.table + ")"
+    found = {row[1]: row[3] for row in conn.execute(pragma)}
+    if requirement.column not in found:
+        return False
+    return not requirement.not_null or bool(found[requirement.column])
+
+
+def earned_version(conn: sqlite3.Connection) -> tuple[int, Requirement | None]:
+    """Return the version the tables earn, and the first requirement they fail.
+
+    The second value is the column that names the gap, or None when the tables hold every
+    requirement. The caller uses it to tell the operator what the store is missing.
+
+    A version can add more than one column. When a later requirement of that version fails,
+    the tables earn the version before it, not the version it names.
+    """
+    earned = _OLDEST_SHAPE
+    for requirement in REQUIREMENTS:
+        if not holds(conn, requirement):
+            return min(earned, requirement.version - 1), requirement
+        earned = requirement.version
+    return earned, None

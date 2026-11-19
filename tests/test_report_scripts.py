@@ -35,7 +35,9 @@ def test_gate_refuses_an_invalid_date(fakes: Path, tmp_path: Path, bad: str) -> 
 
 def test_gate_skips_a_day_that_is_already_published(fakes: Path, tmp_path: Path) -> None:
     # After the puck drop, a published day is skipped and never replaced.
-    not_due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3})
+    not_due = json.dumps(
+        {"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0}
+    )
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=not_due, FAKE_RELEASES=f"reports-2026-11-03\n{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 0, result.stderr
@@ -49,7 +51,7 @@ def test_gate_skips_a_day_that_is_already_published(fakes: Path, tmp_path: Path)
 
 
 def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3})
+    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 0, result.stderr
@@ -63,7 +65,7 @@ def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_pat
 
 
 def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3})
+    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY, "--force")
     assert json.loads(result.stdout)["reason"] == "already-published"
@@ -83,6 +85,7 @@ def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
             "tag": TAG,
             "date": DAY,
             "games": 3,
+            "games_outside_window": 0,
             "first_puck_drop_utc": "2026-11-05T00:00:00Z",
             "puck_drop_passed": puck_drop_passed,
         }
@@ -97,7 +100,7 @@ def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
         "reason": "late",
         "date": DAY,
     }
-    assert "gh release view" in "\n".join(_calls(tmp_path))
+    assert "gh api --include" in "\n".join(_calls(tmp_path))
     assert "::warning::" in result.stderr
     assert "has passed or is less than" in result.stderr
     assert "2026-11-05T00:00:00Z" in result.stderr
@@ -106,7 +109,7 @@ def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
 def test_gate_after_the_puck_drop_skips_a_day_already_published(
     fakes: Path, tmp_path: Path
 ) -> None:
-    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3})
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert json.loads(result.stdout)["reason"] == "already-published"
@@ -158,7 +161,7 @@ def test_gate_dry_run_builds_a_published_day_without_a_release_lookup(
 
 
 def test_gate_dry_run_still_skips_a_day_that_is_not_due(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3})
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
     result = _run(
         "report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY, "--dry-run"
     )
@@ -174,16 +177,64 @@ def test_gate_fails_when_the_release_lookup_fails_for_another_reason(
     assert "auth failed" in result.stderr
 
 
-def test_gate_fails_on_a_payload_without_the_gate_fields(fakes: Path, tmp_path: Path) -> None:
-    bad = json.dumps({"due": "yes", "tag": TAG, "date": DAY, "games": 3})
-    result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=bad), "--date", DAY)
+def test_gate_does_not_read_a_hidden_repository_as_an_unpublished_day(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """GitHub answers 404 for a repository the token cannot see, so the gate must stop."""
+    env = _env(fakes, tmp_path, FAKE_NO_REPO="1")
+    result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 1
-    assert "lacks due, tag, games, or date" in result.stderr
+    assert result.stdout == ""
+    assert "cannot see this repository" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"due": "yes", "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0},
+        {"due": True, "tag": TAG, "date": DAY, "games": 3},
+    ],
+)
+def test_gate_fails_on_a_payload_without_the_gate_fields(
+    fakes: Path, tmp_path: Path, bad: dict[str, object]
+) -> None:
+    """A missing field must stop the gate, because a default could hide the state it refuses."""
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=json.dumps(bad))
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert "lacks due, tag, games, date, or games_outside_window" in result.stderr
+
+
+def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The gate and the alert must agree that a wrong-date feed is not an off day."""
+    wrong = json.dumps(
+        {"due": True, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 3}
+    )
+    result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=wrong), "--date", DAY)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "no game inside its window" in result.stderr
+    assert "3 game(s) outside it" in result.stderr
+
+
+def test_gate_warns_about_a_partial_day_and_still_decides(fakes: Path, tmp_path: Path) -> None:
+    """Rows outside the window are dropped even when some games remain, so the gate says so."""
+    partial = json.dumps(
+        {"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 2}
+    )
+    result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=partial), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert "drops 2 feed game(s)" in result.stderr
+    assert json.loads(result.stdout)["tag"] == TAG
 
 
 def test_gate_publishes_nothing_for_an_empty_schedule(fakes: Path, tmp_path: Path) -> None:
     # An empty schedule can be a failed feed read, so it must not make a permanent release.
-    empty = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 0})
+    empty = json.dumps(
+        {"due": True, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 0}
+    )
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=empty), "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
@@ -432,7 +483,14 @@ def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         FAKE_DUE_JSON=json.dumps(
-            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+            {
+                "due": True,
+                "tag": TAG,
+                "date": DAY,
+                "games": 3,
+                "games_outside_window": 0,
+                "prep_too_early": True,
+            }
         ),
     )
     out = tmp_path / "out"
@@ -628,7 +686,14 @@ def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_p
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         FAKE_DUE_JSON=json.dumps(
-            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": "true"}
+            {
+                "due": True,
+                "tag": TAG,
+                "date": DAY,
+                "games": 3,
+                "games_outside_window": 0,
+                "prep_too_early": "true",
+            }
         ),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
@@ -653,7 +718,14 @@ def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_pat
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         GITHUB_STEP_SUMMARY=str(summary),
         FAKE_DUE_JSON=json.dumps(
-            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": True}
+            {
+                "due": True,
+                "tag": TAG,
+                "date": DAY,
+                "games": 3,
+                "games_outside_window": 0,
+                "prep_too_early": True,
+            }
         ),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
