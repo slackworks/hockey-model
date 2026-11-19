@@ -135,6 +135,8 @@ The change runs in one transaction, so a failure leaves the store as it was.
 The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote, so the attempt-form features skip those rows.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.
 Opening a store never migrates it, so a consumer on an old store fails and names this command.
+Opening a store also checks the shape of its tables against the stamp.
+A stamp that names a version the tables do not hold fails at open and names the missing column, instead of a later `no such column`.
 The daily prepare and report scripts run this command on the store that the workflow cache restores.
 Upgrade the producer first, then the consumers.
 After the upgrade, run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest.
