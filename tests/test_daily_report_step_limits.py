@@ -3,18 +3,14 @@
 import re
 from pathlib import Path
 
-import pytest
+from mutation_copy import require_path
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-report.yml"
+WORKFLOW = require_path(
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-report.yml"
+)
 _BUDGET = re.compile(r'REPORT_BUDGET_S: "([0-9]+)"')
 _STEP_LIMIT = re.compile(r"timeout-minutes: ([0-9]+)")
 _REPORT_RUN = "bash scripts/daily-report.sh"
-
-
-def _skip_without_workflows() -> None:
-    # The mutation run copies src and tests only, so it has no workflow file to read.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
 
 
 def _report_step_lines() -> list[str]:
@@ -25,7 +21,6 @@ def _report_step_lines() -> list[str]:
 
 
 def test_report_step_limit_is_above_the_report_budget() -> None:
-    _skip_without_workflows()
     text = WORKFLOW.read_text(encoding="utf-8")
     budget = _BUDGET.search(text)
     assert budget is not None, "the report step must set REPORT_BUDGET_S"
@@ -35,7 +30,6 @@ def test_report_step_limit_is_above_the_report_budget() -> None:
 
 
 def test_report_step_limit_is_below_the_build_job_limit() -> None:
-    _skip_without_workflows()
     text = WORKFLOW.read_text(encoding="utf-8")
     build_job = text.split("  build:", 1)[1].split("  publish:", 1)[0]
     job_limit = _STEP_LIMIT.search(build_job)

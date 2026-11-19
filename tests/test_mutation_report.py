@@ -8,18 +8,16 @@ from types import ModuleType
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from mutation_copy import require_path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "mutation_report.py"
+SCRIPT = require_path(ROOT / "scripts" / "mutation_report.py")
 BOT = {"is_bot": True, "login": "github-actions"}
 PERSON = {"is_bot": False, "login": "someone"}
 
 
 def _load_report() -> ModuleType:
     """Import the script by path, because scripts/ is not a package."""
-    if not SCRIPT.exists():
-        # A mutation run copies src/ and tests/ only, so the script is absent there.
-        pytest.skip("scripts/mutation_report.py is not copied", allow_module_level=True)
     spec = importlib.util.spec_from_file_location("mutation_report", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

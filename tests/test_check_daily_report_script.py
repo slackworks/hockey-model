@@ -6,12 +6,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 
-# The mutation run copies src and tests only, so the scripts are not there to test.
-if "mutants" in Path(__file__).resolve().parts:
-    pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check-daily-report.sh"
+# The mutation run copies src and tests only, so the script is not there to test.
+SCRIPT = require_path(Path(__file__).resolve().parents[1] / "scripts" / "check-daily-report.sh")
 DAY = "2026-11-04"
 TAG = f"reports-{DAY}"
 

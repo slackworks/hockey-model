@@ -8,16 +8,14 @@ from types import ModuleType
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from mutation_copy import require_path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "smoke_wheel.py"
+SCRIPT = require_path(ROOT / "scripts" / "smoke_wheel.py")
 
 
 def _load() -> ModuleType:
     """Import the script by path, because scripts/ is not a package."""
-    if not SCRIPT.exists():
-        # A mutation run copies src/ and tests/ only, so the script is absent there.
-        pytest.skip("scripts/smoke_wheel.py is not copied", allow_module_level=True)
     spec = importlib.util.spec_from_file_location("smoke_wheel", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

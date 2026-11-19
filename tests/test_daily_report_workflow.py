@@ -3,11 +3,13 @@
 import re
 from pathlib import Path
 
-import pytest
+from mutation_copy import require_path
 
 from hockey_model.report_trigger import TRIGGER_HOURS_UTC, TRIGGER_MINUTE_UTC
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-report.yml"
+WORKFLOW = require_path(
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-report.yml"
+)
 _CRON = re.compile(r'cron: "([0-9]{1,2}) ([0-9,-]+) \* \* \*"')
 
 
@@ -21,9 +23,6 @@ def _hours(field: str) -> list[int]:
 
 
 def test_cron_minute_and_hours_match_the_trigger_code() -> None:
-    # The mutation run copies src and tests only, so it has no workflow file to read.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
     match = _CRON.search(WORKFLOW.read_text(encoding="utf-8"))
     assert match is not None, "the schedule must be an hourly cron such as '44 0,11,15-23 * * *'"
     assert int(match.group(1)) == TRIGGER_MINUTE_UTC
@@ -31,9 +30,7 @@ def test_cron_minute_and_hours_match_the_trigger_code() -> None:
 
 
 def test_prepare_runs_at_an_hour_with_no_trigger() -> None:
-    prepare = WORKFLOW.with_name("daily-prepare.yml")
-    if not prepare.exists():
-        pytest.skip("the mutation copy has no .github directory")
+    prepare = require_path(WORKFLOW.with_name("daily-prepare.yml"))
     match = _CRON.search(prepare.read_text(encoding="utf-8"))
     assert match is not None
     (hour,) = _hours(match.group(2))
@@ -41,9 +38,6 @@ def test_prepare_runs_at_an_hour_with_no_trigger() -> None:
 
 
 def test_build_job_fails_loudly_on_a_store_cache_miss() -> None:
-    # The mutation copy has no .github directory, so there is no workflow to read there.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "id: restore" in text
     # A restore hit on another branch is invisible; matched-key is empty when nothing restored.
@@ -51,16 +45,10 @@ def test_build_job_fails_loudly_on_a_store_cache_miss() -> None:
 
 
 def test_build_job_sets_the_report_budget_to_ten_minutes() -> None:
-    # The mutation copy has no .github directory, so there is no workflow to read there.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
     assert 'REPORT_BUDGET_S: "600"' in WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_an_over_budget_report_is_uploaded_and_published() -> None:
-    # The mutation copy has no .github directory, so there is no workflow to read there.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
     text = WORKFLOW.read_text(encoding="utf-8")
     upload = text[
         text.index("actions/upload-artifact") - 120 : text.index("actions/upload-artifact")

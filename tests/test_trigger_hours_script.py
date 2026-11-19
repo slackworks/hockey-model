@@ -8,14 +8,12 @@ from types import ModuleType
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from mutation_copy import require_path
 
 from hockey_model.report_trigger import TRIGGER_MINUTE_UTC, puck_drop_ahead
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "trigger_hours.py"
-if not SCRIPT.exists():
-    # A mutation run copies src/ and tests/ only, so the script is absent there.
-    pytest.skip("scripts/trigger_hours.py is not copied", allow_module_level=True)
+SCRIPT = require_path(ROOT / "scripts" / "trigger_hours.py")
 
 
 def _load() -> ModuleType:

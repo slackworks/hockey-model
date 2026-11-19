@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES
 from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
@@ -57,9 +58,7 @@ def _integer(values: dict[str, str], name: str, source: str) -> int:
 
 
 def _load(cfg: Path) -> tuple[dict[str, str], str]:
-    # The mutation run copies src and tests only, so the cfg files are not there to read.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no specs directory")
+    require_path(ROOT / "specs")
     source = str(cfg.relative_to(ROOT))
     return parse_constants(cfg.read_text(encoding="utf-8"), source), source
 

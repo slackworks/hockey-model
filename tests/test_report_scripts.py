@@ -5,11 +5,10 @@ import os
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 from report_script_support import DAY, LIVE, TAG, _calls, _env, _run, store_path
 
-# The mutation run copies src and tests only, so the scripts are not there to test.
-if "mutants" in Path(__file__).resolve().parts:
-    pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
+require_path(Path(__file__).resolve().parents[1] / "scripts")
 # --- gate ---------------------------------------------------------------------
 
 

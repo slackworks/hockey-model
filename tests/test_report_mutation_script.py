@@ -9,10 +9,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 from report_script_support import REAL_UV, _calls
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "report-mutation.sh"
+SCRIPT = require_path(ROOT / "scripts" / "report-mutation.sh")
 URL = "https://example.test/run/9"
 STATS = {"killed": 400, "survived": 10, "timeout": 0, "no_tests": 0, "total": 410}
 GOOD_RESULTS = [
@@ -26,9 +27,6 @@ GOOD_RESULTS = [
     "success",
 ]
 
-# The mutation run copies src and tests only, so the script is not there to test.
-if "mutants" in Path(__file__).resolve().parts:
-    pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
 if not REAL_UV:
     pytest.skip("no uv on PATH, so the script cannot run", allow_module_level=True)
 

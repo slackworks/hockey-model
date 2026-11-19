@@ -3,13 +3,10 @@
 import re
 from pathlib import Path
 
-import pytest
-
-# The mutation run copies src and tests only, so the workflow files are not there to read.
-if "mutants" in Path(__file__).resolve().parts:
-    pytest.skip("the mutation copy has no workflow files", allow_module_level=True)
+from mutation_copy import require_path
 
 ROOT = Path(__file__).resolve().parents[1]
+require_path(ROOT / ".github")
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 HOOKS = ROOT / ".pre-commit-config.yaml"
 

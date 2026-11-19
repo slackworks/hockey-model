@@ -4,20 +4,15 @@ import re
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 
 from hockey_model.report_trigger import TRIGGER_HOURS_UTC
 
 ROOT = Path(__file__).resolve().parents[1]
-PREPARE = ROOT / ".github" / "workflows" / "daily-prepare.yml"
-REPORT = ROOT / ".github" / "workflows" / "daily-report.yml"
+PREPARE = require_path(ROOT / ".github" / "workflows" / "daily-prepare.yml")
+REPORT = require_path(ROOT / ".github" / "workflows" / "daily-report.yml")
 _CRON = re.compile(r'cron: "[0-9]{1,2} ([0-9]{1,2}) \* \* \*"')
 _TIMEOUT = re.compile(r"timeout-minutes: ([0-9]+)")
-
-
-def _skip_without_workflows() -> None:
-    # The mutation run copies src and tests only, so it has no workflow file to read.
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github directory")
 
 
 def window_minutes(cron_hour: int) -> int:
@@ -28,7 +23,6 @@ def window_minutes(cron_hour: int) -> int:
 
 
 def test_prepare_timeout_fits_the_window_before_the_next_trigger() -> None:
-    _skip_without_workflows()
     text = PREPARE.read_text(encoding="utf-8")
     cron = _CRON.search(text)
     timeout = _TIMEOUT.search(text)
@@ -44,7 +38,6 @@ def test_window_is_three_hours_for_the_eight_am_prepare() -> None:
 @pytest.mark.parametrize("workflow", [PREPARE, REPORT])
 def test_the_saved_cache_keeps_no_upgrade_backup(workflow: Path) -> None:
     """The cache saves the store even after a failure, so a backup must not enter it."""
-    _skip_without_workflows()
     text = workflow.read_text(encoding="utf-8")
     drop = text.find('rm -f "$RUNNER_TEMP"/hockey-model/*.bak')
     save = text.find("actions/cache/save")

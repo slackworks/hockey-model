@@ -8,13 +8,12 @@ from pathlib import Path
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from mutation_copy import require_path
 from report_script_support import DAY, GENERATED, SHA, TAG, _calls, _env, _run
 
 from hockey_model.store.timestamps import iso_utc
 
-# The mutation run copies src and tests only, so the scripts are not there to test.
-if "mutants" in Path(__file__).resolve().parts:
-    pytest.skip("the mutation copy has no scripts directory", allow_module_level=True)
+require_path(Path(__file__).resolve().parents[1] / "scripts")
 
 
 def _write_report(report_dir: Path, day: str = DAY) -> None:

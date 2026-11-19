@@ -9,13 +9,14 @@ import re
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mutation.yml"
+WORKFLOW = require_path(
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mutation.yml"
+)
 
 
 def _text() -> str:
-    if "mutants" in Path(__file__).resolve().parts:
-        pytest.skip("the mutation copy has no .github or scripts directory")
     return WORKFLOW.read_text(encoding="utf-8")
 
 
