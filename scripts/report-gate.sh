@@ -101,14 +101,31 @@ status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
 }
 required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
+required+=' and (.games_outside_window | type == "number")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
-  echo "report-gate: report-due payload lacks due, tag, games, or date: $status_json" >&2
+  echo "report-gate: report-due payload lacks due, tag, games, date, or" \
+    "games_outside_window: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
 due="$(jq -r '.due' <<<"$status_json")"
 games="$(jq -r '.games' <<<"$status_json")"
 day="$(jq -r '.date' <<<"$status_json")"
+outside="$(jq -r '.games_outside_window' <<<"$status_json")"
+# A feed that lists the day under the wrong date drops every game, and the gate must not
+# read that as an off day. check-daily-report.sh refuses the same state.
+if [[ "$games" == "0" && "$outside" != "0" ]]; then
+  echo "report-gate: $day has no game inside its window, and the feed lists $outside" \
+    "game(s) outside it. The feed date is probably wrong; check report-due's stderr for" \
+    "the game ids." >&2
+  exit 1
+fi
+# A game outside the window is a dropped row even when other games remain, so the report
+# would publish a partial day. Say so, and let the operator decide whether to force it.
+if [[ "$outside" != "0" ]]; then
+  echo "report-gate: warning: $day drops $outside feed game(s) that fall outside its" \
+    "window; see report-due's stderr for the game ids" >&2
+fi
 # Optional: only the late-run warning names it.
 first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
 

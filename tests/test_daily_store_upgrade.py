@@ -61,7 +61,14 @@ def test_the_report_upgrades_the_store_before_it_reads_anything(
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         FAKE_DUE_JSON=json.dumps(
-            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": False}
+            {
+                "due": True,
+                "tag": TAG,
+                "date": DAY,
+                "games": 3,
+                "games_outside_window": 0,
+                "prep_too_early": False,
+            }
         ),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))

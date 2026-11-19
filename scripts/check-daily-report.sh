@@ -51,14 +51,15 @@ status_json="$(uv run hockey-model report-due --date "$day")" || {
   echo "check-daily-report: report-due failed for $day; its error is above" >&2
   exit 1
 }
-if ! jq -e '(.games | type == "number") and (.tag | type == "string")' <<<"$status_json" \
-  >/dev/null; then
-  echo "check-daily-report: report-due payload lacks games or tag: $status_json" >&2
+if ! jq -e '(.games | type == "number") and (.tag | type == "string")
+  and (.games_outside_window | type == "number")' <<<"$status_json" >/dev/null; then
+  echo "check-daily-report: report-due payload lacks games, tag, or games_outside_window:" \
+    "$status_json" >&2
   exit 1
 fi
 games="$(jq -r '.games' <<<"$status_json")"
 tag="$(jq -r '.tag' <<<"$status_json")"
-outside="$(jq -r '.games_outside_window // 0' <<<"$status_json")"
+outside="$(jq -r '.games_outside_window' <<<"$status_json")"
 if [[ "$games" == "0" ]]; then
   # A feed that lists the day under the wrong date drops every game, and that is not an off
   # day. Only a feed with no game at all passes the day.

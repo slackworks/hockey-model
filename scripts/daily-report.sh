@@ -89,8 +89,19 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
     exit 1
   }
   # A string "true" must not skip, so the field has to be a JSON boolean.
-  if ! jq -e '.prep_too_early | type == "boolean"' <<<"$due_json" >/dev/null; then
-    echo "daily-report: report-due payload lacks a boolean prep_too_early: $due_json" >&2
+  if ! jq -e '(.prep_too_early | type == "boolean") and (.games | type == "number")
+    and (.games_outside_window | type == "number")' <<<"$due_json" >/dev/null; then
+    echo "daily-report: report-due payload lacks a boolean prep_too_early, games, or" \
+      "games_outside_window: $due_json" >&2
+    exit 1
+  fi
+  # A feed that lists the day under the wrong date drops every game, and a skip would hide
+  # that. check-daily-report.sh refuses the same state.
+  outside="$(jq -r '.games_outside_window' <<<"$due_json")"
+  if [[ "$outside" != "0" && "$(jq -r '.games' <<<"$due_json")" == "0" ]]; then
+    echo "daily-report: $day has no game inside its window, and the feed lists $outside" \
+      "game(s) outside it. The feed date is probably wrong; check report-due's stderr" \
+      "for the game ids." >&2
     exit 1
   fi
   if [[ "$(jq -r '.prep_too_early' <<<"$due_json")" == "true" ]]; then

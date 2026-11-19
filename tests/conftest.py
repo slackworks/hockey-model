@@ -43,6 +43,13 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
         'if [[ "$1" == "api" ]]; then\n'
         '  path="${!#}"\n'
+        # The release lookup reads the repository first, so a token that cannot see the
+        # repository is not read as a missing release.
+        '  if [[ "$path" != */tags/* ]]; then\n'
+        '    if [[ -n "${FAKE_NO_REPO:-}" ]]; then echo "HTTP/2.0 404 Not Found"; exit 1; fi\n'
+        '    echo "HTTP/2.0 200 OK"\n'
+        "    exit 0\n"
+        "  fi\n"
         '  tag="${path##*/tags/}"\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then echo "HTTP/2.0 200 OK"; exit 0; fi\n'
         '  echo "HTTP/2.0 404 Not Found"\n'

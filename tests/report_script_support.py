@@ -21,7 +21,14 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "FAKE_CALLS": str(tmp_path / "calls.log"),
         "FAKE_RELEASES": "",
         "FAKE_DUE_JSON": json.dumps(
-            {"due": True, "tag": TAG, "date": DAY, "games": 3, "prep_too_early": False}
+            {
+                "due": True,
+                "tag": TAG,
+                "date": DAY,
+                "games": 3,
+                "games_outside_window": 0,
+                "prep_too_early": False,
+            }
         ),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,

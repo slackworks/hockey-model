@@ -32,6 +32,13 @@ def fakes(tmp_path: Path) -> Path:
         'echo "gh $*" >> "$FAKE_CALLS"\n'
         'if [[ "$1" == "api" ]]; then\n'
         '  path="${!#}"\n'
+        # The release lookup reads the repository first, so a token that cannot see the
+        # repository is not read as a missing release.
+        '  if [[ "$path" != */tags/* ]]; then\n'
+        '    if [[ -n "${FAKE_NO_REPO:-}" ]]; then echo "HTTP/2.0 404 Not Found"; exit 1; fi\n'
+        '    echo "HTTP/2.0 200 OK"\n'
+        "    exit 0\n"
+        "  fi\n"
         '  tag="${path##*/tags/}"\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'
         '    echo "HTTP/2.0 200 OK"\n'
@@ -74,7 +81,9 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         **os.environ,
         "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
         "FAKE_CALLS": str(calls),
-        "FAKE_DUE_JSON": json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3}),
+        "FAKE_DUE_JSON": json.dumps(
+            {"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0}
+        ),
         "FAKE_RELEASES": "",
         "FAKE_REPORT_JSON": json.dumps({"games": [{"made_after_start": False}]}),
     }
@@ -99,7 +108,7 @@ def _calls(tmp_path: Path) -> str:
 
 
 def test_a_day_with_no_games_raises_no_alert(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 0})
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 0})
     result = _run(tmp_path, _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert "no games" in result.stdout
@@ -113,6 +122,17 @@ def test_a_feed_whose_games_all_fall_outside_the_window_fails(fakes: Path, tmp_p
     assert result.returncode == 1, result.stdout
     assert "::error::" in result.stderr
     assert "lists 2 game(s) outside it" in result.stderr
+
+
+def test_a_payload_without_the_outside_count_fails_instead_of_passing(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """A payload that omits the field must not default to zero, which is the state to refuse."""
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 0})
+    result = _run(tmp_path, _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY)
+    assert result.returncode == 1
+    assert "lacks games, tag, or games_outside_window" in result.stderr
+    assert "ok " not in result.stdout
 
 
 def test_a_day_with_games_and_no_release_fails(fakes: Path, tmp_path: Path) -> None:
@@ -138,6 +158,18 @@ def test_a_release_lookup_failure_for_another_reason_stops_the_check(
     result = _run(tmp_path, env, "--date", DAY)
     assert result.returncode == 1
     assert "failed: auth failed" in result.stderr
+    assert "::error::" not in result.stderr
+
+
+def test_a_repository_that_the_token_cannot_see_is_not_a_missing_release(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """GitHub answers 404 for both, so the check must not read a hidden repo as unpublished."""
+    env = _env(fakes, tmp_path, FAKE_NO_REPO="1")
+    result = _run(tmp_path, env, "--date", DAY)
+    assert result.returncode == 1
+    assert "cannot see this repository" in result.stderr
+    assert "no report release" not in result.stderr
     assert "::error::" not in result.stderr
 
 
