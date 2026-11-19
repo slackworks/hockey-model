@@ -17,6 +17,7 @@ from seeding import add_game, add_team_form
 from hockey_model.store import sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.reads import mp_attempt_form_before
+from hockey_model.store.shape import Requirement, earned_version
 from hockey_model.store.upgrade import upgrade_store
 from hockey_model.store_cli import run_store_command
 
@@ -644,6 +645,52 @@ def test_the_rebuild_keeps_every_source_read_and_fit_row(tmp_path: Path) -> None
     assert rows(path, "SELECT fit_id, features FROM model_fits") == [(7, '["rest"]')]
 
 
+_READ_ROW = st.tuples(
+    st.sampled_from(["nhl", "espn", "moneypuck"]),
+    st.from_regex(r"https://example\.test/[a-z]{1,8}", fullmatch=True),
+    st.from_regex(r"20[0-9]{2}-[01][0-9]-[0-3][0-9]T00:00:00Z", fullmatch=True),
+    st.sampled_from([0, 1]),
+    st.one_of(st.none(), st.sampled_from(["timeout", "http 500", "a 'quote'"])),
+)
+_FIT_ROW = st.tuples(
+    st.integers(1000, 10**9),
+    st.integers(20152016, 20252026),
+    st.sampled_from(['["rest"]', '["rest", "xg_form"]', "[]"]),
+    st.sampled_from(["[0.1]", "[-0.25, 0.5]"]),
+    st.from_regex(r"20[0-9]{2}-[01][0-9]-[0-3][0-9]T00:00:00Z", fullmatch=True),
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    reads=st.lists(_READ_ROW, max_size=6),
+    fits=st.lists(_FIT_ROW, max_size=4, unique_by=lambda row: row[0]),
+)
+def test_any_source_read_and_fit_row_survives_the_rebuild(
+    reads: list[tuple], fits: list[tuple]
+) -> None:
+    """The 4->5 step copies both tables, so a value that it drops is a row the store loses."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = make_v1_store(Path(folder) / "prop.db")
+        conn = sqlite3.connect(path)
+        conn.execute("DELETE FROM model_fits")
+        conn.executemany(
+            "INSERT INTO source_reads (source, url, fetched_at, ok, error) VALUES (?, ?, ?, ?, ?)",
+            reads,
+        )
+        conn.executemany(
+            "INSERT INTO model_fits (fit_id, fit_through_season, features, weights, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            fits,
+        )
+        conn.commit()
+        conn.close()
+        upgrade_store(path)
+        kept = rows(path, "SELECT source, url, fetched_at, ok, error FROM source_reads")
+        assert sorted(kept) == sorted(reads)
+        assert sorted(rows(path, "SELECT * FROM model_fits")) == sorted(fits)
+
+
 def test_a_null_in_a_rebuilt_column_stops_the_upgrade_and_names_the_table(
     tmp_path: Path,
 ) -> None:
@@ -661,6 +708,56 @@ def test_a_null_in_a_rebuilt_column_stops_the_upgrade_and_names_the_table(
     assert version_of(path) == 1
 
 
+def test_a_version_that_adds_two_columns_is_earned_only_when_both_hold(tmp_path: Path) -> None:
+    """Version 5 adds two columns. A later one that fails must give version 4, not version 5."""
+    path = tmp_path / "store.db"
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE model_fits")
+    conn.execute(
+        "CREATE TABLE model_fits (fit_id INTEGER PRIMARY KEY, fit_through_season INTEGER,"
+        " features TEXT, weights TEXT, created_at TEXT)"
+    )
+    conn.commit()
+    try:
+        earned, missing = earned_version(conn)
+    finally:
+        conn.close()
+    assert (earned, missing) == (4, Requirement(5, "model_fits", "created_at", True))
+
+
+def test_a_step_that_cannot_repair_the_table_shape_stops_the_upgrade(tmp_path: Path) -> None:
+    """The 2->3 step only creates the table, so it leaves a table with the wrong shape alone."""
+    path = tmp_path / "store.db"
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE fit_labels")
+    conn.execute("CREATE TABLE fit_labels (fit_id INTEGER NOT NULL, set_at TEXT NOT NULL)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(StoreError, match=r"fit_labels still lacks label"):
+        upgrade_store(path)
+    # The refusal rolls back, so the store keeps the shape it had and gains no ledger row.
+    assert "label" not in [row[1] for row in rows(path, "PRAGMA table_info(fit_labels)")]
+    tables = rows(path, "SELECT name FROM sqlite_master WHERE type = 'table'")
+    assert ("schema_migrations",) not in tables
+
+
+def test_a_null_row_stops_the_upgrade_before_the_backup_is_written(tmp_path: Path) -> None:
+    """The refusal says to run the upgrade again, and a leftover backup would block that."""
+    path = make_v1_store(tmp_path / "store.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok, error)"
+        " VALUES ('nhl', 'https://example.test/a', NULL, 1, NULL)"
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(StoreError, match=r"source_reads holds 1 rows with a NULL fetched_at"):
+        upgrade_store(path)
+    assert list(tmp_path.glob("*.bak")) == []
+
+
 def test_the_script_splitter_keeps_each_statement_whole() -> None:
     """executescript commits, so a script runs one statement at a time inside the transaction."""
     assert sql_text.statements("CREATE TABLE a (x TEXT);\nCREATE VIEW b AS SELECT 1;\n") == (
@@ -668,6 +765,10 @@ def test_the_script_splitter_keeps_each_statement_whole() -> None:
         "CREATE VIEW b AS SELECT 1;",
     )
     assert sql_text.statements("\n-- a comment only\n") == ()
+    assert sql_text.statements("\n/* a block comment only */\n") == ()
+    assert sql_text.statements("CREATE TABLE a (x TEXT);\n/* a note */") == (
+        "CREATE TABLE a (x TEXT);",
+    )
 
 
 def test_the_script_splitter_refuses_a_statement_with_no_end() -> None:

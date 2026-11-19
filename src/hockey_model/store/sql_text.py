@@ -1,9 +1,12 @@
 """SQL text that several store readers share."""
 
+import re
 import sqlite3
 from collections.abc import Iterable
 
 from hockey_model.store.db import StoreError
+
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 def statements(text: str) -> tuple[str, ...]:
@@ -23,17 +26,15 @@ def statements(text: str) -> tuple[str, ...]:
                 found.append(joined.strip())
             pending.clear()
     leftover = "".join(pending).strip()
-    if _has_sql(leftover):
+    # SQLite accepts both comment forms, so a trailing ``/* note */`` is not a statement, and
+    # a line that starts with ``--`` is a comment. Only real text is an incomplete statement.
+    body = _BLOCK_COMMENT.sub("", leftover)
+    if any(line.strip() and not line.lstrip().startswith("--") for line in body.splitlines()):
         raise StoreError(
             f"split SQL script: the last statement is incomplete: {leftover!r}; add the "
             "missing semicolon at the end of the script"
         )
     return tuple(found)
-
-
-def _has_sql(text: str) -> bool:
-    """Return True when the text holds a statement rather than comments and blank lines."""
-    return any(line.strip() and not line.lstrip().startswith("--") for line in text.splitlines())
 
 
 def placeholders(values: Iterable[object]) -> str:

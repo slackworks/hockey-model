@@ -10,9 +10,6 @@ A version 1 store has no attempt counts. The upgrade rebuilds ``mp_team_games`` 
 rows keep their values, the counts are NULL, and ``attempts_known`` is 0. No count is
 filled in, because the value at the old fetch time is unknown.
 
-A version 2 store may also have no ``attempts_known`` column. Version 2 covered two table
-shapes, and the 3->4 step rebuilds the table from the shape the store actually has.
-
 The version stamp is written in the same transaction as every change, so a stamp cannot name
 a shape the store does not hold. A stamp that is already ahead of the shape is caught by a
 column probe, and the upgrade reruns every change from version 1.
@@ -321,7 +318,14 @@ def _refuse_a_null_column(conn: sqlite3.Connection, path: Path) -> None:
     """
     for table, column in _NULLABLE_BEFORE_V5:
         query = f"SELECT COUNT(*) FROM {table} WHERE {column} IS NULL"
-        count = int(conn.execute(query).fetchone()[0])
+        try:
+            count = int(conn.execute(query).fetchone()[0])
+        except sqlite3.Error as exc:
+            raise StoreError(
+                f"upgrade store {str(path)!r}: cannot read {table}.{column}: {exc}; the file "
+                "does not hold the shape that version 1 wrote. Restore it from a backup, or "
+                "use a new path"
+            ) from exc
         if count:
             raise StoreError(
                 f"upgrade store {str(path)!r}: {table} holds {count} rows with a NULL "
@@ -333,19 +337,19 @@ def _refuse_a_null_column(conn: sqlite3.Connection, path: Path) -> None:
 def _apply(conn: sqlite3.Connection, path: Path, stored: int, backup: Path) -> None:
     """Run every change, the views, the ledger row, and the stamp, then commit.
 
-    The view rebuild runs inside the transaction. A view that names a column the new shape
-    lacks raises here, before the stamp is written, so the store cannot be left stamped at a
+    The view rebuild and the shape check run inside the transaction. A view that names a
+    column the new shape lacks raises here, and a column that a step failed to add is named
+    here, both before the stamp is written. The store therefore cannot be left stamped at a
     version whose shape it does not hold.
     """
     try:
         _drop_views(conn)
-        if stored < 5:
-            _refuse_a_null_column(conn, path)
         for version in range(stored, SCHEMA_VERSION):
             for statement in MIGRATIONS[version]:
                 conn.execute(statement)
         for statement in script_statements(_VIEWS_PATH.read_text(encoding="utf-8")):
             conn.execute(statement)
+        _refuse_a_short_shape(conn)
         conn.execute(_LEDGER)
         conn.execute(
             "INSERT INTO schema_migrations (from_version, to_version, applied_at, backup_path)"
@@ -354,12 +358,27 @@ def _apply(conn: sqlite3.Connection, path: Path, stored: int, backup: Path) -> N
         )
         conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
-    except (sqlite3.Error, OSError) as exc:
+    except (sqlite3.Error, OSError, StoreError) as exc:
         raise StoreError(
             f"upgrade store {str(path)!r}: {exc}; {_rollback(conn)} The backup is "
             f"{str(backup)!r}. Fix the cause, move the backup aside, then run the "
             "upgrade again."
         ) from exc
+
+
+def _refuse_a_short_shape(conn: sqlite3.Connection) -> None:
+    """Stop the upgrade when a step did not add the column that its version needs.
+
+    A step that only creates a table cannot repair a table that exists with the wrong shape,
+    so a run of such steps can pass while the store keeps the defect that started it. The
+    check reads the same probe that discounts the stamp, so the two cannot disagree.
+    """
+    earned, missing = earned_version(conn)
+    if missing is not None and earned < SCHEMA_VERSION:
+        raise StoreError(
+            f"the steps ran, but {missing.table} still lacks {missing.column}, so the store "
+            f"holds version {earned} and not {SCHEMA_VERSION}; restore the backup"
+        )
 
 
 def _rollback(conn: sqlite3.Connection) -> str:
@@ -395,6 +414,10 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
             return UpgradeReport(
                 str(path), stored, SCHEMA_VERSION, False, _last_backup(conn, path), note=note
             )
+        # The NULL check runs before the copy, so its "run the upgrade again" is not blocked
+        # by the backup file that a failed run leaves behind.
+        if stored < 5:
+            _refuse_a_null_column(conn, path)
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
         next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
@@ -419,7 +442,7 @@ def _start_version(conn: sqlite3.Connection, path: Path) -> tuple[int, str | Non
             f"{SCHEMA_VERSION}; use a hockey-model that reads version {stored}, or a new path"
         )
     earned, missing = earned_version(conn)
-    if earned < stored:
+    if missing is not None and earned < stored:
         stored, note = earned, _stamp_ahead_note(path, earned, missing)
     if stored == SCHEMA_VERSION:
         return stored, note
@@ -431,16 +454,17 @@ def _start_version(conn: sqlite3.Connection, path: Path) -> tuple[int, str | Non
     return stored, note
 
 
-def _stamp_ahead_note(path: Path, earned: int, missing: Requirement | None) -> str:
-    """Name the store whose stamp was ahead of its shape, the missing column, and the version."""
-    if missing is None:
-        short = "no column is missing"
-    else:
-        short = f"version {missing.version} needs {missing.table}.{missing.column}"
+def _stamp_ahead_note(path: Path, earned: int, missing: Requirement) -> str:
+    """Name the store whose stamp was ahead of its shape, the missing column, and the version.
+
+    The caller has already found that the tables earn less than the stamp, so a requirement
+    is always the reason.
+    """
     return (
         f"the stamp of {str(path)!r} named a newer version than its tables hold; the tables "
-        f"earn version {earned}, because {short}. Every change from version {earned} runs "
-        "again, and the ledger records it."
+        f"earn version {earned}, because version {missing.version} needs "
+        f"{missing.table}.{missing.column}. Every change from version {earned} runs again, "
+        "and the ledger records it."
     )
 
 
