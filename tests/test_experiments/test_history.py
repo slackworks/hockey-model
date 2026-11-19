@@ -39,6 +39,8 @@ def test_an_unexpected_git_failure_is_an_error(
     monkeypatch: pytest.MonkeyPatch, repo_root: Path
 ) -> None:
     """A git error that is not "not a repository" stops the check, for example a bad owner."""
+    # A bad owner can only happen in a repository, so the directory carries a .git entry.
+    (repo_root / ".git").mkdir()
 
     def broken(args, **kwargs):
         return subprocess.CompletedProcess(args, 128, "", "fatal: detected dubious ownership")
