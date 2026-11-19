@@ -10,9 +10,30 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 LIVE = ["xg_form", "rest"]
 DAY = "2026-11-04"
 TAG = f"reports-{DAY}"
+# The start of a daily-prepare run, as `prep-running.sh` prints it.
+STARTED = "2026-11-04T18:24:31Z"
 GENERATED = "2026-11-04T20:20:13.000000+00:00"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 REAL_UV = shutil.which("uv") or ""
+
+
+def due_json(**fields: object) -> str:
+    """Return one ``report-due`` payload, with every field the gate prints filled in.
+
+    Pass a field to change it. A field that the gate does not read is still printed, so this
+    builder keeps the shape of the real payload.
+    """
+    payload: dict[str, object] = {
+        "due": True,
+        "tag": TAG,
+        "date": DAY,
+        "games": 3,
+        "games_outside_window": 0,
+        "prep_too_early": False,
+        "prep_blocks_report": False,
+    }
+    payload.update(fields)
+    return json.dumps(payload)
 
 
 def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
@@ -20,16 +41,7 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
         "FAKE_CALLS": str(tmp_path / "calls.log"),
         "FAKE_RELEASES": "",
-        "FAKE_DUE_JSON": json.dumps(
-            {
-                "due": True,
-                "tag": TAG,
-                "date": DAY,
-                "games": 3,
-                "games_outside_window": 0,
-                "prep_too_early": False,
-            }
-        ),
+        "FAKE_DUE_JSON": due_json(),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,
         # report-decide is the real command: it holds the decision the gate script prints.

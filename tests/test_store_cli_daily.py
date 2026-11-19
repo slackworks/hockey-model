@@ -87,6 +87,7 @@ def test_report_due_prints_only_the_gate_fields(
         "first_puck_drop_utc",
         "puck_drop_passed",
         "prep_too_early",
+        "prep_blocks_report",
         "due",
     }
     assert payload["games_outside_window"] == 0
@@ -156,3 +157,37 @@ def test_report_due_never_skips_a_day_that_is_not_the_current_game_day(
     _feed(monkeypatch, {})
     assert main(["report-due", "--date", "2099-01-01"]) == 0
     assert json.loads(capsys.readouterr().out)["prep_too_early"] is False
+
+
+def test_report_due_reads_no_prepare_run_as_no_block(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # No run holds the store group, so no run can hold it past the puck drop.
+    _feed(monkeypatch, {})
+    assert main(["report-due", "--date", "2026-11-04"]) == 0
+    assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False
+
+
+def _slate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve the Nov 4 slate with one 7 pm EST game, which starts at midnight UTC on Nov 5."""
+    _feed(monkeypatch, {date(2026, 11, 4): [_row(1, "2026-11-05T00:00")]})
+
+
+def test_report_due_says_a_late_prepare_blocks_the_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A prepare that started at 22:00 runs until 01:00 UTC, past the midnight puck drop.
+    _slate(monkeypatch)
+    args = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T22:00:00Z"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is True
+
+
+def test_report_due_says_an_on_time_prepare_blocks_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The 08:00 prepare plus 180 minutes ends at 11:00, well before the midnight puck drop.
+    _slate(monkeypatch)
+    args = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T08:00:00Z"]
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False

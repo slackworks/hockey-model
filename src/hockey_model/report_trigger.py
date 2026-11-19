@@ -7,9 +7,14 @@ publishes. A day with no release also publishes late, because the games that hav
 still need a report (see report_gate.py). A game day with
 no games has its first puck drop at the end of the day. Game days are Eastern dates: see
 game_day.py. How the hours and the minute were chosen: docs/design/daily-report-triggers.md.
+
+Two facts also stop a run. ``prep_too_early`` skips a missing prepared marker while the
+morning prep window is still open. ``prep_blocks_report`` names a prepare run that holds the
+store group past the first puck drop, because GitHub counts a job timeout from its start, so
+the gate skips a run that would queue behind it (#163).
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from hockey_model.types import HockeyModelError
 from hockey_model.utc import require_utc
@@ -31,20 +36,36 @@ def first_puck_drop(day_closes: datetime, starts: list[datetime]) -> datetime:
     return min(starts) if starts else day_closes
 
 
-# The morning prep job times out at 180 minutes (daily-prepare.yml). Until a prep can have run
-# its full window, a missing prep marker means "not yet", not "broken".
+# The morning prep job times out at 180 minutes (daily-prepare.yml). The window opens at its
+# cron, so a prep that starts on time still fits inside it.
 PREP_WINDOW = timedelta(minutes=180)
+# The hour of the daily-prepare cron, and the longest queue delay that the workflow accepts.
+# GitHub delays a scheduled run, and the delay is not part of the job timeout. The report run
+# skips a missing prep until this late send can have finished; after that it fails (#163).
+PREP_CRON_HOUR_UTC = 8
+PREP_QUEUE_ALLOWANCE = timedelta(minutes=60)
 
 
-def prep_too_early(now: datetime, first_start: datetime) -> bool:
-    """Return True when the first puck drop is more than ``PREP_WINDOW`` away.
+def prep_window_opened(day: date) -> datetime:
+    """Return the instant that the prep job of game day ``day`` is due to start."""
+    return datetime(day.year, day.month, day.day, PREP_CRON_HOUR_UTC, tzinfo=UTC)
 
-    A run this early that finds no prep marker is not an error. Inside the window the same
-    missing marker means the prep failed, and a person has to act.
+
+def prep_too_early(
+    now: datetime, first_start: datetime, day: date, queue: timedelta = PREP_QUEUE_ALLOWANCE
+) -> bool:
+    """Return True while the prep job of ``day`` still has time to run.
+
+    A run this early that finds no prep marker is not an error. After the window, the same
+    missing marker means the prep failed, and a person has to act. ``queue`` is the longest
+    time from the prep cron to its job start that the caller treats as a late send.
     """
     require_utc(now, "report trigger now")
     require_utc(first_start, "first puck drop")
-    return first_start - now > PREP_WINDOW
+    if queue < timedelta(0):
+        raise HockeyModelError(f"prep queue allowance must not be negative, got {queue}")
+    by_window = now <= prep_window_opened(day) + PREP_WINDOW + queue
+    return by_window and first_start - now > PREP_WINDOW
 
 
 def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | None = None) -> bool:
@@ -60,3 +81,16 @@ def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | No
     if needed < timedelta(0):
         raise HockeyModelError(f"report margin must not be negative, got {needed}")
     return now + needed < first_start
+
+
+def prep_blocks_report(prep_started: datetime, first_start: datetime) -> bool:
+    """Return True when a running prepare can hold the store group past the first puck drop.
+
+    The report and the prepare share one concurrency group, so the report waits for the
+    prepare to end. GitHub counts a job timeout from the job start, so a prepare that
+    started late runs past its window (#163). A prepare that started on time ends inside
+    its window, and the report can wait for it.
+    """
+    require_utc(prep_started, "prepare run start")
+    require_utc(first_start, "first puck drop")
+    return prep_started + PREP_WINDOW > first_start

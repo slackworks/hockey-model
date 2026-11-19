@@ -8,6 +8,10 @@
 #            published is still skipped.
 #   --margin-seconds  Seconds the build needs after this run starts. A published day is replaced
 #            only when the run can finish before the first puck drop. Default: 0.
+#   --prep-started ISO
+#            Start of the daily-prepare run that holds the store group now, or empty when no
+#            run holds it. The report queues behind that run, and GitHub counts the prepare
+#            timeout from its start, so a late prepare can hold the group past the puck drop.
 #   --dry-run  Build a report that the caller does not publish. This implies --force,
 #            and the published-release check is skipped, so a published day is due again.
 #
@@ -22,6 +26,8 @@
 #   already-published   the day has a release and this run does not replace it
 #   no-games            the schedule lists no games, so nothing publishes
 #   dry-run             the report is built and not published
+#   prepare-wait        a prepare run holds the store group and can run past the puck drop, so
+#                       this run would publish after it; the run is skipped and not built
 # Exits non-zero when the schedule payload is malformed, the release lookup fails, the
 # decision step fails or prints a payload that lacks a field, or the day has no game inside
 # its window while the feed lists a game outside it.
@@ -31,6 +37,7 @@ day=""
 have_date=false
 force=false
 dry_run=false
+prep_started=""
 margin_s=0
 
 usage() {
@@ -59,6 +66,14 @@ while (($# > 0)); do
   --force)
     force=true
     shift
+    ;;
+  --prep-started)
+    if (($# < 2)); then
+      echo "report-gate: --prep-started needs an ISO instant; see --help" >&2
+      exit 2
+    fi
+    prep_started="$2"
+    shift 2
     ;;
   --dry-run)
     dry_run=true
@@ -96,6 +111,7 @@ if [[ "$force" == true ]]; then
   args+=(--force)
 fi
 args+=(--margin-seconds "$margin_s")
+args+=(--prep-started "$prep_started")
 status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
   echo "report-gate: report-due failed; its error is above" >&2
   exit 1
@@ -103,9 +119,11 @@ status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
 required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
 required+=' and (.games_outside_window | type == "number")'
+required+=' and (.prep_too_early | type == "boolean")'
+required+=' and (.prep_blocks_report | type == "boolean")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
-  echo "report-gate: report-due payload lacks due, tag, games, date, or" \
-    "games_outside_window: $status_json" >&2
+  echo "report-gate: report-due payload lacks due, tag, games, date, games_outside_window," \
+    "prep_too_early, or prep_blocks_report: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
@@ -129,6 +147,18 @@ if [[ "$outside" != "0" ]]; then
 fi
 # Optional: only the late-run warning names it.
 first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
+blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
+# A due run would queue behind that prepare and publish after the puck drop. The gate holds no
+# store lock, so it answers here: this run builds nothing, and the next trigger runs again.
+# A forced run is the operator's call, and it still queues, so it is not refused here.
+if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
+  echo "report-gate: warning: a daily-prepare run holds the hockey-model-store group, and its" \
+    "timeout reaches past the first puck drop of $day. This run would wait behind it and" \
+    "publish after the puck drop, so it builds nothing (#163)." >&2
+  jq -c --arg tag "$tag" --arg date "$day" \
+    '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}' <<<"{}"
+  exit 0
+fi
 
 # The decision is in report_gate.py. This script reads the facts: the schedule above, and the
 # release below. A dry run and a day with no games never reach the release lookup.

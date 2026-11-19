@@ -29,11 +29,10 @@ env:
 permissions:
   contents: read
 
-# The same group as daily-prepare, so only one run writes the cached store at a time.
-concurrency:
-  group: hockey-model-store
-  cancel-in-progress: false
-
+# The group that writes the cached store is on the jobs that touch it, not on the workflow.
+# The gate holds nothing, so it starts at the trigger and can see a prepare run that still
+# holds the group. A workflow-level group would hold the gate back until that run ends,
+# and the gate would then read an empty group and start a report that publishes late (#163).
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -52,6 +51,8 @@ jobs:
       - run: uv sync --locked
       - id: gate
         env:
+          # A prepare run holds the store group. This job holds nothing, so it can read the
+          # running runs; a report run cannot wait for that answer.
           GH_TOKEN: ${{ github.token }}
           DISPATCH_FORCE: ${{ inputs.force }}
           DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
@@ -63,6 +64,12 @@ jobs:
           if [[ "$DISPATCH_DRY_RUN" == "true" ]]; then
             args+=(--dry-run)
           fi
+          if ! prep_started="$(bash scripts/prep-running.sh)"; then
+            echo "::error::the prepare-run lookup failed, so this run cannot tell whether" \
+              "it would wait behind a prepare run" >&2
+            exit 1
+          fi
+          args+=(--prep-started "$prep_started")
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json
@@ -82,6 +89,12 @@ jobs:
     if: needs.gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # The same group as daily-prepare, so only one run writes the cached store at a time. The
+    # group is on this job, not on the workflow, so the gate runs at the trigger and can see
+    # a prepare that still holds the group (#163). The publish job reads no store.
+    concurrency:
+      group: hockey-model-store
+      cancel-in-progress: false
     env:
       DAY: ${{ needs.gate.outputs.day }}
     outputs:

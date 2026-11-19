@@ -134,6 +134,12 @@ def _add_report_due(parser: argparse.ArgumentParser) -> None:
         default=0,
         help="seconds the run needs after it starts; due only when it can finish before puck drop",
     )
+    parser.add_argument(
+        "--prep-started",
+        default="",
+        metavar="ISO",
+        help="start of the daily-prepare run that holds the store group; empty when none holds it",
+    )
 
 
 def _add_report_decide(parser: argparse.ArgumentParser) -> None:

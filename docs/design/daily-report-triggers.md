@@ -57,11 +57,20 @@ The fit and the backtest each take minutes or more on a full store.
 2. `daily-report.yml` runs at each trigger. When a trigger is due, it refreshes only the schedule, the goalie sources, and the injuries, then predicts and publishes.
 
 When the morning run did not finish, the report run fails and says so.
-A report run more than `PREP_WINDOW` (180 minutes, the prep job timeout) before the first puck drop skips with a notice and exits 0, because the morning run has not had its window yet (#223).
-The same missing marker inside that window still fails, because a person has to act.
+The prep window opens at the prepare cron and `PREP_WINDOW` (180 minutes, the prep job timeout) plus `PREP_QUEUE_ALLOWANCE` (60 minutes) later.
+A report run inside that window that finds no prepared marker skips with a notice and exits 0, because the morning run has not had its window yet (#223).
+The same missing marker after the window still fails, because a person has to act.
+The window closes on the clock, not from the puck drop.
+On a game day with no games the first puck drop is the end of the day, so a window measured back from it never closes, and a failed morning run would stay hidden (#163).
 It does not do the morning work itself, because that work is too long to fit before the puck drop and the report run must finish in minutes.
 The operator runs the `daily-prepare` workflow with that date, then runs the report again.
+
 Both workflows share one concurrency group, because both write the cached store.
+The group is on the `build` job of `daily-report.yml`, not on the workflow, so the gate job starts at the trigger.
+A workflow-level group holds the gate back until the prepare ends, and the gate then reads an empty group (#163).
+GitHub counts a job timeout from the job start, so a prepare that started late runs past its window and holds the group past the puck drop.
+The gate reads the start of the prepare run that holds the group, and it skips a due run that would wait, with reason `prepare-wait`.
+A forced run still queues, because the operator asked for it.
 The concurrency group allows one running run and at most one waiting run.
 A newer waiting run replaces the older one, so a replaced run never publishes.
 Whichever run survives checks the release before it builds, so correctness does not depend on the queue.

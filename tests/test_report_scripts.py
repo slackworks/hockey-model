@@ -6,7 +6,17 @@ from pathlib import Path
 
 import pytest
 from mutation_copy import require_path
-from report_script_support import DAY, LIVE, TAG, _calls, _env, _run, store_path
+from report_script_support import (
+    DAY,
+    LIVE,
+    STARTED,
+    TAG,
+    _calls,
+    _env,
+    _run,
+    due_json,
+    store_path,
+)
 
 require_path(Path(__file__).resolve().parents[1] / "scripts")
 # --- gate ---------------------------------------------------------------------
@@ -34,10 +44,12 @@ def test_gate_refuses_an_invalid_date(fakes: Path, tmp_path: Path, bad: str) -> 
 
 def test_gate_skips_a_day_that_is_already_published(fakes: Path, tmp_path: Path) -> None:
     # After the puck drop, a published day is skipped and never replaced.
-    not_due = json.dumps(
-        {"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0}
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_DUE_JSON=due_json(due=False),
+        FAKE_RELEASES=f"reports-2026-11-03\n{TAG}\n",
     )
-    env = _env(fakes, tmp_path, FAKE_DUE_JSON=not_due, FAKE_RELEASES=f"reports-2026-11-03\n{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
@@ -50,7 +62,7 @@ def test_gate_skips_a_day_that_is_already_published(fakes: Path, tmp_path: Path)
 
 
 def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
+    due = due_json()
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 0, result.stderr
@@ -64,7 +76,7 @@ def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_pat
 
 
 def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
+    due = due_json()
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY, "--force")
     assert json.loads(result.stdout)["reason"] == "already-published"
@@ -78,16 +90,10 @@ def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path:
 def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
     fakes: Path, tmp_path: Path, puck_drop_passed: bool, margin_args: list[str]
 ) -> None:
-    due = json.dumps(
-        {
-            "due": False,
-            "tag": TAG,
-            "date": DAY,
-            "games": 3,
-            "games_outside_window": 0,
-            "first_puck_drop_utc": "2026-11-05T00:00:00Z",
-            "puck_drop_passed": puck_drop_passed,
-        }
+    due = due_json(
+        due=False,
+        first_puck_drop_utc="2026-11-05T00:00:00Z",
+        puck_drop_passed=puck_drop_passed,
     )
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due)
     result = _run("report-gate.sh", env, "--date", DAY, *margin_args)
@@ -108,7 +114,7 @@ def test_gate_publishes_the_first_report_of_a_day_late_and_warns(
 def test_gate_after_the_puck_drop_skips_a_day_already_published(
     fakes: Path, tmp_path: Path
 ) -> None:
-    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
+    due = due_json(due=False)
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
     result = _run("report-gate.sh", env, "--date", DAY)
     assert json.loads(result.stdout)["reason"] == "already-published"
@@ -160,7 +166,7 @@ def test_gate_dry_run_builds_a_published_day_without_a_release_lookup(
 
 
 def test_gate_dry_run_still_skips_a_day_that_is_not_due(fakes: Path, tmp_path: Path) -> None:
-    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 0})
+    due = due_json(due=False)
     result = _run(
         "report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=due), "--date", DAY, "--dry-run"
     )
@@ -201,16 +207,14 @@ def test_gate_fails_on_a_payload_without_the_gate_fields(
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=json.dumps(bad))
     result = _run("report-gate.sh", env, "--date", DAY)
     assert result.returncode == 1
-    assert "lacks due, tag, games, date, or games_outside_window" in result.stderr
+    assert "lacks due, tag, games, date, games_outside_window" in result.stderr
 
 
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
     fakes: Path, tmp_path: Path
 ) -> None:
     """The gate and the alert must agree that a wrong-date feed is not an off day."""
-    wrong = json.dumps(
-        {"due": True, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 3}
-    )
+    wrong = due_json(games=0, games_outside_window=3)
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=wrong), "--date", DAY)
     assert result.returncode == 1
     assert result.stdout == ""
@@ -220,9 +224,7 @@ def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
 
 def test_gate_warns_about_a_partial_day_and_still_decides(fakes: Path, tmp_path: Path) -> None:
     """Rows outside the window are dropped even when some games remain, so the gate says so."""
-    partial = json.dumps(
-        {"due": True, "tag": TAG, "date": DAY, "games": 3, "games_outside_window": 2}
-    )
+    partial = due_json(games_outside_window=2)
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=partial), "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert "drops 2 feed game(s)" in result.stderr
@@ -231,9 +233,7 @@ def test_gate_warns_about_a_partial_day_and_still_decides(fakes: Path, tmp_path:
 
 def test_gate_publishes_nothing_for_an_empty_schedule(fakes: Path, tmp_path: Path) -> None:
     # An empty schedule can be a failed feed read, so it must not make a permanent release.
-    empty = json.dumps(
-        {"due": True, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 0}
-    )
+    empty = due_json(games=0)
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_DUE_JSON=empty), "--date", DAY)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
@@ -251,6 +251,50 @@ def test_gate_names_a_failed_report_due_call(fakes: Path, tmp_path: Path) -> Non
     result = _run("report-gate.sh", _env(fakes, tmp_path, FAKE_UV_FAIL="1"), "--date", DAY)
     assert result.returncode == 1
     assert "report-due failed" in result.stderr
+
+
+def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The wait is not inside the prepare timeout, so the run can start after the puck drop."""
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["due"] is False
+    assert payload["reason"] == "prepare-wait"
+    assert "holds the hockey-model-store group" in result.stderr
+    assert "after the puck drop" in result.stderr
+    # The gate must not read the release, because the run builds nothing.
+    assert not any(line.startswith("gh ") for line in _calls(tmp_path))
+
+
+def test_gate_passes_the_prepare_start_to_report_due(fakes: Path, tmp_path: Path) -> None:
+    env = _env(fakes, tmp_path)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    assert result.returncode == 0, result.stderr
+    assert f"--prep-started {STARTED}" in _calls(tmp_path)[0]
+
+
+def test_gate_refuses_a_prepare_start_with_no_value(fakes: Path, tmp_path: Path) -> None:
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", DAY, "--prep-started")
+    assert result.returncode == 2
+    assert "--prep-started needs an ISO instant" in result.stderr
+
+
+def test_gate_decides_when_no_prepare_run_holds_the_group(fakes: Path, tmp_path: Path) -> None:
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=False))
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["due"] is True
+
+
+def test_gate_does_not_skip_a_forced_run_that_would_wait(fakes: Path, tmp_path: Path) -> None:
+    # A forced run is the operator's call. It still queues, and the gate says so, but it runs.
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
+    result = _run("report-gate.sh", env, "--date", DAY, "--force", "--prep-started", STARTED)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["due"] is True
 
 
 def test_gate_rejects_an_unknown_argument(fakes: Path, tmp_path: Path) -> None:
