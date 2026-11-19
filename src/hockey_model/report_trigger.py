@@ -83,14 +83,23 @@ def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | No
     return now + needed < first_start
 
 
-def prep_blocks_report(prep_started: datetime, first_start: datetime) -> bool:
+def prep_blocks_report(
+    prep_started: datetime, first_start: datetime, margin: timedelta | None = None
+) -> bool:
     """Return True when a running prepare can hold the store group past the first puck drop.
 
     The report and the prepare share one concurrency group, so the report waits for the
     prepare to end. GitHub counts a job timeout from the job start, so a prepare that
     started late runs past its window (#163). A prepare that started on time ends inside
     its window, and the report can wait for it.
+
+    ``margin`` is the time the report needs after it starts, such as the report budget. The
+    report starts only when the prepare ends, so the two times add. The boundary is the same
+    as in ``puck_drop_ahead``: a report that finishes at the puck drop is not ahead of it.
     """
     require_utc(prep_started, "prepare run start")
     require_utc(first_start, "first puck drop")
-    return prep_started + PREP_WINDOW > first_start
+    needed = timedelta(0) if margin is None else margin
+    if needed < timedelta(0):
+        raise HockeyModelError(f"report margin must not be negative, got {needed}")
+    return prep_started + PREP_WINDOW + needed >= first_start

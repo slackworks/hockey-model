@@ -54,14 +54,17 @@ fi
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Print the earliest start of a daily-prepare run in one list, or "" when the list holds
-# none. jq must not run with -e: an empty answer is an answer. A list that jq cannot read
-# prints a diagnostic and fails, so the caller never reads a bad payload as no prepare.
+# none. The run object names its start `run_started_at`; `started_at` is a different field
+# on a job, and it is null on a run. A queued run has not started, so it takes $now, which
+# is the earliest instant that it can start. jq must not run with -e: an empty answer is an
+# answer. A list that jq cannot read prints a diagnostic and fails, so the caller never
+# reads a bad payload as no prepare.
 earliest_prepare() {
   local json="$1" answer
   if ! answer="$(jq -r --arg now "$now" '
     [.workflow_runs[]
       | select(.path | endswith("/daily-prepare.yml"))
-      | (.started_at // $now)] | min // ""
+      | (.run_started_at // $now)] | min // ""
   ' <<<"$json" 2>&1)"; then
     echo "prep-running: cannot read the workflow run list: $answer" >&2
     return 1

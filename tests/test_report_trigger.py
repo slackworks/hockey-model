@@ -208,12 +208,35 @@ def test_prep_too_early_is_true_only_before_the_window_closes(
 @given(
     prep=st.datetimes(timezones=st.just(UTC)),
     gap=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=12)),
+    margin=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=6)),
 )
 def test_a_prepare_blocks_a_report_only_when_its_window_reaches_the_puck_drop(
-    prep: datetime, gap: timedelta
+    prep: datetime, gap: timedelta, margin: timedelta
 ) -> None:
     first = prep + gap
-    assert prep_blocks_report(prep, first) is (prep + PREP_WINDOW > first)
+    assert prep_blocks_report(prep, first, margin) is (prep + PREP_WINDOW + margin >= first)
+
+
+def test_the_report_margin_extends_the_hold_that_a_prepare_has() -> None:
+    # The prepare ends at 21:24, and the report then needs its own 10 minutes, so a puck drop
+    # at 21:30 is still lost. Without the margin the same puck drop looks safe.
+    prep = at("2026-11-18T18:24")
+    ten = timedelta(minutes=10)
+    assert prep_blocks_report(prep, at("2026-11-18T21:30")) is False
+    assert prep_blocks_report(prep, at("2026-11-18T21:30"), ten) is True
+    assert prep_blocks_report(prep, at("2026-11-18T21:34:01"), ten) is False
+
+
+def test_a_prepare_blocks_a_report_that_would_finish_at_the_puck_drop() -> None:
+    """A report that ends at the puck drop cannot replace a published one, so it is held."""
+    prep = at("2026-11-18T08:00")
+    assert prep_blocks_report(prep, at("2026-11-18T11:00")) is True
+    assert prep_blocks_report(prep, at("2026-11-18T11:00:01")) is False
+
+
+def test_prep_blocks_report_rejects_a_negative_margin() -> None:
+    with pytest.raises(HockeyModelError, match="must not be negative"):
+        prep_blocks_report(at("2026-11-18T08:00"), at("2026-11-18T19:00"), timedelta(-1))
 
 
 def test_a_prepare_that_started_on_time_does_not_block_the_report() -> None:

@@ -8,10 +8,10 @@
 # Reads the store path from HOCKEY_MODEL_DB. The morning run of daily-prepare.sh does the
 # slow work. When its prepared-DATE marker is missing, this script stops with exit code 1
 # and writes no report, because the slow work does not fit in the report budget. The one
-# exception is a day whose first puck drop is more than the prep window away: then the script
-# skips with exit code 0, because the morning run has not had its window yet. Run the
-# daily-prepare workflow for the day, then run this script again. Any failed step stops
-# the script with its exit code, so a failed run writes no report.
+# exception is a prep window that is still open: then the script skips with exit code 0,
+# because the morning run has not had its full window yet. Run the daily-prepare workflow for
+# the day, then run this script again. Any failed step stops the script with its exit code,
+# so a failed run writes no report.
 #
 # Reads REPORT_BUDGET_S, a whole number of seconds. The default is set in the budget line below.
 # Each step logs its seconds to stderr. The clock has one-second resolution, so a run can pass
@@ -82,8 +82,8 @@ mkdir -p "$out_dir"
 # A marker from an earlier run in this directory must not stand for this run.
 rm -f "$out_dir/complete"
 if [[ ! -f "$store_dir/prepared-$day" ]]; then
-  # The prep job runs each morning. A run hours before the first puck drop finds no marker yet,
-  # so that run skips. Inside the prep window the same missing marker still fails below.
+  # The prep job runs each morning. A run inside the prep window finds no marker yet, so that
+  # run skips. After the window closes on the clock the same missing marker still fails below.
   due_json="$(uv run hockey-model report-due --date "$day")" || {
     echo "daily-report: report-due failed while checking the prep window; its error is above" >&2
     exit 1
@@ -105,7 +105,7 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
     exit 1
   fi
   if [[ "$(jq -r '.prep_too_early' <<<"$due_json")" == "true" ]]; then
-    notice="daily-report: no preparation for $day yet, and the first puck drop is more than the prep window away. This run skips."
+    notice="daily-report: no preparation for $day yet, and the prep window is still open. This run skips."
     echo "::notice::$notice" >&2
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       echo "$notice" >>"$GITHUB_STEP_SUMMARY"

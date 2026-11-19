@@ -191,3 +191,15 @@ def test_report_due_says_an_on_time_prepare_blocks_nothing(
     args = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T08:00:00Z"]
     assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False
+
+
+def test_report_due_counts_the_report_budget_after_the_prepare(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A prepare that ends a minute before the puck drop leaves no time for the report."""
+    _slate(monkeypatch)
+    base = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T20:58:00Z"]
+    assert main(base) == 0
+    assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False
+    assert main([*base, "--margin-seconds", "600"]) == 0
+    assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is True

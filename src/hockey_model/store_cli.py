@@ -275,7 +275,8 @@ def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
     """Return True when a prepare run that holds the store group now outlives the puck drop."""
     if not args.prep_started:
         return False
-    return prep_blocks_report(parse_iso_utc(args.prep_started), first)
+    margin = timedelta(seconds=args.margin_seconds)
+    return prep_blocks_report(parse_iso_utc(args.prep_started), first, margin)
 
 
 def _report_due(args: argparse.Namespace) -> tuple[object, int]:

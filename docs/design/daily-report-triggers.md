@@ -58,10 +58,12 @@ The fit and the backtest each take minutes or more on a full store.
 
 When the morning run did not finish, the report run fails and says so.
 The prep window opens at the prepare cron and `PREP_WINDOW` (180 minutes, the prep job timeout) plus `PREP_QUEUE_ALLOWANCE` (60 minutes) later.
-A report run inside that window that finds no prepared marker skips with a notice and exits 0, because the morning run has not had its window yet (#223).
+A report run that finds no prepared marker skips with a notice and exits 0 while the window is open, because the morning run has not had its window yet (#223).
 The same missing marker after the window still fails, because a person has to act.
 The window closes on the clock, not from the puck drop.
 On a game day with no games the first puck drop is the end of the day, so a window measured back from it never closes, and a failed morning run would stay hidden (#163).
+A skip also needs the first puck drop to be more than `PREP_WINDOW` away, because a prep that could still run its full window before the puck drop is not late (#223).
+Both facts must hold, so the skip is narrower than either one alone.
 It does not do the morning work itself, because that work is too long to fit before the puck drop and the report run must finish in minutes.
 The operator runs the `daily-prepare` workflow with that date, then runs the report again.
 
@@ -70,6 +72,7 @@ The group is on the `build` job of `daily-report.yml`, not on the workflow, so t
 A workflow-level group holds the gate back until the prepare ends, and the gate then reads an empty group (#163).
 GitHub counts a job timeout from the job start, so a prepare that started late runs past its window and holds the group past the puck drop.
 The gate reads the start of the prepare run that holds the group, and it skips a due run that would wait, with reason `prepare-wait`.
+The wait ends when the prepare ends, so the report's own budget starts then and adds to the prepare's timeout.
 A forced run still queues, because the operator asked for it.
 The concurrency group allows one running run and at most one waiting run.
 A newer waiting run replaces the older one, so a replaced run never publishes.

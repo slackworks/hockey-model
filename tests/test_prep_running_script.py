@@ -12,9 +12,15 @@ _REPORT = ".github/workflows/daily-report.yml"
 
 
 def _runs(*runs: tuple[str, str | None]) -> str:
-    """Return a workflow run list payload for the given workflow paths and start times."""
+    """Return a workflow run list payload for the given workflow paths and start times.
+
+    The run object names its start ``run_started_at``, and it holds no ``started_at``. The
+    payload copies the API here, so a script that reads the wrong field fails these tests.
+    """
     rows = [
-        {"path": path} if started is None else {"path": path, "started_at": started}
+        {"path": path, "started_at": None}
+        if started is None
+        else {"path": path, "started_at": None, "run_started_at": started}
         for path, started in runs
     ]
     return json.dumps({"workflow_runs": rows})
@@ -104,3 +110,20 @@ def test_the_report_workflow_passes_the_prepare_start(workflow: str) -> None:
     assert "--prep-started" in text
     # The check must run before the gate decides, so the flag reaches report-gate.sh.
     assert text.index("prep-running.sh") < text.index("report-gate.sh")
+
+
+def test_the_store_group_is_on_the_build_job_not_the_workflow() -> None:
+    """A workflow-level group holds the gate back, and the gate then reads an empty group.
+
+    The gate only sees a live prepare when it starts at the trigger. The group must stay on
+    the build job, which is the only job that writes the store (#163).
+    """
+    from mutation_copy import require_path
+
+    root = Path(__file__).resolve().parents[1]
+    lines = require_path(root / _REPORT).read_text(encoding="utf-8").splitlines()
+    # A top-level key starts at column 0, and a key of the build job has four spaces.
+    assert [line for line in lines if line.startswith("concurrency:")] == []
+    build = lines[lines.index("  build:") + 1 :]
+    assert "    concurrency:" in build
+    assert build.index("    concurrency:") < build.index("    steps:")
