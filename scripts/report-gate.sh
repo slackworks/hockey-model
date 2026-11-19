@@ -2,7 +2,7 @@
 # Decide whether this scheduled trigger publishes the daily report.
 #
 # Usage: report-gate.sh [--date YYYY-MM-DD] [--force] [--dry-run]
-#                       [--margin-seconds N] [--help]
+#                       [--margin-seconds N] [--prep-started ISO] [--help]
 #   --date   Eastern game day to check. Default: the game day that holds now.
 #   --force  Publish even outside the trigger slot. A day that is already
 #            published is still skipped.
