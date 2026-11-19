@@ -258,6 +258,20 @@ def test_a_wrong_schema_version_raises(store_path: Path) -> None:
         open_store(store_path, fit=FitRef(label="live"))
 
 
+def test_a_stamp_ahead_of_the_table_shape_raises(store_path: Path) -> None:
+    """The consumer must probe the shape, so a stamp that outruns it names the upgrade."""
+    conn = sqlite3.connect(store_path)
+    conn.execute("DROP TABLE model_fits")
+    conn.execute(
+        "CREATE TABLE model_fits (fit_id INTEGER PRIMARY KEY, fit_through_season INTEGER,"
+        " features TEXT, weights TEXT, created_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(StoreVersionError, match=r"model_fits lacks created_at.*upgrade"):
+        open_store(store_path, fit=FitRef(label="live"))
+
+
 def test_a_missing_view_raises(store_path: Path) -> None:
     conn = sqlite3.connect(store_path)
     conn.execute("DROP VIEW latest_mp_goalie_games")
