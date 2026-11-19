@@ -525,16 +525,7 @@ def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
         fakes,
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
-        FAKE_DUE_JSON=json.dumps(
-            {
-                "due": True,
-                "tag": TAG,
-                "date": DAY,
-                "games": 3,
-                "games_outside_window": 0,
-                "prep_too_early": True,
-            }
-        ),
+        FAKE_DUE_JSON=due_json(prep_too_early=True),
     )
     out = tmp_path / "out"
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
@@ -728,16 +719,7 @@ def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_p
         fakes,
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
-        FAKE_DUE_JSON=json.dumps(
-            {
-                "due": True,
-                "tag": TAG,
-                "date": DAY,
-                "games": 3,
-                "games_outside_window": 0,
-                "prep_too_early": "true",
-            }
-        ),
+        FAKE_DUE_JSON=due_json(prep_too_early="true"),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 1
@@ -760,16 +742,7 @@ def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_pat
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         GITHUB_STEP_SUMMARY=str(summary),
-        FAKE_DUE_JSON=json.dumps(
-            {
-                "due": True,
-                "tag": TAG,
-                "date": DAY,
-                "games": 3,
-                "games_outside_window": 0,
-                "prep_too_early": True,
-            }
-        ),
+        FAKE_DUE_JSON=due_json(prep_too_early=True),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 0, result.stderr
