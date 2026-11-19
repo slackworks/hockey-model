@@ -90,6 +90,23 @@ def test_connect_rejects_other_version(tmp_path: Path) -> None:
         connect(path)
 
 
+def test_connect_rejects_a_stamp_ahead_of_the_table_shape(tmp_path: Path) -> None:
+    """A stamp is written by the code and the shape by the tables, so connect probes both."""
+    path = tmp_path / "hm.sqlite"
+    setup = connect(path)
+    setup.execute("DROP TABLE model_fits")
+    setup.execute(
+        "CREATE TABLE model_fits (fit_id INTEGER PRIMARY KEY, fit_through_season INTEGER,"
+        " features TEXT, weights TEXT, created_at TEXT)"
+    )
+    setup.commit()
+    setup.close()
+
+    with pytest.raises(StoreError, match=r"model_fits lacks created_at") as info:
+        connect(path)
+    assert "store upgrade" in str(info.value)
+
+
 def test_db_path_from_env_strips_padding_and_expands_home() -> None:
     assert db_path_from_env({DB_ENV: "  ~/hm.sqlite "}) == Path.home() / "hm.sqlite"
 

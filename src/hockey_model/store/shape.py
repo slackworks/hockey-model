@@ -50,10 +50,13 @@ def earned_version(conn: sqlite3.Connection) -> tuple[int, Requirement | None]:
 
     The second value is the column that names the gap, or None when the tables hold every
     requirement. The caller uses it to tell the operator what the store is missing.
+
+    A version can add more than one column. When a later requirement of that version fails,
+    the tables earn the version before it, not the version it names.
     """
     earned = _OLDEST_SHAPE
     for requirement in REQUIREMENTS:
         if not holds(conn, requirement):
-            return earned, requirement
+            return min(earned, requirement.version - 1), requirement
         earned = requirement.version
     return earned, None

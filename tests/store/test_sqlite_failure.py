@@ -1,12 +1,12 @@
 """Tests for the cause that the CLI names for a SQLite error the store layer did not catch."""
 
+import errno
 import sqlite3
-from pathlib import Path
 
 import pytest
 
 from hockey_model import cli
-from hockey_model.store.db import sqlite_failure_fix
+from hockey_model.store.db import os_error_fix, sqlite_failure_fix
 
 
 def _sqlite_error(name: str, text: str) -> sqlite3.OperationalError:
@@ -35,17 +35,28 @@ def test_each_sqlite_cause_names_its_own_fix(name: str, text: str, expected: str
     assert ("permissions" in message) == (name == "SQLITE_READONLY")
 
 
-def test_the_fallback_names_the_error_and_the_store_without_a_guess() -> None:
+def test_the_fallback_names_the_error_without_a_guess() -> None:
     """An unknown cause must not read as a guess about the path or the permissions."""
-    message = sqlite_failure_fix(_sqlite_error("SQLITE_IOERR", "disk I/O error"), None)
+    message = sqlite_failure_fix(_sqlite_error("SQLITE_IOERR", "disk I/O error"))
     assert "disk I/O error" in message
     assert "no known cause fits this error" in message
+    assert "permissions" not in message
 
 
-def test_a_given_path_is_named_in_the_message() -> None:
-    """The operator needs the store path in the line, so it is a parameter, not a guess."""
-    message = sqlite_failure_fix(_sqlite_error("SQLITE_BUSY", "locked"), Path("/tmp/s.db"))
-    assert "/tmp/s.db" in message
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (OSError(errno.ENOSPC, "No space left on device"), "disk that holds the file is full"),
+        (OSError(errno.EACCES, "Permission denied"), "refuses access"),
+        (OSError(errno.ENOENT, "No such file or directory"), "no file at that path"),
+        (OSError(errno.EIO, "Input/output error"), "no known cause fits this error"),
+    ],
+)
+def test_an_oserror_names_its_own_cause(exc: OSError, expected: str) -> None:
+    """A full disk, a closed door, and a missing path need three different fixes."""
+    message = os_error_fix(exc)
+    assert expected in message
+    assert ("permissions" in message) == (exc.errno == errno.EACCES)
 
 
 @pytest.mark.parametrize(
@@ -53,7 +64,7 @@ def test_a_given_path_is_named_in_the_message() -> None:
     [
         (_sqlite_error("SQLITE_ERROR", "no such column: attempts_known"), "store upgrade"),
         (_sqlite_error("SQLITE_BUSY", "database is locked"), "another process holds the store"),
-        (PermissionError("cannot open the store"), "check the file path and permissions"),
+        (PermissionError(errno.EACCES, "cannot open the store"), "refuses access"),
     ],
 )
 def test_the_cli_prints_the_cause_and_exits_two(

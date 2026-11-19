@@ -689,8 +689,8 @@ def test_cli_backtest_games_out_to_a_bad_path_names_the_error(
     target = tmp_path / "missing-dir" / "games.csv"
     assert cli.main(["backtest", "--games-out", str(target)]) == 2
     err = capsys.readouterr().err
-    assert "FileNotFoundError" in err
-    assert "check the file path" in err
+    assert "no file at that path" in err
+    assert "missing-dir" in err
 
 
 def test_an_unexpected_store_failure_names_its_type_and_message(

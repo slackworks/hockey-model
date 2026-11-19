@@ -13,7 +13,7 @@ from hockey_model.identity import Catalog
 from hockey_model.matchup import matchup, playoff_probability
 from hockey_model.models import JointModel, MatchupModel, StandingsModel, StatModel
 from hockey_model.projections import project_player, project_team
-from hockey_model.store.db import sqlite_failure_fix
+from hockey_model.store.db import os_error_fix, sqlite_failure_fix
 from hockey_model.store_cli import STORE_COMMANDS, run_store_command
 from hockey_model.store_cli_parsers import add_store_commands
 from hockey_model.types import (
@@ -225,10 +225,7 @@ def main(argv: Sequence[str] | None = None, runtime: CliRuntime | None = None) -
         print(f"error: {sqlite_failure_fix(exc)}", file=sys.stderr)
         return 2
     except OSError as exc:
-        print(
-            f"error: {type(exc).__name__}: {exc}; check the file path and permissions",
-            file=sys.stderr,
-        )
+        print(f"error: {os_error_fix(exc)}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001  # the last guard turns any bug into exit 2
         print(f"error: unexpected failure: {type(exc).__name__}: {exc}", file=sys.stderr)
