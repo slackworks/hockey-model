@@ -38,6 +38,9 @@ The notes say so, and they name the commit and time of each build.
 After the puck drop, every run skips a day that has a release.
 The release target stays the commit of the first build, so the commit of a replacing build appears only in the notes and in the JSON copy.
 A game day with no games publishes nothing, so a failed schedule read cannot leave a wrong release.
+The gate reads `games_outside_window` as well as `games`.
+A day with no game inside its window and a non-zero outside count fails, because the feed probably lists the day under the wrong date.
+A day with some games inside and some outside warns and still decides, because a dropped row publishes a partial day.
 
 This replaces the earlier rule, which published only at the last trigger before the puck drop.
 That rule missed the puck drop whenever the last run started late (#159).

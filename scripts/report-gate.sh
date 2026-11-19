@@ -22,8 +22,9 @@
 #   already-published   the day has a release and this run does not replace it
 #   no-games            the schedule lists no games, so nothing publishes
 #   dry-run             the report is built and not published
-# Exits non-zero when the schedule payload is malformed, the release lookup fails, or the
-# decision step fails or prints a payload that lacks a field.
+# Exits non-zero when the schedule payload is malformed, the release lookup fails, the
+# decision step fails or prints a payload that lacks a field, or the day has no game inside
+# its window while the feed lists a game outside it.
 set -euo pipefail
 
 day=""

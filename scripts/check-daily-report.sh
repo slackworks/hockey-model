@@ -6,7 +6,8 @@
 #
 # Exits 0 when the day needs no alert: it has no games, or its report has a pre-start row.
 # Exits 1 when the day has games and no release, or when every game row of its report was
-# made after the start. The alert is one ::error:: line on stderr.
+# made after the start, or when the day has no game inside its window and the feed lists a
+# game outside it. The alert is one ::error:: line on stderr.
 # Exits 2 on bad arguments. Exits 1 when a GitHub or report-due call fails.
 set -euo pipefail
 
