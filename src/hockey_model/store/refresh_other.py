@@ -1,5 +1,6 @@
 """The MoneyPuck, ESPN, and Daily Faceoff steps of a refresh."""
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
 from hockey_model.game_day import game_day_of
@@ -158,54 +159,56 @@ def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stam
     return result.written
 
 
+def _attempt_live(run: RefreshRun, source: str, url: str, unit: Callable[[datetime], int]) -> None:
+    """Read a live feed, and hide a failure that repeats a known gap.
+
+    A live feed is one URL with no dated alternative, so a blocked host would stop every run
+    (#276). The read still happens while the URL is a gap, because the skip records no read and
+    the gap would never clear on its own. One good read heals it with nobody involved. A failure
+    on a URL that is not yet a gap still counts, so one outage still fails the run. Each run
+    costs one request to a host that refuses us.
+
+    ``stale_sources`` still names the feed, because it counts a failed single feed at any age.
+    """
+    was_gap = url in run.skipped(source)
+    if run.attempt(source, url, unit) or not was_gap:
+        return
+    # ``attempt`` appends exactly one error on a failure and leaves ``run`` untouched after that,
+    # so the last error is the one of this read.
+    run.errors.pop()
+    run.notes.append(f"{source}: still failing after repeated failed reads; not an error")
+
+
 # The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
 # and the live goalie reads must run even when a backfill spent its time (#136).
-def _skip_gap(run: RefreshRun, source: str, url: str) -> bool:
-    """Return True when the URL is a known gap, and note the skip.
-
-    A live feed is one URL with no dated alternative, so a blocked host has no other way to
-    become a gap, and every later run would fail (#276). ``stale_sources`` still reports the
-    URL as stale, because it counts a failed single feed at any age.
-    """
-    if url not in run.skipped(source):
-        return False
-    run.notes.append(f"{source}: skipped after repeated failed reads; retry with --retry-skipped")
-    return True
-
-
 def espn_starters(run: RefreshRun) -> None:
     """Read the ESPN probable goalies for today and tomorrow, as game days in Eastern time."""
     today = game_day_of(run.now)
     days: list[date] = [today, today + timedelta(days=1)]
     # The record keeps this URL with no query, so both days share one gap key.
     url = f"{ESPN_BASE}/scoreboard"
-    if _skip_gap(run, ESPN_STARTERS, url):
-        return
 
     def unit(stamp: datetime) -> int:
         reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
-    run.attempt(ESPN_STARTERS, url, unit)
+    _attempt_live(run, ESPN_STARTERS, url, unit)
 
 
 def espn_injuries(run: RefreshRun) -> None:
     """Read the current ESPN injury list."""
-    url = f"{ESPN_BASE}/injuries"
-    if _skip_gap(run, ESPN_INJURIES, url):
-        return
-    run.attempt(
+    _attempt_live(
+        run,
         ESPN_INJURIES,
-        url,
+        f"{ESPN_BASE}/injuries",
         lambda stamp: write_injury_reads(run.conn, fetch_injuries(run.client), stamp),
     )
 
 
 def daily_faceoff(run: RefreshRun) -> None:
     """Read the Daily Faceoff starting goalies."""
-    if _skip_gap(run, DAILY_FACEOFF, STARTERS_URL):
-        return
-    run.attempt(
+    _attempt_live(
+        run,
         DAILY_FACEOFF,
         STARTERS_URL,
         lambda stamp: _write_starters(run, DAILY_FACEOFF, fetch_starters(run.client), stamp),
