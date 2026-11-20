@@ -77,6 +77,7 @@ A forced run still queues, because the operator asked for it.
 The concurrency group allows one running run and at most one waiting run.
 A newer waiting run replaces the older one, so a replaced run never publishes.
 Whichever run survives checks the release before it builds, so correctness does not depend on the queue.
+The replacement cannot take a prepare slot, because the last report trigger is 00:44 UTC and the `build` job ends within its 360 minutes, which is 76 minutes before the prepare starts.
 
 ## Job overheads
 
