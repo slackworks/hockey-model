@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
+from mutation_copy import require_path
 from report_script_support import _calls, _env, _run
 
 DAY = "2026-11-04"
@@ -164,8 +165,6 @@ def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
 @pytest.mark.parametrize("workflow", ["daily-report.yml"])
 def test_the_report_workflow_passes_the_prepare_start(workflow: str) -> None:
     """The workflow is the only caller: it holds no lock, so it can read the running runs."""
-    from mutation_copy import require_path
-
     root = Path(__file__).resolve().parents[1]
     text = require_path(root / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
     assert "bash scripts/prep-running.sh" in text
@@ -180,8 +179,6 @@ def test_the_store_group_is_on_the_build_job_not_the_workflow() -> None:
     The gate only sees a live prepare when it starts at the trigger. The group must stay on
     the build job, which is the only job that writes the store (#163).
     """
-    from mutation_copy import require_path
-
     root = Path(__file__).resolve().parents[1]
     lines = require_path(root / _REPORT).read_text(encoding="utf-8").splitlines()
     # A top-level key starts at column 0, and a key of the build job has four spaces.

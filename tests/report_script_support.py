@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from mutation_copy import require_path
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 LIVE = ["xg_form", "rest"]
 DAY = "2026-11-04"
@@ -62,8 +64,12 @@ def _calls(tmp_path: Path) -> list[str]:
 
 
 def _run(script: str, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    # The guard sits at the read, because a caller names a bare file name and never the
+    # scripts path, and a mutation copy holds no scripts directory (#155). A skip here skips
+    # tests that cannot run; it never lets one pass.
+    path = require_path(SCRIPTS / script)
     return subprocess.run(
-        ["bash", str(SCRIPTS / script), *args],
+        ["bash", str(path), *args],
         env=env,
         capture_output=True,
         text=True,
