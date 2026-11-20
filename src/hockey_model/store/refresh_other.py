@@ -160,29 +160,50 @@ def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stam
 
 # The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
 # and the live goalie reads must run even when a backfill spent its time (#136).
+def _skip_gap(run: RefreshRun, source: str, url: str) -> bool:
+    """Return True when the URL is a known gap, and note the skip.
+
+    A live feed is one URL with no dated alternative, so a blocked host has no other way to
+    become a gap, and every later run would fail (#276). ``stale_sources`` still reports the
+    URL as stale, because it counts a failed single feed at any age.
+    """
+    if url not in run.skipped(source):
+        return False
+    run.notes.append(f"{source}: skipped after repeated failed reads; retry with --retry-skipped")
+    return True
+
+
 def espn_starters(run: RefreshRun) -> None:
     """Read the ESPN probable goalies for today and tomorrow, as game days in Eastern time."""
     today = game_day_of(run.now)
     days: list[date] = [today, today + timedelta(days=1)]
+    url = f"{ESPN_BASE}/scoreboard"
+    if _skip_gap(run, ESPN_STARTERS, url):
+        return
 
     def unit(stamp: datetime) -> int:
         reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
-    run.attempt(ESPN_STARTERS, f"{ESPN_BASE}/scoreboard", unit)
+    run.attempt(ESPN_STARTERS, url, unit)
 
 
 def espn_injuries(run: RefreshRun) -> None:
     """Read the current ESPN injury list."""
+    url = f"{ESPN_BASE}/injuries"
+    if _skip_gap(run, ESPN_INJURIES, url):
+        return
     run.attempt(
         ESPN_INJURIES,
-        f"{ESPN_BASE}/injuries",
+        url,
         lambda stamp: write_injury_reads(run.conn, fetch_injuries(run.client), stamp),
     )
 
 
 def daily_faceoff(run: RefreshRun) -> None:
     """Read the Daily Faceoff starting goalies."""
+    if _skip_gap(run, DAILY_FACEOFF, STARTERS_URL):
+        return
     run.attempt(
         DAILY_FACEOFF,
         STARTERS_URL,

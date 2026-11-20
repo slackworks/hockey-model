@@ -104,6 +104,9 @@ It stays abandoned, even when it had a good read before the failures.
 
 1. `refresh` exits 1 when any source recorded an error.
    This includes MoneyPuck, ESPN, and Daily Faceoff, which run after the NHL steps (`store/refresh.py`, `_STEPS`).
+   A unit that the abandon rule leaves as a known gap records no error, so it does not set that exit code.
+   MoneyPuck skips each file that is a gap.
+   The three live feeds skip their one URL when it is a gap (#276), because a live feed has no dated alternative to fall back on.
 2. `daily-prepare.sh` exits with that code before it reads `backfill_complete`.
    So a stop after `MAX_UNIT_FAILURES` failures exits 1, not 75.
 3. With exit 0 from refresh, the script writes the marker when `backfill_complete` is true, and exits 75 when it is false.
