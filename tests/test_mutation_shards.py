@@ -28,8 +28,11 @@ shards = _load_shards()
 
 
 def test_shard_patterns_return_one_glob_per_module() -> None:
-    assert shards.shard_patterns(0) == ("hockey_model.sources.http.*",)
-    assert "hockey_model.sources.errors.*" in shards.shard_patterns(1)
+    # The table itself is checked by the partition tests below. This pins the shape of one
+    # pattern, so a shard that names a module still prints a mutant glob for it.
+    for index, modules in enumerate(shards.SHARDS):
+        expected = tuple(f"{shards.MUTANT_PREFIX}{module}.*" for module in modules)
+        assert shards.shard_patterns(index) == expected
 
 
 @pytest.mark.parametrize("index", [-1, len(shards.SHARDS)])
@@ -163,6 +166,28 @@ def test_missing_results_lists_a_module_with_no_merged_file(tmp_path: Path) -> N
     missing = shards.missing_results(tmp_path)
     assert "sources.nhl" not in missing
     assert "backtest.metrics" in missing
+
+
+def test_unrun_by_shard_names_the_shard_that_left_mutants_unrun(tmp_path: Path) -> None:
+    # A shard killed by its step timeout still uploads its .meta files, with a null for each
+    # mutant it never reached. The merge must name that shard, not only the missing modules.
+    _write_meta(
+        tmp_path / "src/hockey_model/sources/nhl.py.meta",
+        {"nhl.x__1": 0, "nhl.x__2": None, "nhl.x__3": None},
+    )
+    unrun = shards.unrun_by_shard(tmp_path)
+    owner = next(index for index, modules in enumerate(shards.SHARDS) if "sources.nhl" in modules)
+    assert unrun == {owner: ["sources.nhl"]}
+
+
+def test_unrun_by_shard_reports_nothing_when_every_mutant_has_a_result(tmp_path: Path) -> None:
+    _write_meta(tmp_path / "src/hockey_model/sources/nhl.py.meta", {"nhl.x__1": 0})
+    assert shards.unrun_by_shard(tmp_path) == {}
+
+
+def test_unrun_by_shard_reports_nothing_for_a_module_with_no_file(tmp_path: Path) -> None:
+    # A module with no .meta file at all is missing_results' business, not this one's.
+    assert shards.unrun_by_shard(tmp_path) == {}
 
 
 def test_merge_command_fails_when_no_shard_directory_exists(tmp_path: Path) -> None:
