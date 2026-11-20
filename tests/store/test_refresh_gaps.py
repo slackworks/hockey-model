@@ -31,7 +31,7 @@ from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import read_boxscores
 from hockey_model.store.refresh_other import _stop_for_time
-from hockey_model.store.source_reads import abandoned_urls, record_read
+from hockey_model.store.source_reads import abandoned_urls, last_ok_read, record_read
 
 GAME = 2025020697
 BAD_BOX = f"{BOX_URL}{GAME}/boxscore"
@@ -336,57 +336,72 @@ def _asked(client: FakeClient, url: str) -> bool:
     return any(request == url or request.startswith(f"{url}?") for request in client.urls)
 
 
-@pytest.mark.parametrize(
-    ("source", "url"),
-    [
-        ("daily_faceoff", STARTERS_URL),
-        ("espn_injuries", f"{ESPN}/injuries"),
-        ("espn_starters", f"{ESPN}/scoreboard"),
-    ],
-)
-def test_an_abandoned_live_feed_is_skipped_instead_of_failing_the_run(
-    conn: sqlite3.Connection, source: str, url: str
-) -> None:
-    """A blocked IP address must not stop every later run.
+def _live_feed(source: str) -> tuple[str, str]:
+    """Return the gap key and the request URL of the live feed that ``source`` reads.
 
-    A live feed is one URL with no dated alternative, so a permanent block has no other way to
-    become a known gap. Without the skip, refresh exits 1 on every run and the daily pipeline
-    stops until a person clears it (#276).
+    ``espn_starters`` reads one URL per day, and the record keeps the key with no query, so the
+    request URL and the gap key are different strings.
     """
-    _abandon_a_live_feed(conn, source, url)
-    client = FakeClient()
-    report = refresh_starters(conn, client, now=NOW)
-    assert not _asked(client, url), client.urls
-    assert report.errors == ()
-    assert any(source in note and "skipped" in note for note in report.notes)
+    return {
+        "daily_faceoff": (STARTERS_URL, STARTERS_URL),
+        "espn_injuries": (f"{ESPN}/injuries", f"{ESPN}/injuries"),
+        "espn_starters": (f"{ESPN}/scoreboard", f"{ESPN}/scoreboard?dates=20260110"),
+    }[source]
 
 
 @pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
-def test_retry_skipped_reads_an_abandoned_live_feed_again(
+def test_an_abandoned_live_feed_still_fails_quietly_instead_of_stopping_the_run(
     conn: sqlite3.Connection, source: str
 ) -> None:
-    url = {
-        "daily_faceoff": STARTERS_URL,
-        "espn_injuries": f"{ESPN}/injuries",
-        "espn_starters": f"{ESPN}/scoreboard",
-    }[source]
-    _abandon_a_live_feed(conn, source, url)
-    client = FakeClient()
-    refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=True)
-    assert _asked(client, url), client.urls
+    """A blocked IP address must not stop every later run.
 
-
-def test_retry_skipped_reads_an_abandoned_live_feed_on_the_starters_path(
-    conn: sqlite3.Connection,
-) -> None:
-    """The note tells the operator to use this flag, and the report path is `--starters-only`.
-
-    A flag that the report path ignores makes that advice a no-op on the run that shows the gap.
+    The read still happens, because a skip records no read and the gap would then never clear.
+    The failure is hidden only because the URL is already a gap (#276).
     """
+    key, request_url = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    client = FakeClient({request_url: SourceError(source, request_url, "HTTP 403")})
+    report = refresh_starters(conn, client, now=NOW)
+    assert _asked(client, key), client.urls
+    assert report.errors == ()
+    assert any(source in note and "still failing" in note for note in report.notes)
+
+
+@pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
+def test_a_gap_heals_on_its_own_when_the_feed_reads_again(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    """One good read clears the gap, so nobody has to run `--retry-skipped` for a live feed."""
+    key, _ = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    report = refresh_starters(conn, FakeClient(), now=NOW)
+    assert report.errors == ()
+    assert last_ok_read(conn, source, key) == NOW
+    assert key not in abandoned_urls(conn, source)
+
+
+@pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
+def test_retry_skipped_keeps_the_error_of_a_live_feed_that_still_fails(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    """The flag asks for no skip, so a failure is reported again instead of hidden."""
+    key, request_url = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    client = FakeClient({request_url: SourceError(source, request_url, "HTTP 403")})
+
+    report = refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=True)
+
+    assert len(report.errors) == 1
+    assert not any("still failing" in note for note in report.notes)
+
+
+def test_retry_skipped_keeps_the_error_on_the_starters_path(conn: sqlite3.Connection) -> None:
+    """The flag must reach the report path, which runs `--starters-only`."""
     _abandon_a_live_feed(conn, "daily_faceoff", STARTERS_URL)
-    client = FakeClient()
-    refresh_starters(conn, client, now=NOW, retry_skipped=True)
-    assert _asked(client, STARTERS_URL), client.urls
+    client = FakeClient({STARTERS_URL: SourceError("daily_faceoff", STARTERS_URL, "HTTP 403")})
+    report = refresh_starters(conn, client, now=NOW, retry_skipped=True)
+    assert len(report.errors) == 1
+    assert not any("still failing" in note for note in report.notes)
 
 
 def test_a_live_feed_that_fails_once_is_not_yet_a_gap(conn: sqlite3.Connection) -> None:
