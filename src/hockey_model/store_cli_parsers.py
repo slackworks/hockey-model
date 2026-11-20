@@ -28,8 +28,8 @@ def _add_refresh(parser: argparse.ArgumentParser) -> None:
         "--retry-skipped",
         action="store_true",
         help="read again the score days, boxscores, MoneyPuck files, and live feeds that"
-        " earlier reads skipped as known gaps; one good read clears a gap. A unit whose last"
-        " read failed less than half a day ago still waits",
+        " earlier reads skipped as known gaps; one good read clears a gap. A boxscore whose"
+        " last read failed less than a day ago still waits",
     )
     parser.add_argument(
         "--budget-seconds",
