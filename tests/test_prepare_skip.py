@@ -1,0 +1,114 @@
+"""Tests that daily-prepare.sh skips a day that is already prepared, and that --force rebuilds."""
+
+import json
+from pathlib import Path
+
+import pytest
+from report_script_support import DAY, LIVE, _calls, _env, _run, store_path
+
+OTHER_DAY = "2026-11-05"
+SKIP_WORDS = f"{DAY} is already prepared"
+
+
+def _store_dir(tmp_path: Path) -> Path:
+    path = store_path(tmp_path).parent
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _prepare_day(tmp_path: Path, day: str = DAY, backtest: str | None = None) -> None:
+    """Leave the marker and the backtest file that a finished prepare run leaves."""
+    store_dir = _store_dir(tmp_path)
+    (store_dir / f"prepared-{day}").touch()
+    text = json.dumps({"live_features": LIVE}) if backtest is None else backtest
+    (store_dir / f"backtest-{day}.json").write_text(text, encoding="utf-8")
+
+
+def _prepare_env(fakes: Path, tmp_path: Path) -> dict[str, str]:
+    # A marker file keeps the run off the first-backfill path.
+    store = store_path(tmp_path)
+    _store_dir(tmp_path)
+    Path(f"{store}.backfilled").touch()
+    return _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store))
+
+
+def _ran_backtest_or_fit(tmp_path: Path) -> bool:
+    return any("hockey-model backtest" in c or "hockey-model fit" in c for c in _calls(tmp_path))
+
+
+def test_a_prepared_day_skips_the_backtest_and_the_fit(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert SKIP_WORDS in result.stderr
+    assert "pass --force to rebuild" in result.stderr
+    assert result.stdout == ""
+    assert not _ran_backtest_or_fit(tmp_path)
+
+
+def test_a_skip_keeps_the_files_of_the_day(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    store_dir = _store_dir(tmp_path)
+    assert (store_dir / f"prepared-{DAY}").exists()
+    assert (store_dir / f"backtest-{DAY}.json").exists()
+
+
+def test_a_skip_still_runs_the_refresh(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert "uv run hockey-model refresh" in _calls(tmp_path)
+
+
+def test_force_rebuilds_a_prepared_day(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--force")
+    assert result.returncode == 0, result.stderr
+    assert SKIP_WORDS not in result.stderr
+    assert _ran_backtest_or_fit(tmp_path)
+    assert (_store_dir(tmp_path) / f"prepared-{DAY}").exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("not json", id="invalid_json"),
+        pytest.param("{}", id="no_live_features"),
+        pytest.param(json.dumps({"live_features": [None, "rest"]}), id="not_a_name"),
+        pytest.param(json.dumps({"live_features": {"a": "b"}}), id="an_object"),
+    ],
+)
+def test_a_marker_without_a_valid_backtest_rebuilds(
+    fakes: Path, tmp_path: Path, text: str | None
+) -> None:
+    _prepare_day(tmp_path, backtest="" if text is None else text)
+    if text is None:
+        (_store_dir(tmp_path) / f"backtest-{DAY}.json").unlink()
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert "rebuilding" in result.stderr
+    assert _ran_backtest_or_fit(tmp_path)
+
+
+def test_the_marker_of_another_day_does_not_skip(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path, day=OTHER_DAY)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert "already prepared" not in result.stderr
+    assert _ran_backtest_or_fit(tmp_path)
+
+
+def test_a_backtest_file_without_the_marker_rebuilds(fakes: Path, tmp_path: Path) -> None:
+    (_store_dir(tmp_path) / f"backtest-{DAY}.json").write_text(
+        json.dumps({"live_features": LIVE}), encoding="utf-8"
+    )
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert _ran_backtest_or_fit(tmp_path)
+
+
+def test_prepare_help_names_force(fakes: Path, tmp_path: Path) -> None:
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--help")
+    assert result.returncode == 0
+    assert "--force" in result.stdout

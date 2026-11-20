@@ -56,6 +56,13 @@ The fit and the backtest each take minutes or more on a full store.
 1. `daily-prepare.yml` runs once each morning, before the first trigger hour. It refreshes every source, fits the model, and runs the backtest. Its job timeout fits the window from its cron hour to the next listed trigger hour (#149).
 2. `daily-report.yml` runs at each trigger. When a trigger is due, it refreshes only the schedule, the goalie sources, and the injuries, then predicts and publishes.
 
+A prepare for a day that is already prepared skips the backtest and the fit (#281).
+The day is complete when `prepared-DATE` exists and `backtest-DATE.json` holds a `live_features` list of names.
+The refresh still runs, because it is cheap and keeps the store current for the report.
+A marker without a valid backtest file rebuilds, and says why on stderr.
+`--force` rebuilds on purpose. Only a manual dispatch passes it, so a scheduled run never forces.
+The stricter rule, a check that the backtest inputs did not change, costs a store query and buys nothing today, because the report refreshes the starters itself and the backtest scores past games.
+
 When the morning run did not finish, the report run fails and says so.
 The prep window opens at the prepare cron and `PREP_WINDOW` (180 minutes, the prep job timeout) plus `PREP_QUEUE_ALLOWANCE` (60 minutes) later.
 A report run that finds no prepared marker skips with a notice and exits 0 while the window is open, because the morning run has not had its window yet (#223).

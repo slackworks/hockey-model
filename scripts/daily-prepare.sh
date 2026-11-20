@@ -2,8 +2,11 @@
 # Prepare one game day: refresh every source, run the backtest, and fit the model on the
 # features that the backtest kept.
 #
-# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--help]
-#   --date  Eastern game day to prepare. Default: today in Eastern time.
+# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--force] [--help]
+#   --date   Eastern game day to prepare. Default: today in Eastern time.
+#   --force  Rebuild the backtest and the fit for a day that is already prepared.
+#            Without it, a day with a prepared-DATE marker and a valid backtest-DATE.json
+#            skips both steps and exits 0 after the refresh.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The first backfill runs until a marker file
 # next to the store says it finished. The backfill reads one year at a time, newest year
@@ -17,6 +20,7 @@
 set -euo pipefail
 
 day=""
+force=0
 
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -31,6 +35,10 @@ while (($# > 0)); do
     fi
     day="$2"
     shift 2
+    ;;
+  --force)
+    force=1
+    shift
     ;;
   -h | --help)
     usage
@@ -101,10 +109,27 @@ else
   uv run hockey-model refresh
 fi
 
+# A day is complete when its marker and a backtest file with a live_features list of names
+# exist. The refresh above runs first, because it is cheap and keeps the store current for the
+# report. The check runs before the delete below, so a skip leaves the day's files in place.
+backtest_json="$store_dir/backtest-$day.json"
+if [[ -f "$store_dir/prepared-$day" ]]; then
+  if jq -e '.live_features | type == "array" and all(type == "string")' "$backtest_json" \
+    >/dev/null 2>&1; then
+    if ((force == 0)); then
+      echo "daily-prepare: $day is already prepared (prepared-$day and backtest-$day.json exist);" \
+        "pass --force to rebuild" >&2
+      exit 0
+    fi
+  else
+    echo "daily-prepare: prepared-$day exists but $backtest_json is missing or has no" \
+      "live_features list of names; rebuilding" >&2
+  fi
+fi
+
 # Files from earlier days are stale. The release of each day already holds its own copy.
 find "$store_dir" -maxdepth 1 -type f \( -name 'prepared-*' -o -name 'backtest-*' \) -delete
 backtest_games="$store_dir/backtest-games-$day.csv"
-backtest_json="$store_dir/backtest-$day.json"
 uv run hockey-model backtest --games-out "$backtest_games" >"$backtest_json"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.

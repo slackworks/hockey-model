@@ -43,3 +43,14 @@ def test_the_saved_cache_keeps_no_upgrade_backup(workflow: Path) -> None:
     save = text.find("actions/cache/save")
     assert drop != -1, "the workflow must drop the upgrade backup before it saves the cache"
     assert save != -1 and drop < save, "the backup drop must run before the cache save"
+
+
+def test_only_a_manual_dispatch_can_force_a_rebuild() -> None:
+    """The force flag comes from a dispatch input, so a scheduled run never rebuilds a day."""
+    text = PREPARE.read_text(encoding="utf-8")
+    assert "force:\n        description:" in text
+    assert "type: boolean" in text
+    assert "DISPATCH_FORCE: ${{ inputs.force }}" in text
+    assert '[[ "$DISPATCH_FORCE" == "true" ]]' in text
+    assert "--force" in text
+    assert text.count("--force") == 1

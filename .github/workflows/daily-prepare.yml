@@ -14,6 +14,10 @@ on:
         description: "Eastern game day to prepare, YYYY-MM-DD. Empty means today in Eastern time."
         type: string
         default: ""
+      force:
+        description: "Rebuild the backtest and the fit for a day that is already prepared."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,10 +48,15 @@ jobs:
       - env:
           HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
           DISPATCH_DATE: ${{ inputs.date }}
+          DISPATCH_FORCE: ${{ inputs.force }}
         run: |
           args=()
           if [[ -n "$DISPATCH_DATE" ]]; then
             args+=(--date "$DISPATCH_DATE")
+          fi
+          # Only a manual run forces a rebuild. A scheduled run has no inputs, so it never does.
+          if [[ "$DISPATCH_FORCE" == "true" ]]; then
+            args+=(--force)
           fi
           bash scripts/daily-prepare.sh ${args[@]+"${args[@]}"}
       # A backup beside the store doubles the cache. After a failed upgrade it also stops the
