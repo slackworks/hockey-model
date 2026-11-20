@@ -39,22 +39,41 @@ PACKAGE = "hockey_model"
 MUTANT_PREFIX = f"{PACKAGE}."
 # The per-key fields of a .meta file that shards fill in one mutant at a time.
 RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_key")
-# Balanced from measured `mutmut run` times on one module group each. A group time is
-# the run time minus the stats pass, about 60 seconds locally. The shard totals are
-# 65, 67, 68, and 67 seconds of mutant work (local estimates, not CI measurements).
+# Balanced from the per-mutant durations that CI records in each .meta file, not from the
+# file count. Count is a poor guide: sources.http costs 357s for 190 mutants, and
+# experiments.models costs 3902s for 332 (#155). A surviving mutant runs every selected
+# test to the end, so the slow modules are the ones whose tests do real work.
+#
+# Seconds of mutant work per shard, summed from run 42372737510: 3902, 2916, 1718, 1517.
+# The four shards of that run sum to 10054s, so a perfect split is 2513s each.
+# experiments.models alone is 3902s, so that shard is the floor unless #176 splits a module.
+#
+# A fit over the two heaviest shards of that run gives ``wall = work / 3.87 + 105``
+# seconds: about 3.87 effective workers, and 105s of startup and stats before the first
+# mutant. It predicts 24.8 minutes for shard 3, which timed out at its 25-minute limit.
+# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes.
+#
+# The fit under-reads a shard of cheap mutants. Old shard 0 held 190 mutants of
+# sources.http, summed to 357s, and took 385s: 1.95 times its prediction. Each mutant is
+# a subprocess, so a cheap one spends most of its time in startup that its recorded
+# duration does not hold. Shards 2 and 3 below have the same shape, at 1.8s and 1.3s per
+# mutant, so read their minutes as a floor and keep the margin at the step limit.
 SHARDS: tuple[tuple[str, ...], ...] = (
-    ("sources.http",),
+    ("experiments.models",),
+    ("backtest.metrics",),
+    ("sources.nhl", "sources.http", "sources.payload"),
     (
         "sources.espn",
+        "sources.daily_faceoff",
+        "sources.moneypuck",
         "game_model.elo",
+        "game_model.logistic",
         "sources.errors",
         "sources.policy",
         "sources.shape_errors",
         "sources.starters",
         "sources.teams",
     ),
-    ("sources.daily_faceoff", "sources.payload", "backtest.metrics"),
-    ("sources.moneypuck", "experiments.models", "sources.nhl", "game_model.logistic"),
 )
 
 
@@ -203,6 +222,36 @@ def missing_results(root: Path) -> list[str]:
     return [module for module in modules if not _meta_path(root, module).exists()]
 
 
+def unrun_by_shard(root: Path) -> dict[int, list[str]]:
+    """Return the shard index to the modules it owns that carry no result under ``root``.
+
+    A shard that a CI job killed uploads the ``.meta`` files it wrote, which hold a null for
+    each mutant it never reached. Those modules look present to ``missing_results``, so the
+    shard that ran out of time must be named from the mutant counts instead (#155).
+    """
+    unrun: dict[int, list[str]] = {}
+    for index, modules in enumerate(SHARDS):
+        found = [module for module in modules if _mutants_without_result(root, module)]
+        if found:
+            unrun[index] = found
+    return unrun
+
+
+def _mutants_without_result(root: Path, module: str) -> int:
+    """Return how many mutants of ``module`` have no exit code in the merged ``.meta``."""
+    path = _meta_path(root, module)
+    if not path.exists():
+        return 0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, UnicodeDecodeError, json.JSONDecodeError:
+        return 0
+    exits = data.get("exit_code_by_key") if isinstance(data, dict) else None
+    if not isinstance(exits, dict):
+        return 0
+    return sum(1 for value in exits.values() if value is None)
+
+
 def _run_merge(source_root: Path, dest: Path) -> int:
     """Merge every shard directory under ``source_root`` into ``dest``. Return the exit code."""
     found = source_root.iterdir() if source_root.is_dir() else []
@@ -217,6 +266,14 @@ def _run_merge(source_root: Path, dest: Path) -> int:
     missing = missing_results(dest)
     for module in missing:
         print(f"mutation-shards: no merged results for {module}", file=sys.stderr)
+    # A shard killed by its step timeout still uploads its .meta files, with a null for each
+    # mutant it never reached. Name that shard in this job's log, so the reader knows which
+    # shard job to open.
+    for index, modules in unrun_by_shard(dest).items():
+        print(
+            f"mutation-shards: shard {index} did not finish; modules {', '.join(modules)}",
+            file=sys.stderr,
+        )
     return 1 if missing else 0
 
 

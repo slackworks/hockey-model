@@ -31,8 +31,8 @@ release_status() {
       printf 'failed: cannot read the repository: %s' "$out"
       return 0
     fi
-    printf 'failed: the token cannot see this repository, so a missing release cannot be' \
-      "told apart from a missing repository: %s" "$out"
+    printf 'failed: the token cannot see this repository; a missing release looks the same: %s' \
+      "$out"
     return 0
   fi
   if ! out="$(gh api --include "repos/{owner}/{repo}/releases/tags/${tag}" 2>&1)"; then

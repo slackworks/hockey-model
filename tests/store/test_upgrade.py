@@ -687,8 +687,10 @@ def test_any_source_read_and_fit_row_survives_the_rebuild(
         conn.close()
         upgrade_store(path)
         kept = rows(path, "SELECT source, url, fetched_at, ok, error FROM source_reads")
-        assert sorted(kept) == sorted(reads)
-        assert sorted(rows(path, "SELECT * FROM model_fits")) == sorted(fits)
+        # A row may hold None for error, and sorting a column that mixes None with text
+        # raises TypeError. Compare as multisets so the row order does not matter (#155).
+        assert sorted(kept, key=repr) == sorted(reads, key=repr)
+        assert sorted(rows(path, "SELECT * FROM model_fits"), key=repr) == sorted(fits, key=repr)
 
 
 def test_a_null_in_a_rebuilt_column_stops_the_upgrade_and_names_the_table(

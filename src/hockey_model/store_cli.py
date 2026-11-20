@@ -24,14 +24,19 @@ from hockey_model.game_model.training import (
     training_rows,
 )
 from hockey_model.report_gate import decide, warning
-from hockey_model.report_trigger import first_puck_drop, prep_too_early, puck_drop_ahead
+from hockey_model.report_trigger import (
+    first_puck_drop,
+    prep_blocks_report,
+    prep_too_early,
+    puck_drop_ahead,
+)
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow, fetch_score_day
 from hockey_model.store.db import connect, db_path_from_env
 from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, save_fit
 from hockey_model.store.reads import game_row
 from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
-from hockey_model.store.timestamps import iso_utc
+from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.store.upgrade import run_store_group
 from hockey_model.store_cli_parsers import CANDIDATE_SETS
 from hockey_model.types import HockeyModelError
@@ -266,6 +271,14 @@ def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
     return {**asdict(decision), "warning": note}, 0
 
 
+def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
+    """Return True when a prepare run that holds the store group now outlives the puck drop."""
+    if not args.prep_started:
+        return False
+    margin = timedelta(seconds=args.margin_seconds)
+    return prep_blocks_report(parse_iso_utc(args.prep_started), first, margin)
+
+
 def _report_due(args: argparse.Namespace) -> tuple[object, int]:
     now = datetime.now(UTC)
     day = args.date if args.date is not None else game_day_of(now)
@@ -279,7 +292,8 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
         "games_outside_window": outside,
         "first_puck_drop_utc": iso_utc(first),
         "puck_drop_passed": now >= first,
-        "prep_too_early": day == game_day_of(now) and prep_too_early(now, first),
+        "prep_too_early": day == game_day_of(now) and prep_too_early(now, first, day),
+        "prep_blocks_report": _prep_blocking(args, first),
         "due": args.force or puck_drop_ahead(now, first, timedelta(seconds=args.margin_seconds)),
     }, 0
 

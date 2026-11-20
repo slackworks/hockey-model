@@ -19,6 +19,10 @@ MISSING_IN_COPY = ("scripts", "specs", ".github")
 # A module reaches the guard by calling the helper, directly or through the import.
 _GUARD = re.compile(r"require_path\(")
 _ROOT = re.compile(r"parents\[\d\]")
+# A test module that calls one of these never names a repo-root path itself, because the
+# helper resolves it. The helper guards the read (#155). Listing the names here makes that
+# promise checkable: a new helper that reads a repo-root path must guard it or join this set.
+_GUARDED_HELPERS = ("report_script_support",)
 
 
 def _collected_modules() -> list[Path]:
@@ -57,3 +61,21 @@ def test_the_guard_regex_matches_the_guard_that_other_modules_use() -> None:
     assert _has_guard(called) is True
     assert _has_guard(imported) is False
     assert _has_guard('"""A test of the mutants directory."""') is False
+
+
+@pytest.mark.parametrize("name", _GUARDED_HELPERS)
+def test_a_guarded_helper_resolves_every_repo_root_path_it_names(name: str) -> None:
+    """A helper that a test module trusts must guard each missing-in-copy path it resolves.
+
+    The per-module check above cannot see this: a test module that calls ``_run`` names a bare
+    file name, so the module has no ``"scripts"`` string for the check to find, and the read
+    happens in the helper (#155). The helper must guard the path itself.
+    """
+    text = (ROOT / "tests" / f"{name}.py").read_text(encoding="utf-8")
+    for directory in MISSING_IN_COPY:
+        if f'"{directory}"' not in text:
+            continue
+        assert _has_guard(text), (
+            f"tests/{name}.py resolves {directory}/ and calls no require_path. A mutation copy "
+            "holds no such directory, so guard the read where it happens."
+        )

@@ -30,7 +30,9 @@ def fakes(tmp_path: Path) -> Path:
     `gh api --include .../releases/tags/TAG` answers 200 for a tag in FAKE_RELEASES and 404
     otherwise, as the real command does. `gh release view TAG` answers the same way for the
     asset read. `gh release create` refuses a tag that already exists. FAKE_GH_FAIL makes
-    every gh call fail with an auth error.
+    every gh call fail with an auth error. `gh api .../actions/runs?status=S` answers
+    FAKE_RUNS_JSON_S when it is set and FAKE_RUNS_JSON otherwise, which defaults to no runs,
+    and it fails when FAKE_RUNS_FAIL is set.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -43,6 +45,33 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
         'if [[ "$1" == "api" ]]; then\n'
         '  path="${!#}"\n'
+        # The workflow runs, which decide whether a prepare run holds the store group. The list
+        # depends on the status, so FAKE_RUNS_JSON_<STATUS> answers one status and
+        # FAKE_RUNS_JSON answers the rest. The default goes in its own variable, because a
+        # brace in a ${...:-default} word makes bash end the expansion early.
+        # The jobs of one run answer FAKE_JOBS_JSON, which defaults to no jobs. The lookup
+        # reads the job start, because GitHub counts a job timeout from there.
+        '  if [[ "$path" == */actions/runs/*/jobs* ]]; then\n'
+        '    if [[ -n "${FAKE_JOBS_FAIL:-}" ]]; then echo "jobs boom" >&2; exit 1; fi\n'
+        '    jobs_json="${FAKE_JOBS_JSON:-}"\n'
+        '    if [[ -z "$jobs_json" ]]; then jobs_json=\'{"jobs":[]}\'; fi\n'
+        '    printf "%s\\n" "$jobs_json"\n'
+        "    exit 0\n"
+        "  fi\n"
+        '  if [[ "$path" == */actions/runs* ]]; then\n'
+        '    if [[ -n "${FAKE_RUNS_FAIL:-}" ]]; then echo "runs boom" >&2; exit 1; fi\n'
+        '    runs_json=""\n'
+        "    for status in in_progress pending queued waiting requested; do\n"
+        '      if [[ "$path" == *"status=$status"* ]]; then\n'
+        '        var="FAKE_RUNS_JSON_${status^^}"\n'
+        '        runs_json="${!var:-}"\n'
+        "      fi\n"
+        "    done\n"
+        '    if [[ -z "$runs_json" ]]; then runs_json="${FAKE_RUNS_JSON:-}"; fi\n'
+        '    if [[ -z "$runs_json" ]]; then runs_json=\'{"workflow_runs":[]}\'; fi\n'
+        '    printf "%s\\n" "$runs_json"\n'
+        "    exit 0\n"
+        "  fi\n"
         # The release lookup reads the repository first, so a token that cannot see the
         # repository is not read as a missing release.
         '  if [[ "$path" != */tags/* ]]; then\n'
