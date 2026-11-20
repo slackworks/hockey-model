@@ -97,13 +97,20 @@ For each game, in this order:
 ### The abandon rule: `store/source_reads.py`, `abandoned_urls()`
 
 A URL is abandoned when at least `ABANDON_AFTER_FAILED_READS` reads failed since its newest good read, and the first and the last of those failures are at least `ABANDON_MIN_SPAN_DAYS` apart.
-An abandoned URL is never read again.
-It stays abandoned, even when it had a good read before the failures.
+An abandoned dated unit is never read again.
+It stays abandoned until `--retry-skipped` reads it once and that read works.
+A live feed is different.
+It has no dated alternative, so a skip would leave it abandoned for ever.
+The three live feeds make the request on every run, and a failed read of an abandoned URL is not an error (#276).
+One good read then clears the gap with nobody involved.
 
 ### The exit code: `store_cli.py`, `_refresh()`, and `scripts/daily-prepare.sh`
 
 1. `refresh` exits 1 when any source recorded an error.
    This includes MoneyPuck, ESPN, and Daily Faceoff, which run after the NHL steps (`store/refresh.py`, `_STEPS`).
+   A unit that the abandon rule leaves as a known gap records no error, so it does not set that exit code.
+   MoneyPuck skips each file that is a gap.
+   The three live feeds read their URL on every run and record no error when the URL is already a gap (#276), because a live feed has no dated alternative to fall back on.
 2. `daily-prepare.sh` exits with that code before it reads `backfill_complete`.
    So a stop after `MAX_UNIT_FAILURES` failures exits 1, not 75.
 3. With exit 0 from refresh, the script writes the marker when `backfill_complete` is true, and exits 75 when it is false.
@@ -275,6 +282,9 @@ The first one was a limit of the code. Issue #178 fixed it.
 2. A failure of any source after the NHL steps blocks the marker, because `refresh` then exits 1.
    This is the rule "any failed step stops the script".
    A source that always fails also stops the plain refresh, so the result is a loud failure in both paths, and the spec models it as `OtherBroken`.
+   The exception is a unit that the abandon rule leaves as a known gap.
+   Such a unit records no error, so it writes no failure and the marker is written (#276).
+   The spec keeps `OtherBroken` for the failures that are not gaps, because a live feed is outside its model of the two NHL units.
 3. A boxscore gap is noted as a count, not by name.
    The note exists, so the gap is not dropped without a word.
 4. The daily-cadence stall (#186).

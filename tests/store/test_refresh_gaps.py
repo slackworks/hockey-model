@@ -11,6 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from refresh_support import (
     BOX_URL,
+    ESPN,
     NOW,
     FakeClient,
     failing_days,
@@ -19,6 +20,7 @@ from refresh_support import (
 )
 from seeding import FETCHED
 
+from hockey_model.sources.daily_faceoff import STARTERS_URL
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, TeamGameRow, goalie_games_url
@@ -29,7 +31,7 @@ from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import read_boxscores
 from hockey_model.store.refresh_other import _stop_for_time
-from hockey_model.store.source_reads import abandoned_urls, record_read
+from hockey_model.store.source_reads import abandoned_urls, last_ok_read, record_read
 
 GAME = 2025020697
 BAD_BOX = f"{BOX_URL}{GAME}/boxscore"
@@ -315,6 +317,102 @@ def test_an_abandoned_team_file_follows_the_same_skip_rule_as_a_goalie_file(
     client = FakeClient()
     refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=retry)
     assert (TEAM_GAMES_URL in client.urls) is expected
+
+
+def _abandon_a_live_feed(conn: sqlite3.Connection, source: str, url: str) -> None:
+    """Record the failed reads that make ``url`` a known gap for ``source``."""
+    for days in (3, 1):
+        record_read(conn, source, url, NOW - timedelta(days=days), error="HTTP 403")
+    conn.commit()
+    assert url in abandoned_urls(conn, source)
+
+
+def _asked(client: FakeClient, url: str) -> bool:
+    """Return True when the client asked for ``url``, or for that URL with a query.
+
+    ``espn_starters`` reads one URL per day, and the record keeps the prefix with no query, so
+    an exact match alone would miss the request and pass when the source was not skipped.
+    """
+    return any(request == url or request.startswith(f"{url}?") for request in client.urls)
+
+
+def _live_feed(source: str) -> tuple[str, str]:
+    """Return the gap key and the request URL of the live feed that ``source`` reads.
+
+    ``espn_starters`` reads one URL per day, and the record keeps the key with no query, so the
+    request URL and the gap key are different strings.
+    """
+    return {
+        "daily_faceoff": (STARTERS_URL, STARTERS_URL),
+        "espn_injuries": (f"{ESPN}/injuries", f"{ESPN}/injuries"),
+        "espn_starters": (f"{ESPN}/scoreboard", f"{ESPN}/scoreboard?dates=20260110"),
+    }[source]
+
+
+@pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
+def test_an_abandoned_live_feed_still_fails_quietly_instead_of_stopping_the_run(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    """A blocked IP address must not stop every later run.
+
+    The read still happens, because a skip records no read and the gap would then never clear.
+    The failure is hidden only because the URL is already a gap (#276).
+    """
+    key, request_url = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    client = FakeClient({request_url: SourceError(source, request_url, "HTTP 403")})
+    report = refresh_starters(conn, client, now=NOW)
+    assert _asked(client, key), client.urls
+    assert report.errors == ()
+    assert any(source in note and "still failing" in note for note in report.notes)
+
+
+@pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
+def test_a_gap_heals_on_its_own_when_the_feed_reads_again(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    """One good read clears the gap, so nobody has to run `--retry-skipped` for a live feed."""
+    key, _ = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    report = refresh_starters(conn, FakeClient(), now=NOW)
+    assert report.errors == ()
+    assert last_ok_read(conn, source, key) == NOW
+    assert key not in abandoned_urls(conn, source)
+
+
+@pytest.mark.parametrize("source", ["daily_faceoff", "espn_injuries", "espn_starters"])
+def test_retry_skipped_keeps_the_error_of_a_live_feed_that_still_fails(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    """The flag asks for no skip, so a failure is reported again instead of hidden."""
+    key, request_url = _live_feed(source)
+    _abandon_a_live_feed(conn, source, key)
+    client = FakeClient({request_url: SourceError(source, request_url, "HTTP 403")})
+
+    report = refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=True)
+
+    assert len(report.errors) == 1
+    assert not any("still failing" in note for note in report.notes)
+
+
+def test_retry_skipped_keeps_the_error_on_the_starters_path(conn: sqlite3.Connection) -> None:
+    """The flag must reach the report path, which runs `--starters-only`."""
+    _abandon_a_live_feed(conn, "daily_faceoff", STARTERS_URL)
+    client = FakeClient({STARTERS_URL: SourceError("daily_faceoff", STARTERS_URL, "HTTP 403")})
+    report = refresh_starters(conn, client, now=NOW, retry_skipped=True)
+    assert len(report.errors) == 1
+    assert not any("still failing" in note for note in report.notes)
+
+
+def test_a_live_feed_that_fails_once_is_not_yet_a_gap(conn: sqlite3.Connection) -> None:
+    """A temporary outage must still fail the run, so the model does not hide a real failure."""
+    url = STARTERS_URL
+    record_read(conn, "daily_faceoff", url, NOW - timedelta(days=1), error="HTTP 503")
+    conn.commit()
+    client = FakeClient({url: SourceError("daily_faceoff", url, "HTTP 503")})
+    report = refresh_starters(conn, client, now=NOW)
+    assert url in client.urls
+    assert len(report.errors) == 1
 
 
 def test_a_refresh_names_the_moneypuck_rows_that_match_no_stored_game(

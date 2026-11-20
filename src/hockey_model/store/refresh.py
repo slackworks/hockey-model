@@ -67,6 +67,8 @@ def refresh_starters(
     *,
     now: datetime,
     clock: Callable[[], datetime] | None = None,
+    retry_skipped: bool = False,
 ) -> RefreshReport:
     """Read only the schedule, the goalie sources, and the injuries, as ``refresh`` does."""
-    return _run(RefreshRun(conn, client, now, None, clock), _STARTER_STEPS)
+    run = RefreshRun(conn, client, now, None, clock, retry_skipped=retry_skipped)
+    return _run(run, _STARTER_STEPS)
