@@ -267,7 +267,8 @@ def _run_merge(source_root: Path, dest: Path) -> int:
     for module in missing:
         print(f"mutation-shards: no merged results for {module}", file=sys.stderr)
     # A shard killed by its step timeout still uploads its .meta files, with a null for each
-    # mutant it never reached. Name that shard, so the run summary says which job to look at.
+    # mutant it never reached. Name that shard in this job's log, so the reader knows which
+    # shard job to open.
     for index, modules in unrun_by_shard(dest).items():
         print(
             f"mutation-shards: shard {index} did not finish; modules {', '.join(modules)}",
