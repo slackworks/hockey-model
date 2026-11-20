@@ -23,16 +23,22 @@ def _runs(*runs: tuple[str, str | None], status: str = "in_progress") -> str:
 
     A running run names its start in ``run_started_at``. A run that the group holds, or one
     that waits for a runner, holds its creation time there. No run object has ``started_at``.
+    Each run carries an id, because the start of a running run comes from its job list.
     """
     rows = []
-    for path, started in runs:
-        row = {"path": path, "started_at": None, "created_at": _CREATED}
+    for index, (path, started) in enumerate(runs):
+        row = {"id": 1000 + index, "path": path, "started_at": None, "created_at": _CREATED}
         if status == "in_progress" and started is not None:
             row["run_started_at"] = started
         else:
             row["run_started_at"] = _CREATED
         rows.append(row)
     return json.dumps({"workflow_runs": rows})
+
+
+def _jobs(started: str | None) -> str:
+    """Return a job list payload whose one job started at ``started``, or has not started."""
+    return json.dumps({"jobs": [{"name": "prepare", "started_at": started}]})
 
 
 def _env_for(
@@ -49,29 +55,41 @@ def test_no_runs_means_no_prepare_holds_the_group(fakes: Path, tmp_path: Path) -
     assert result.stdout == ""
 
 
-def test_a_running_prepare_names_its_start(fakes: Path, tmp_path: Path) -> None:
-    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, _STARTED))
-    result = _run("prep-running.sh", env)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == _STARTED
-
-
-def test_a_run_with_no_started_at_field_still_names_its_start(fakes: Path, tmp_path: Path) -> None:
-    """The run object has no started_at. A script that reads it prints the wall clock."""
-    payload = json.dumps(
-        {"workflow_runs": [{"path": _PREPARE, "run_started_at": _STARTED}]},
+def test_a_running_prepare_names_its_job_start(fakes: Path, tmp_path: Path) -> None:
+    """GitHub counts the job timeout from the job start, so the job start is the answer."""
+    env = _env_for(
+        fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_JSON=_jobs(_STARTED)
     )
-    env = _env(fakes, tmp_path, FAKE_RUNS_JSON_IN_PROGRESS=payload)
     result = _run("prep-running.sh", env)
     assert result.returncode == 0, result.stderr
     assert result.stdout == _STARTED
+
+
+def test_a_job_that_has_not_started_names_now(fakes: Path, tmp_path: Path) -> None:
+    """A run is in_progress while its job waits for a runner, and its window opens later.
+
+    Reading the run start would predict an earlier end than the prepare can have, which is
+    the late-publish case that the check exists to catch (#163).
+    """
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_JSON=_jobs(None))
+    result = _run("prep-running.sh", env)
+    assert result.returncode == 0, result.stderr
+    # Not the run start, and not the creation time: the job can still use its full window.
+    assert result.stdout != _STARTED
+    assert result.stdout != _CREATED
+    assert _ISO.match(result.stdout), result.stdout
 
 
 def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
     # The earlier start holds the group first, so it is the one that the report waits behind.
     earlier = "2026-11-04T08:00:00Z"
-    env = _env_for(
-        fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T09:30:00Z"), (_PREPARE, earlier)
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON_IN_PROGRESS=_runs((_PREPARE, "2026-11-04T09:30:00Z"), (_PREPARE, earlier)),
+        FAKE_JOBS_JSON=json.dumps(
+            {"jobs": [{"started_at": "2026-11-04T09:30:00Z"}, {"started_at": earlier}]}
+        ),
     )
     result = _run("prep-running.sh", env)
     assert result.returncode == 0, result.stderr
@@ -98,7 +116,7 @@ def test_a_queued_prepare_names_now_as_its_earliest_start(fakes: Path, tmp_path:
     assert _ISO.match(result.stdout), result.stdout
 
 
-@pytest.mark.parametrize("status", ["in_progress", "pending", "queued"])
+@pytest.mark.parametrize("status", ["in_progress", "pending", "queued", "waiting", "requested"])
 def test_every_state_that_holds_the_group_is_asked_for(
     fakes: Path, tmp_path: Path, status: str
 ) -> None:
@@ -126,6 +144,15 @@ def test_a_failed_lookup_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> 
     assert "cannot read the in_progress workflow runs" in result.stderr
 
 
+def test_a_failed_job_read_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> None:
+    """A broken job read must not read as "no prepare", for the same reason as the run list."""
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_FAIL="1")
+    result = _run("prep-running.sh", env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "cannot read the jobs of run" in result.stderr
+
+
 def test_a_payload_that_jq_cannot_read_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, FAKE_RUNS_JSON_IN_PROGRESS="{not json")
     result = _run("prep-running.sh", env)
@@ -139,12 +166,17 @@ def test_a_run_with_no_path_is_skipped_not_fatal(fakes: Path, tmp_path: Path) ->
     payload = json.dumps(
         {
             "workflow_runs": [
-                {"path": None, "run_started_at": _STARTED},
-                {"path": _PREPARE, "run_started_at": _STARTED},
+                {"id": 1000, "path": None, "run_started_at": _STARTED},
+                {"id": 1001, "path": _PREPARE, "run_started_at": _STARTED},
             ]
         }
     )
-    env = _env(fakes, tmp_path, FAKE_RUNS_JSON_IN_PROGRESS=payload)
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON_IN_PROGRESS=payload,
+        FAKE_JOBS_JSON=_jobs(_STARTED),
+    )
     result = _run("prep-running.sh", env)
     assert result.returncode == 0, result.stderr
     assert result.stdout == _STARTED

@@ -49,10 +49,19 @@ def fakes(tmp_path: Path) -> Path:
         # depends on the status, so FAKE_RUNS_JSON_<STATUS> answers one status and
         # FAKE_RUNS_JSON answers the rest. The default goes in its own variable, because a
         # brace in a ${...:-default} word makes bash end the expansion early.
+        # The jobs of one run answer FAKE_JOBS_JSON, which defaults to no jobs. The lookup
+        # reads the job start, because GitHub counts a job timeout from there.
+        '  if [[ "$path" == */actions/runs/*/jobs* ]]; then\n'
+        '    if [[ -n "${FAKE_JOBS_FAIL:-}" ]]; then echo "jobs boom" >&2; exit 1; fi\n'
+        '    jobs_json="${FAKE_JOBS_JSON:-}"\n'
+        '    if [[ -z "$jobs_json" ]]; then jobs_json=\'{"jobs":[]}\'; fi\n'
+        '    printf "%s\\n" "$jobs_json"\n'
+        "    exit 0\n"
+        "  fi\n"
         '  if [[ "$path" == */actions/runs* ]]; then\n'
         '    if [[ -n "${FAKE_RUNS_FAIL:-}" ]]; then echo "runs boom" >&2; exit 1; fi\n'
         '    runs_json=""\n'
-        "    for status in in_progress pending queued; do\n"
+        "    for status in in_progress pending queued waiting requested; do\n"
         '      if [[ "$path" == *"status=$status"* ]]; then\n'
         '        var="FAKE_RUNS_JSON_${status^^}"\n'
         '        runs_json="${!var:-}"\n'
