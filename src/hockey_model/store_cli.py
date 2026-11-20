@@ -90,7 +90,11 @@ def _refresh(args: argparse.Namespace) -> tuple[object, int]:
     try:
         if args.starters_only:
             report = refresh_starters(
-                conn, HttpClient(), now=datetime.now(UTC), clock=lambda: datetime.now(UTC)
+                conn,
+                HttpClient(),
+                now=datetime.now(UTC),
+                clock=lambda: datetime.now(UTC),
+                retry_skipped=args.retry_skipped,
             )
         else:
             report = refresh(

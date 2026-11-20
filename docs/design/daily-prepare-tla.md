@@ -278,6 +278,9 @@ The first one was a limit of the code. Issue #178 fixed it.
 2. A failure of any source after the NHL steps blocks the marker, because `refresh` then exits 1.
    This is the rule "any failed step stops the script".
    A source that always fails also stops the plain refresh, so the result is a loud failure in both paths, and the spec models it as `OtherBroken`.
+   The exception is a unit that the abandon rule leaves as a known gap.
+   Such a unit records no error, so it writes no failure and the marker is written (#276).
+   The spec keeps `OtherBroken` for the failures that are not gaps, because a live feed is outside its model of the two NHL units.
 3. A boxscore gap is noted as a count, not by name.
    The note exists, so the gap is not dropped without a word.
 4. The daily-cadence stall (#186).

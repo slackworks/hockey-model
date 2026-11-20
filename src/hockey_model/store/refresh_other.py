@@ -177,6 +177,7 @@ def espn_starters(run: RefreshRun) -> None:
     """Read the ESPN probable goalies for today and tomorrow, as game days in Eastern time."""
     today = game_day_of(run.now)
     days: list[date] = [today, today + timedelta(days=1)]
+    # The record keeps this URL with no query, so both days share one gap key.
     url = f"{ESPN_BASE}/scoreboard"
     if _skip_gap(run, ESPN_STARTERS, url):
         return

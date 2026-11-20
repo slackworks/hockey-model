@@ -327,6 +327,15 @@ def _abandon_a_live_feed(conn: sqlite3.Connection, source: str, url: str) -> Non
     assert url in abandoned_urls(conn, source)
 
 
+def _asked(client: FakeClient, url: str) -> bool:
+    """Return True when the client asked for ``url``, or for that URL with a query.
+
+    ``espn_starters`` reads one URL per day, and the record keeps the prefix with no query, so
+    an exact match alone would miss the request and pass when the source was not skipped.
+    """
+    return any(request == url or request.startswith(f"{url}?") for request in client.urls)
+
+
 @pytest.mark.parametrize(
     ("source", "url"),
     [
@@ -347,7 +356,7 @@ def test_an_abandoned_live_feed_is_skipped_instead_of_failing_the_run(
     _abandon_a_live_feed(conn, source, url)
     client = FakeClient()
     report = refresh_starters(conn, client, now=NOW)
-    assert url not in client.urls
+    assert not _asked(client, url), client.urls
     assert report.errors == ()
     assert any(source in note and "skipped" in note for note in report.notes)
 
@@ -364,8 +373,20 @@ def test_retry_skipped_reads_an_abandoned_live_feed_again(
     _abandon_a_live_feed(conn, source, url)
     client = FakeClient()
     refresh(conn, client, now=NOW, backfill_from=date(2026, 1, 10), retry_skipped=True)
-    # One URL per day, so the gap key is the prefix that every request of the source starts with.
-    assert any(request.startswith(url) for request in client.urls), client.urls
+    assert _asked(client, url), client.urls
+
+
+def test_retry_skipped_reads_an_abandoned_live_feed_on_the_starters_path(
+    conn: sqlite3.Connection,
+) -> None:
+    """The note tells the operator to use this flag, and the report path is `--starters-only`.
+
+    A flag that the report path ignores makes that advice a no-op on the run that shows the gap.
+    """
+    _abandon_a_live_feed(conn, "daily_faceoff", STARTERS_URL)
+    client = FakeClient()
+    refresh_starters(conn, client, now=NOW, retry_skipped=True)
+    assert _asked(client, STARTERS_URL), client.urls
 
 
 def test_a_live_feed_that_fails_once_is_not_yet_a_gap(conn: sqlite3.Connection) -> None:
