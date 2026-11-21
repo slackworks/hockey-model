@@ -24,6 +24,7 @@ from hockey_model.game_model.training import (
     last_trained_start,
 )
 from hockey_model.report_gate import compare_inputs, decide, warning
+from hockey_model.report_schema import write_index
 from hockey_model.report_trigger import (
     first_puck_drop,
     prep_blocks_report,
@@ -51,6 +52,7 @@ STORE_COMMANDS = frozenset(
         "report-due",
         "report-decide",
         "report-compare",
+        "report-index",
         "store",
     }
 )
@@ -279,6 +281,11 @@ def _report_compare(args: argparse.Namespace) -> tuple[object, int]:
     return compare_inputs(args.built, args.published), 0
 
 
+def _report_index(args: argparse.Namespace) -> tuple[object, int]:
+    builds = write_index(args.report, args.name, args.existing, args.out)
+    return {"out": str(args.out), "builds": builds}, 0
+
+
 def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
     """Return True when a prepare run that holds the store group now outlives the puck drop."""
     if not args.prep_started:
@@ -354,6 +361,7 @@ _HANDLERS = {
     "report-due": _report_due,
     "report-decide": _report_decide,
     "report-compare": _report_compare,
+    "report-index": _report_index,
     "store": _store,
 }
 

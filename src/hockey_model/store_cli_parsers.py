@@ -192,6 +192,18 @@ def _add_report_compare(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--published", type=Path, required=True, metavar="PATH")
 
 
+def _add_report_index(parser: argparse.ArgumentParser) -> None:
+    """Add the files that the index step reads and writes."""
+    parser.add_argument("--report", type=Path, required=True, metavar="PATH")
+    parser.add_argument(
+        "--name", required=True, metavar="FILE", help="the versioned file name of the build"
+    )
+    parser.add_argument(
+        "--existing", type=Path, default=None, metavar="PATH", help="the index to add to"
+    )
+    parser.add_argument("--out", type=Path, required=True, metavar="PATH")
+
+
 def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
     """Add the store commands to the CLI parser."""
     add_store_group(add_parser)
@@ -227,5 +239,11 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         add_parser(
             "report-compare",
             help="say whether a built report has the inputs of the newest published report",
+        )
+    )
+    _add_report_index(
+        add_parser(
+            "report-index",
+            help="check a report against its schema and add its build to the index of the day",
         )
     )

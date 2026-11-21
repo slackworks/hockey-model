@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Daily NHL prediction report",
+  "description": "The report-YYYY-MM-DD.json release asset. docs/design/report-contract.md says when schema_version changes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "date",
+    "generated_at",
+    "inputs_sha256",
+    "level",
+    "games",
+    "credits",
+    "model",
+    "training_gaps"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "format": "date"},
+    "generated_at": {"$ref": "#/$defs/instant"},
+    "inputs_sha256": {"$ref": "#/$defs/sha256"},
+    "level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+    "games": {"type": "array", "items": {"$ref": "#/$defs/game"}},
+    "credits": {"type": "array", "items": {"type": "string"}},
+    "model": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["features", "fit_sha256", "code_sha"],
+      "properties": {
+        "features": {"type": "array", "items": {"type": "string"}},
+        "fit_sha256": {"$ref": "#/$defs/sha256"},
+        "code_sha": {"type": ["string", "null"]}
+      }
+    },
+    "training_gaps": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "instant": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}\\+00:00$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "probability": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "missing_kind": {
+      "enum": [
+        "goalie_unconfirmed",
+        "goalie_unknown",
+        "xg_form",
+        "attempt_form",
+        "goalie_form",
+        "stale_source",
+        "late_run",
+        "rest_unknown"
+      ]
+    },
+    "game": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "game_id",
+        "away",
+        "home",
+        "start_utc",
+        "state",
+        "skipped",
+        "home_win",
+        "away_win",
+        "made_after_start",
+        "missing",
+        "degraded_inputs",
+        "training"
+      ],
+      "properties": {
+        "game_id": {"type": "integer"},
+        "away": {"type": "string"},
+        "home": {"type": "string"},
+        "start_utc": {"$ref": "#/$defs/instant"},
+        "state": {"type": "string"},
+        "skipped": {"type": ["string", "null"]},
+        "home_win": {"$ref": "#/$defs/probability"},
+        "away_win": {"$ref": "#/$defs/probability"},
+        "made_after_start": {"type": "boolean"},
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "team", "note"],
+            "properties": {
+              "kind": {"$ref": "#/$defs/missing_kind"},
+              "team": {"type": ["string", "null"]},
+              "note": {"type": "string"}
+            }
+          }
+        },
+        "degraded_inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["feature", "kind", "teams"],
+            "properties": {
+              "feature": {"type": "string"},
+              "kind": {"$ref": "#/$defs/missing_kind"},
+              "teams": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "training": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["fit_id", "fit_through_season", "membership"],
+          "properties": {
+            "fit_id": {"type": "integer"},
+            "fit_through_season": {"type": ["integer", "null"]},
+            "membership": {"enum": ["in_sample", "out_of_sample", "unknown"]}
+          }
+        }
+      }
+    }
+  }
+}

@@ -177,3 +177,10 @@ def test_the_stale_notes_of_the_store_are_stable_as_time_passes(
     first, later = build(NOW), build(NOW + timedelta(hours=5))
     assert report_json(first)["games"] != report_json(later)["games"]
     assert inputs_sha256(first) == inputs_sha256(later)
+
+
+def test_the_schema_version_changes_the_fingerprint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A new report shape must publish again, even when no input changed.
+    first = inputs_sha256(_report())
+    monkeypatch.setattr("hockey_model.daily_report.SCHEMA_VERSION", 2)
+    assert inputs_sha256(_report()) != first
