@@ -84,11 +84,15 @@ def _check_projection_inputs(rate: float, level: float) -> None:
         )
 
 
-def _projection(rate: float, level: float) -> Projection:
-    _check_projection_inputs(rate, level)
-    rate = max(rate, _MIN_RATE)
-    low = _poisson_quantile(rate, (1.0 - level) / 2.0)
-    high = _poisson_quantile(rate, (1.0 + level) / 2.0)
+def _projection(rate: float, level: float, where: str) -> Projection:
+    """Return the goal interval of one side. ``where`` names the game and the side in an error."""
+    try:
+        _check_projection_inputs(rate, level)
+        rate = max(rate, _MIN_RATE)
+        low = _poisson_quantile(rate, (1.0 - level) / 2.0)
+        high = _poisson_quantile(rate, (1.0 + level) / 2.0)
+    except ProjectionError as exc:
+        raise ProjectionError(f"{where}: {exc}") from exc
     return Projection(rate, min(float(low), rate), max(float(high), rate), level)
 
 
@@ -217,8 +221,8 @@ class NhlGameModel:
         return GamePrediction(
             home_win=home_win,
             away_win=1.0 - home_win,
-            home_goals=_projection(home_rate, level),
-            away_goals=_projection(away_rate, level),
+            home_goals=_projection(home_rate, level, f"game {game.game_id} {game.home} (home)"),
+            away_goals=_projection(away_rate, level, f"game {game.game_id} {game.away} (away)"),
             missing=tuple(missing),
             credits=credits,
             degraded_inputs=row.imputed,

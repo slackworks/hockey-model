@@ -129,3 +129,9 @@ def test_the_step_limit_leaves_room_for_the_widest_supported_interval() -> None:
 def test_a_rate_below_the_floor_is_raised_to_the_floor(empty_model: NhlGameModel) -> None:
     result = interval(empty_model, 0.0, 0.8)
     assert result.point == 0.1
+
+
+def test_an_error_names_the_game_and_the_side(empty_model: NhlGameModel) -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        interval(empty_model, MAX_RATE + 1.0, 0.8)
+    assert str(caught.value).startswith("game 100 TOR (home): goal interval: ")

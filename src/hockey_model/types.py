@@ -47,7 +47,7 @@ class ProbabilityError(HockeyModelError):
 
 
 class ProjectionError(HockeyModelError):
-    """Raised when a model returns a projection that is malformed or out of range."""
+    """Raised when a projection, or an input to one, is malformed or out of range."""
 
 
 class ModelNotConfiguredError(HockeyModelError):
