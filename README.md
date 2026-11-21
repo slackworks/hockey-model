@@ -418,4 +418,22 @@ uv run pytest
 prek install
 ```
 
+The CI test job and the pre-push hook run `uv run pytest -n auto`, which uses every core.
 See `AGENTS.md` for the commands and rules.
+
+## Release
+
+A tag that starts with `v` runs the release workflow (`.github/workflows/release.yml`).
+The workflow publishes only after the gate passes.
+Release in this order:
+
+1. Rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, and add a new `## [Unreleased]` section above it.
+2. Set `project.version` in `pyproject.toml` to `X.Y.Z`.
+3. Merge both changes to `main`.
+4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
+5. Tag the merge commit `vX.Y.Z`, and push the tag.
+
+The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`.
+Re-run only the failed jobs after a failure, because a run of all jobs builds the files again, and a file with other bytes stops the publish.
+A pre-release version, such as `0.2.0rc1`, makes a pre-release.
+The workflow publishes to no package index.

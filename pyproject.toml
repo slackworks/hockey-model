@@ -15,8 +15,10 @@ hockey-model = "hockey_model.cli:main"
 dev = [
     "hypothesis~=6.170.14",
     "mutmut~=3.8.1",
+    "packaging~=26.3.0",
     "pytest~=9.2.0",
     "pytest-cov~=7.1.0",
+    "pytest-xdist~=3.8.0",
     "ruff~=0.17.3",
     "ty~=0.0.95",
 ]

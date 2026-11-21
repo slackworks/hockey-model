@@ -5,7 +5,7 @@ Hockey player stat and game prediction library. Python 3.14, managed with uv.
 ## Commands
 
 - Install: `uv sync --locked`
-- Run tests: `uv run pytest` (writes `lcov.info` and `coverage.json`)
+- Run tests: `uv run pytest` (writes `lcov.info` and `coverage.json`). The CI test job and the pre-push hook add `-n auto` (pytest-xdist). Do not put the flag in `addopts`: mutmut runs pytest by itself and needs one process.
 - Per-module coverage floor: `uv run python3 scripts/check_per_module_coverage.py`
 - Lint and format: `uv run ruff check .` and `uv run ruff format --check .`
 - Model check: bash scripts/tlc.sh (TLC on specs/daily_prepare.tla; needs Java 11 or later)

@@ -94,6 +94,7 @@ def fakes(tmp_path: Path) -> Path:
         '  echo "release not found" >&2\n'
         "  exit 1\n"
         "fi\n"
+        'if [[ "$1 $2" == "release list" ]]; then printf "%s\\n" "${FAKE_DRAFTS:-}"; exit 0; fi\n'
         'if [[ "$1 $2" == "release create" ]]; then\n'
         '  if grep -qxF "$3" <<<"${FAKE_RELEASES:-}"; then\n'
         '    echo "a release with the same tag name already exists" >&2\n'
