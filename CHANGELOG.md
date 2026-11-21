@@ -46,6 +46,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add a scheduled check that alerts when a game day with games has no `reports-DATE` release, or when every game row of its report was made after the start. A day with no games raises no alert. [feat:report]
 - Skip the backtest and the fit in `daily-prepare.sh` for a day that has its `prepared-DATE` marker and a valid `backtest-DATE.json`. The refresh still runs. `--force`, and the `force` input of a manual `daily-prepare` run, rebuild the day. [feat:report]
 - Add `inputs_sha256` to the daily report JSON, and add `hockey-model report-compare` with `daily-report.sh --skip-unchanged`. A report build that has the inputs of the newest published report does not publish. [feat:report]
+- Add `hockey-model backtest --workers N`, which runs the independent feature builds, fits, and bootstrap runs in worker processes and logs the wall time of each unit. The report and the per-game CSV do not change with N. `daily-prepare.sh` passes `BACKTEST_WORKERS` (default 4). [feat:model]
 
 ### Changed
 

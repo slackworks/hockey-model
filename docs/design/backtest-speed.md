@@ -60,3 +60,40 @@ That replacement is a model change and needs its own issue.
 
 - The golden hash check comes first, so no speed change can merge without proof of the same output.
 - The NumPy bootstrap keeps the standard-library draws, so the block starts stay the same.
+
+## Parallel units (#283)
+
+The backtest is a set of named units.
+Each unit logs `backtest: unit NAME took Ns` on stderr, and the run ends with `backtest: total Ns`.
+`backtest --workers N` runs the two feature builds in up to N worker processes.
+Each worker opens its own read-only connection to the store file, so no worker writes.
+The merge of the results has one fixed order: season, then game start, then game ID (`merge_scored`), because the block bootstrap depends on the order of its input.
+
+### Measured units
+
+Measured on 2026-11-20 on a copy of the real store (`~/.cache/hockey-model/real.db`, upgraded), one Mac, 4 workers for the parallel run.
+
+| Unit | Seconds |
+| --- | --- |
+| build actual rows | 1214 |
+| build guess rows | 3239 |
+| validate elo, elo+xg_form, elo+goalie_gsax, elo+rest (each) | 0.1 |
+| walk-forward fit before 2024-25 and before 2025-26 (each) | 0.1 |
+| score home_rate, elo, model_actual, model_guess incl. bootstrap (each) | 0.1 |
+| total, 1 worker | 4454 |
+| total, 4 workers | 3252 |
+
+The two feature builds are more than 99.9% of the time.
+Every fit and every bootstrap run takes a tenth of a second, so a process pool for them costs more than it saves.
+They stay named units and run in the main process.
+The JSON report and the per-game CSV were byte-identical for 1 and for 4 workers on the real store (checked with `cmp`).
+
+### Target
+
+The longest unit bounds the parallel run: the guess build at about 3251 s.
+`PARALLEL_TARGET_S` in `backtest/runner.py` is 3400 s, the guess build plus the merge and a margin.
+The run prints its total against that target.
+A shorter run needs a smaller longest unit, which means splitting the guess build.
+That split is #286: it records the Elo book state at each season boundary and builds each season from its boundary state.
+#224 changes the cost of every fit unit, but the fits are 0.1 s, so it does not change this table.
+
