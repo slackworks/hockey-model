@@ -59,3 +59,12 @@ def test_an_over_budget_report_is_uploaded_and_published() -> None:
     assert "needs.build.outputs.report_complete == 'true'" in text
     assert "needs.build.result" not in text
     assert "report_complete: ${{ steps.state.outputs.report_complete }}" in text
+
+
+def test_the_gate_step_checks_each_output_before_it_writes_it() -> None:
+    """A jq failure inside an echo argument would pass, and an empty output skips the build."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    gate = text[text.index("\n  gate:\n") : text.index("\n  build:\n")]
+    for field in ("due", "publish", "date", "reason"):
+        assert f"jq -er '.{field} | select(type ==" in gate, field
+    assert '"due=$(jq' not in gate

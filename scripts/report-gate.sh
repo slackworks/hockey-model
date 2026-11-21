@@ -151,7 +151,7 @@ blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
 # store lock, so it answers here: this run builds nothing, and the next trigger runs again.
 # A forced run is the operator's call, and it still queues, so it is not refused here.
 if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
-  echo "report-gate: warning: a daily-prepare run holds the hockey-model-store group, and its" \
+  echo "::warning::report-gate: a daily-prepare run holds the hockey-model-store group, and its" \
     "timeout reaches past the first puck drop of $day. This run would wait behind it and" \
     "publish after the puck drop, so it builds nothing (#163)." >&2
   jq -c --arg tag "$tag" --arg date "$day" \

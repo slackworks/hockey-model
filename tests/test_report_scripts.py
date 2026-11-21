@@ -263,7 +263,9 @@ def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
     payload = json.loads(result.stdout)
     assert payload["due"] is False
     assert payload["reason"] == "prepare-wait"
-    assert "holds the hockey-model-store group" in result.stderr
+    assert (
+        "::warning::report-gate: a daily-prepare run holds the hockey-model-store" in result.stderr
+    )
     assert "after the puck drop" in result.stderr
     # The gate must not read the release, because the run builds nothing.
     assert not any(line.startswith("gh ") for line in _calls(tmp_path))
