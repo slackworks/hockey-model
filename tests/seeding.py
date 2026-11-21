@@ -103,6 +103,18 @@ def add_team_form(
     write_team_games(conn, [row], FETCHED)
 
 
+def add_team_form_without_counts(
+    conn: sqlite3.Connection, game_id: int, team: str, xg_for: float, xg_against: float
+) -> None:
+    """Store one MoneyPuck team-game row whose attempt counts are unknown, as a version 1 row."""
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
+        " attempts_known, fetched_at) VALUES (?,?,?,?,?,NULL,NULL,NULL,NULL,0,?)",
+        (game_id, team, "2026-01-01", xg_for, xg_against, iso_utc(FETCHED)),
+    )
+
+
 def add_goalie_form(
     conn: sqlite3.Connection, game_id: int, nhl_id: int, xg_against: float, goals_against: int
 ) -> None:

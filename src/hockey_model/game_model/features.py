@@ -27,7 +27,10 @@ from hockey_model.store.reads import (
 # The production candidates. The attempt set replaces only xg_form, for the leak test (#77).
 FEATURES = ("xg_form", "goalie_gsax", "rest")
 ATTEMPT_FEATURES = ("attempt_form", "goalie_gsax", "rest")
-TeamFormReader = Callable[[sqlite3.Connection, str, datetime, int], Sequence[tuple[float, float]]]
+TeamFormReader = Callable[
+    [sqlite3.Connection, str, datetime, int],
+    tuple[Sequence[tuple[float, float]], int],
+]
 _FORM_READERS: dict[str, tuple[TeamFormReader, MissingKind]] = {
     "xg_form": (mp_team_form_before, MissingKind.XG_FORM),
     "attempt_form": (mp_attempt_form_before, MissingKind.ATTEMPT_FORM),
@@ -91,9 +94,19 @@ def _share_form(
 ) -> tuple[float, list[MissingInput]]:
     """Return home minus away share of ``read``'s made-for over its total, and the gaps."""
     shares: dict[str, float | None] = {}
+    missing: list[MissingInput] = []
     for team in (game.home, game.away):
-        shares[team] = _share(read(conn, team, cutoff, FORM_WINDOW))
-    missing = [
+        rows, left_out = read(conn, team, cutoff, FORM_WINDOW)
+        shares[team] = _share(rows)
+        if left_out:
+            missing.append(
+                MissingInput(
+                    kind,
+                    team,
+                    f"the form window left out {left_out} of the newest games with unknown counts",
+                )
+            )
+    missing += [
         MissingInput(kind, team, "no MoneyPuck games before this game")
         for team, share in shares.items()
         if share is None

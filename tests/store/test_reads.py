@@ -11,6 +11,7 @@ from seeding import (
     add_injury,
     add_starter_read,
     add_team_form,
+    add_team_form_without_counts,
     record_injury_snapshot,
     utc,
 )
@@ -114,20 +115,21 @@ def test_mp_team_form_is_newest_first_and_hides_recent(store: sqlite3.Connection
     for number in (1, 2, 3):
         add_game(store, number, f"2026-01-0{number}T00:00")
         add_team_form(store, number, "TOR", float(number), 0.5)
-    rows = mp_team_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
+    rows, left_out = mp_team_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
     assert rows == [(2.0, 0.5), (1.0, 0.5)]
-    assert mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(3.0, 0.5)]
+    assert left_out == 0
+    assert mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == ([(3.0, 0.5)], 0)
 
 
 def test_mp_team_form_follows_franchise(store: sqlite3.Connection) -> None:
     add_game(store, 1, "2024-01-01T00:00", home="ARI", away="BOS")
     add_team_form(store, 1, "ARI", 2.5, 1.5)
-    assert mp_team_form_before(store, "UTA", utc("2026-01-01T00:00"), 5) == [(2.5, 1.5)]
+    assert mp_team_form_before(store, "UTA", utc("2026-01-01T00:00"), 5) == ([(2.5, 1.5)], 0)
 
 
 def test_mp_team_form_ignores_a_row_without_a_stored_game(store: sqlite3.Connection) -> None:
     add_team_form(store, 99, "TOR", 2.5, 1.5)
-    assert mp_team_form_before(store, "TOR", utc("2026-01-01T00:00"), 5) == []
+    assert mp_team_form_before(store, "TOR", utc("2026-01-01T00:00"), 5) == ([], 0)
 
 
 def test_mp_goalie_form(store: sqlite3.Connection) -> None:
@@ -190,9 +192,25 @@ def test_mp_attempt_form_is_newest_first_and_hides_recent(store: sqlite3.Connect
     for number in (1, 2, 3):
         add_game(store, number, f"2026-01-0{number}T00:00")
         add_team_form(store, number, "TOR", 0.5, 0.5, attempts=(number, 9))
-    rows = mp_attempt_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
+    rows, left_out = mp_attempt_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
     assert rows == [(2, 9), (1, 9)]
-    assert mp_attempt_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(3, 9)]
+    assert left_out == 0
+    assert mp_attempt_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == ([(3, 9)], 0)
+
+
+def test_mp_attempt_form_counts_null_games_it_leaves_out(store: sqlite3.Connection) -> None:
+    # A version 1 row has NULL attempt counts, and the newest games window holds it.
+    for number in (1, 2, 3):
+        add_game(store, number, f"2026-01-0{number}T00:00")
+        add_team_form(store, number, "TOR", 0.5, 0.5, attempts=(number, 9))
+    add_game(store, 4, "2026-01-04T00:00")
+    add_team_form_without_counts(store, 4, "TOR", 0.5, 0.5)
+    rows, left_out = mp_attempt_form_before(store, "TOR", utc("2026-01-05T00:00"), 2)
+    assert rows == [(3, 9)]
+    assert left_out == 1
+    rows, left_out = mp_attempt_form_before(store, "TOR", utc("2026-01-05T00:00"), 4)
+    assert rows == [(3, 9), (2, 9), (1, 9)]
+    assert left_out == 1
 
 
 def test_the_form_reader_refuses_a_column_that_is_not_known(store: sqlite3.Connection) -> None:

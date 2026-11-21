@@ -11,6 +11,7 @@ from seeding import (
     add_goalie_form,
     add_starter_read,
     add_team_form,
+    add_team_form_without_counts,
     utc,
 )
 
@@ -21,8 +22,10 @@ from hockey_model.game_model.features import (
     FEATURES,
     REST_CAP_DAYS,
     GoalieMode,
+    _share_form,
     build_features,
 )
+from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.types import Player, Slot
 
 START = utc("2026-01-20T00:00")
@@ -308,3 +311,20 @@ def test_attempt_candidates_do_not_read_expected_goals(store: sqlite3.Connection
 def test_an_unknown_feature_name_is_refused(store: sqlite3.Connection) -> None:
     with pytest.raises(ValueError, match="unknown feature 'nope'"):
         features(store, names=("nope",))
+
+
+def test_share_form_notes_the_games_unknown_counts_leave_out(store: sqlite3.Connection) -> None:
+    # The newest game of HOME has NULL attempt counts, and the window still holds it.
+    for number in (1, 2, 3):
+        add_game(store, number, f"2026-01-0{number}T00:00", home=HOME, away="MTL")
+        add_team_form(store, number, HOME, 3.0, 1.0, attempts=(number, 9))
+    add_game(store, 4, "2026-01-04T00:00", home=HOME, away="MTL")
+    add_team_form_without_counts(store, 4, HOME, 3.0, 1.0)
+    add_game(store, 101, "2026-01-04T00:00", home="MTL", away=AWAY)
+    add_team_form(store, 101, AWAY, 1.0, 3.0)
+    share, missing = _share_form(
+        store, game(), utc("2026-01-20T00:00"), mp_attempt_form_before, MissingKind.ATTEMPT_FORM
+    )
+    notes = [m.note for m in missing if m.team == HOME]
+    assert any("left out 1" in note for note in notes)
+    assert share is not None
