@@ -28,34 +28,36 @@ def _range_text(game: Mapping[str, Any], side: str, features: list[str] | None) 
     return "(no interval: run `hockey-model fit` again)"
 
 
+def _plain(text: object) -> str:
+    """Return ``text`` on one line. The report holds text that came from a remote feed."""
+    return " ".join(str(text).split())
+
+
 def _line(game: Mapping[str, Any], features: list[str] | None) -> str:
-    label = f"{game['away']} at {game['home']}"
+    label = _plain(f"{game['away']} at {game['home']}")
     if game["home_win"] is None:
-        return f"{label}: no prediction ({game['skipped'] or 'no reason given'})"
+        return f"{label}: no prediction ({_plain(game['skipped'] or 'no reason given')})"
     home_favored = game["home_win"] >= game["away_win"]
     side, team = ("home", game["home"]) if home_favored else ("away", game["away"])
     chance = game["home_win"] if home_favored else game["away_win"]
-    return f"{label}: {team} {_percent(chance)}% {_range_text(game, side, features)}"
+    return f"{label}: {_plain(team)} {_percent(chance)}% {_range_text(game, side, features)}"
 
 
 def release_summary(report: Mapping[str, Any]) -> list[str]:
-    """Return the summary lines of a report, with a header first, in the order of the games."""
-    try:
-        games = report["games"]
-        if not games:
-            return [NO_GAMES]
-        model = report.get("model")
-        features = None if model is None else list(model["features"])
-        header = (
-            "Win chance of the favorite, with its range "
-            f"(model uncertainty only, {report['level']:.0%} level):"
-        )
-        return [header, *(_line(game, features) for game in games)]
-    except (KeyError, TypeError) as exc:
-        raise HockeyModelError(
-            f"report-summary: the report is missing a field ({type(exc).__name__}: {exc}); "
-            "build the report with the current code"
-        ) from exc
+    """Return the summary lines of a report, with a header first, in the order of the games.
+
+    The report MUST have passed the report schema, which ``summarize_file`` checks first.
+    """
+    games = report["games"]
+    if not games:
+        return [NO_GAMES]
+    model = report.get("model")
+    features = None if model is None else list(model["features"])
+    header = (
+        "Win chance of the favorite, with its range "
+        f"(model uncertainty only, {report['level']:.0%} level):"
+    )
+    return [header, *(_line(game, features) for game in games)]
 
 
 def summarize_file(path: Path) -> list[str]:

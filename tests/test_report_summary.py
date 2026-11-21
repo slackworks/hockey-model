@@ -12,7 +12,6 @@ from report_script_support import report_game, valid_report
 
 from hockey_model.cli import main
 from hockey_model.report_summary import release_summary
-from hockey_model.types import HockeyModelError
 
 
 def _report(*games: dict[str, Any], features: list[str] | None = None) -> dict[str, Any]:
@@ -116,9 +115,11 @@ def test_the_command_refuses_a_report_that_fails_the_schema(
     assert "daily_report.schema.json" in capsys.readouterr().err
 
 
-def test_a_malformed_report_raises_with_the_fix() -> None:
-    with pytest.raises(HockeyModelError, match="report-summary"):
-        release_summary({"games": [{"home": "MTL"}]})
+def test_text_from_the_report_stays_on_one_line() -> None:
+    skipped = report_game(home_win=None, interval=None, skipped="late\n\n# heading\r\nnext")
+    lines = release_summary(_report(skipped))
+    assert len(lines) == 2
+    assert lines[1] == "TOR at MTL: no prediction (late # heading next)"
 
 
 def test_a_game_without_the_optional_win_interval_key_says_there_is_no_interval() -> None:
