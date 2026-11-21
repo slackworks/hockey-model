@@ -110,15 +110,38 @@ def _first_confirmed(
             f"{iso_utc(kept.read_at)}) and is used; {player.full_name} was confirmed later "
             f"({read.source}, {iso_utc(read.fetched_at)})"
         )
-        notes.append(MissingInput(MissingKind.GOALIE_UNCONFIRMED, team, text))
+        notes.append(MissingInput(MissingKind.GOALIE_CONFLICT, team, text))
     return kept
+
+
+def _newest_likely(
+    kept: GoalieStart | None,
+    read: StarterReadRow,
+    player: Player,
+    team: str,
+    conflicts: list[MissingInput],
+) -> GoalieStart:
+    """Return the start of the newest likely read, and note when it replaces another goalie."""
+    if kept is not None and player.canonical_id != kept.player.canonical_id:
+        text = (
+            f"{kept.player.full_name} was likely ({kept.source.value}, {iso_utc(kept.read_at)}); "
+            f"{player.full_name} is likely later ({read.source}, {iso_utc(read.fetched_at)}) "
+            "and is used"
+        )
+        conflicts.append(MissingInput(MissingKind.GOALIE_CONFLICT, team, text))
+    return _start_from(read, player)
 
 
 def _from_reads(
     reads: list[StarterReadRow], goalies: _Goalies, team: str
 ) -> tuple[GoalieStart | None, list[MissingInput]]:
-    """Pick the earliest confirmed read, else the newest likely read."""
+    """Pick the earliest confirmed read, else the newest likely read.
+
+    A conflict between likely reads shows only when no read is confirmed, because a confirmed
+    read decides the start.
+    """
     notes: list[MissingInput] = []
+    conflicts: list[MissingInput] = []
     confirmed: GoalieStart | None = None
     likely: GoalieStart | None = None
     for read in reads:
@@ -130,9 +153,10 @@ def _from_reads(
         elif read.status is StarterStatus.CONFIRMED:
             confirmed = _first_confirmed(confirmed, read, player, team, notes)
         elif read.status is StarterStatus.LIKELY:
-            likely = _start_from(read, player)
+            likely = _newest_likely(likely, read, player, team, conflicts)
     if confirmed is not None:
         return confirmed, notes
+    notes.extend(conflicts)
     if likely is not None:
         note = f"{likely.player.full_name} is likely, not confirmed"
         notes.append(MissingInput(MissingKind.GOALIE_UNCONFIRMED, team, note))

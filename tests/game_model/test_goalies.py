@@ -75,7 +75,7 @@ def test_resolve_first_confirmed_wins(season: sqlite3.Connection) -> None:
     assert start is not None
     assert names(start) == "C. Ingram"
     assert (start.source, start.status) == (StarterSource.DAILY_FACEOFF, StarterStatus.CONFIRMED)
-    assert kinds(missing) == [MissingKind.GOALIE_UNCONFIRMED]
+    assert kinds(missing) == [MissingKind.GOALIE_CONFLICT]
     note = missing[0].note
     assert missing[0].team == "TOR"
     assert "C. Ingram was confirmed first (daily_faceoff, 2026-01-19T14:00" in note
@@ -128,7 +128,34 @@ def test_resolve_likely_reports_unconfirmed(season: sqlite3.Connection) -> None:
     assert start is not None
     assert names(start) == "C. Ingram"
     assert start.status is StarterStatus.LIKELY
+    assert kinds(missing) == [MissingKind.GOALIE_CONFLICT, MissingKind.GOALIE_UNCONFIRMED]
+    assert "J. Woll was likely (espn, 2026-01-19T12:00" in missing[0].note
+    assert "C. Ingram is likely later (daily_faceoff, 2026-01-19T13:00" in missing[0].note
+
+
+def test_two_likely_reads_of_the_same_goalie_are_not_a_conflict(season: sqlite3.Connection) -> None:
+    for source, stamp in (("espn", "2026-01-19T12:00"), ("daily_faceoff", "2026-01-19T13:00")):
+        add_starter_read(season, 100, "TOR", source, "Connor Ingram", "likely", fetched_at=stamp)
+    _, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
     assert kinds(missing) == [MissingKind.GOALIE_UNCONFIRMED]
+
+
+def test_a_conflict_between_likely_reads_is_hidden_by_a_confirmed_read(
+    season: sqlite3.Connection,
+) -> None:
+    add_starter_read(
+        season, 100, "TOR", "espn", "Joseph Woll", "likely", fetched_at="2026-01-19T11:00"
+    )
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "likely", fetched_at="2026-01-19T12:00"
+    )
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "confirmed", fetched_at="2026-01-19T13:00"
+    )
+    start, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
+    assert start is not None
+    assert start.status is StarterStatus.CONFIRMED
+    assert missing == ()
 
 
 def test_resolve_confirmed_beats_a_newer_likely(season: sqlite3.Connection) -> None:

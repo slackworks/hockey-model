@@ -381,10 +381,11 @@ def test_a_zero_total_game_is_left_out_of_the_share_and_named(store: sqlite3.Con
     add_team_form(store, 400, HOME, 0.0, 0.0)
     row = features(store)
     assert row.values["xg_form"] == pytest.approx(0.75 - 0.25)
-    notes = [m for m in row.missing if m.kind is MissingKind.XG_FORM]
+    notes = [m for m in row.missing if m.kind is MissingKind.FORM_GAMES_LEFT_OUT]
     assert [(m.team, m.note) for m in notes] == [
         (HOME, "1 of 4 MoneyPuck games have a zero total and are left out")
     ]
+    assert MissingKind.XG_FORM not in kinds(row)
     assert row.uses_moneypuck
     assert "xg_form" not in [d.feature for d in row.imputed]
 

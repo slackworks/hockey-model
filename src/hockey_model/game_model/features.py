@@ -117,7 +117,7 @@ def _share_form(
             gaps.append(MissingInput(kind, team, reason))
         elif skipped:
             note = f"{skipped} of {len(rows)} MoneyPuck games have a zero total and are left out"
-            left_out.append(MissingInput(kind, team, note))
+            left_out.append(MissingInput(MissingKind.FORM_GAMES_LEFT_OUT, team, note))
     home, away = shares[game.home], shares[game.away]
     if home is None or away is None:
         return NEUTRAL_FORM, gaps, left_out

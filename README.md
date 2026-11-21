@@ -203,7 +203,7 @@ A game has these fields.
 | `degraded_inputs` | list | Features set to a neutral value for a team with no data: `feature`, `kind`, and `teams`. |
 | `training` | object or null | `fit_id`, `fit_through_season`, and `membership` (`in_sample`, `out_of_sample`, or `unknown`). Null when `skipped` holds a reason. |
 
-`missing.kind` and `degraded_inputs[].kind` hold one of `goalie_unconfirmed`, `goalie_unknown`, `xg_form`, `attempt_form`, `goalie_form`, `stale_source`, `late_run`, or `rest_unknown`.
+`missing.kind` and `degraded_inputs[].kind` hold one of `goalie_unconfirmed`, `goalie_unknown`, `goalie_conflict`, `xg_form`, `attempt_form`, `form_games_left_out`, `goalie_form`, `stale_source`, `late_run`, or `rest_unknown`.
 
 One report, with one game:
 
