@@ -92,6 +92,7 @@ def check_allowed(url: str) -> None:
         SOURCE,
         url,
         "this MoneyPuck URL is not on the allowed list; fetch only the listed CSV and ZIP files",
+        permanent=True,
     )
 
 

@@ -26,8 +26,20 @@ MAX_BACKOFF_S = 30.0
 _RETRY_AFTER = re.compile(r"[0-9]{1,6}")
 
 
+# The statuses that a retry cannot change. A 404 may turn into a 200 once the resource is
+# published, and a 408 or a 425 asks the client to try again, so none of the three is here.
+PERMANENT_STATUSES = frozenset({400, 401, 403, 410, 451})
+
+
 class _Refused(Exception):
-    """A response the client will not accept: a redirect off the allowlist, or too large."""
+    """A response the client will not accept: a redirect off the allowlist, or too large.
+
+    ``permanent`` is False when a later read can succeed, such as a body that was too slow.
+    """
+
+    def __init__(self, message: str, *, permanent: bool = True) -> None:
+        super().__init__(message)
+        self.permanent = permanent
 
 
 class _PolicyRedirect(urllib.request.HTTPRedirectHandler):
@@ -87,7 +99,8 @@ def _read_bounded(
         chunks.append(chunk)
     raise _Refused(
         f"response body not finished within {policy.total_timeout_s:g} s; "
-        "raise total_timeout_s in HOST_POLICIES"
+        "raise total_timeout_s in HOST_POLICIES",
+        permanent=False,
     )
 
 
@@ -154,11 +167,13 @@ class HttpClient:
             except HTTPError as exc:
                 exc.close()
                 if not _is_retryable_status(exc.code):
-                    raise SourceError(source, url, f"HTTP {exc.code}", permanent=True) from exc
+                    raise SourceError(
+                        source, url, f"HTTP {exc.code}", permanent=exc.code in PERMANENT_STATUSES
+                    ) from exc
                 reason = f"HTTP {exc.code}"
                 delay = _backoff_s(attempt, exc.headers.get("Retry-After"))
             except _Refused as exc:
-                raise SourceError(source, url, str(exc)) from exc
+                raise SourceError(source, url, str(exc), permanent=exc.permanent) from exc
             except (OSError, HTTPException) as exc:
                 reason = f"network error {exc}"
                 delay = _backoff_s(attempt, None)
