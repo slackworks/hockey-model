@@ -31,27 +31,41 @@ The harmonic schedule summed to `BASE_TAIL` times the `n`-th harmonic number, wh
 
 A registered record counts as a look when it exists, whether or not it has run.
 This counts more looks than the runs that happened, so it errs on the strict side.
-Deleting a registered record that never ran is not detected, and the later records then fail the look check.
+Deleting a registered record that never ran is not detected, and a new record can then take its number (#291).
 Withdraw such a record instead (see Withdrawn records).
 
 `MAX_LOOKS` caps the look number.
 It is the last look whose tail leaves at least `MIN_TAIL_RESAMPLES` bootstrap means outside each end, at the current `BOOTSTRAP_RESAMPLES`.
 A smaller tail would rest on too few resamples, and the bootstrap refuses a tail that cuts no resample.
 More resamples raise the cap.
-For a list of 2,800 per-game values the bootstrap takes about 0.1 s at 1,000 resamples and about 1.0 s at 10,000 (measured 2026-11-21).
-More resamples also change the hashes of the golden backtest check, and they lengthen the mutation shards (#274, #176).
-A hypothesis that needs more looks MUST be a new record with a new cohort, not a further look.
+The registry has no further confirmation look past the cap: raise `BOOTSTRAP_RESAMPLES`, or run an exploration record, which cannot promote.
 
 ## Withdrawn records
 
 A record with the status `withdrawn` never ran and never will.
 It keeps its file and its place in the history, so the registry shows that the plan changed.
 It spends no look, holds no result, and cannot return to another status.
-The checker refuses a result on a withdrawn record.
-The checker also reads the history, and it refuses a record that a commit stored as withdrawn and that has another status now.
-`hockey-model experiments run` refuses it, because only a registered record runs.
+The checker enforces these rules:
+
+- A withdrawn record holds no result.
+- A commit that stored the status `withdrawn` fixes it for every later commit.
+- Only a registered record can be withdrawn. A record that was `inconclusive` ran and saw the games, even when it wrote no result, so its look is spent.
+- A withdrawn record has no `experiments/results/<id>-games.csv`, in the working tree or in any commit, because a run writes that file.
+- `hockey-model experiments run` refuses a withdrawn record of either cohort.
+
+Withdraw a record before any later confirmation record counts it.
+A later record sets its `look_number` from the records before it, and `look_number` is frozen.
+Withdrawing an earlier record afterwards fails the look check of the later record, and the withdrawal cannot be undone.
+The look message names the withdrawn records, so the cause is visible.
+Run `hockey-model experiments check` before the commit that withdraws a record.
+
+The checker cannot tell a record withdrawn before it ran from a run that was reverted before the commit and left no file.
+That limit is the cost of a manual commit after a run.
+
 Record 0001 was withdrawn when the schedule changed from harmonic to summable, and record 0002 replaces it as look 1 with the summable bar.
 Only `status` changed in 0001, so its frozen fields still match its registration commit.
+
+A JSON file in the registry whose name is not a record id (`NNNN-slug.json`) is an error, because the look count would skip it.
 
 ## Options not taken
 
