@@ -29,17 +29,21 @@ A step that raised, or that named a reason with `progress.stopped`, ends with `s
 A step with a known count shows `done=N/TOTAL`, and a step with a time budget shows what is left.
 
 Library code only calls the logger, so a test or the consumer API stays quiet.
-`cli.py` installs a stderr handler for the store commands, so the JSON on stdout does not change.
+`cli.py` wraps the store commands in `progress.to_stderr`, so the JSON on stdout does not change. The block restores the level and the propagation of the logger when it ends.
 
 ## Where the steps are
 
 - `store_cli.run_store_command` runs each long command in a step named `run`. The heartbeat of that step covers the fit, the backtest, and every command with no count of its own.
 - The refresh runs the score days and the boxscores of each backfill window in a step named with the date range. The steps show the count read and left, the budget left, and the reason for a stop.
-- `run_units` of the backtest runs in a step with the count of units.
+- A store command that returns a failure code ends its step with `stop` and the exit code.
+- The goalie files of MoneyPuck run in a step with the count of seasons reached.
+- `run_units` of the backtest runs in a step with the count of units. Each caller names the step: `validate`, `walk-forward`, `score`, or `build-rows`.
 - `scripts/run-step.sh` writes the same lines for the shell scripts. `daily-prepare.sh` wraps the upgrade, the refresh, the backtest, and the fit, and `daily-report.sh` wraps its three steps.
 
 ## Edge cases
 
 - The budget left of a refresh comes from the time of the last read, so the progress line never reads the clock of the refresh again.
 - A step name is one word, so a line splits on spaces. A date range in the name uses two dots.
-- The heartbeat thread is a daemon, and it stops in a `finally`, also when the step raises.
+- The heartbeat thread is a daemon, and it stops in a `finally`, also when the step raises. One lock covers the check, the tick, and the next timer, so no tick follows the `end` line.
+- A reason is one line of printable text. An empty reason prints a fixed text. A reason that a step named stays when the step raises.
+- A step reads the budget once, at its start, and counts down with its own clock. The value is an estimate for the log. The refresh still decides with its own clock.
