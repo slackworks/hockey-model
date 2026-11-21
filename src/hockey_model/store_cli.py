@@ -327,22 +327,9 @@ def _backtest(args: argparse.Namespace) -> tuple[object, int]:
 
 def _experiments(args: argparse.Namespace) -> tuple[object, int]:
     """Handle the experiments subcommands."""
-    command = getattr(args, "experiment_command", None)
-    if command == "check":
-        from hockey_model.experiments.check import check_all
+    from hockey_model.experiments.command import run_experiments_command
 
-        result = check_all()
-        return result, 0 if result["ok"] else 1
-    if command == "run":
-        conn = connect(db_path_from_env(os.environ))
-        try:
-            from hockey_model.experiments.check import run_experiment
-
-            result, _ = run_experiment(args.record_id, conn, args.games_out, workers=args.workers)
-            return result, 0
-        finally:
-            conn.close()
-    raise HockeyModelError("experiments: specify check or run")
+    return run_experiments_command(args)
 
 
 def _store(args: argparse.Namespace) -> tuple[object, int]:

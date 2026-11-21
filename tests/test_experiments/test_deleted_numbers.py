@@ -5,9 +5,12 @@ from pathlib import Path
 
 import pytest
 from experiment_support import register
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from hockey_model.experiments.check import check_all
-from hockey_model.experiments.history import deleted_record_ids
+from hockey_model.experiments.history import deleted_record_ids, outlived, parse_deletion_log
+from hockey_model.types import HockeyModelError
 
 _SPENT = {
     "status": "rejected",
@@ -131,3 +134,85 @@ def test_the_registry_of_this_repository_passes() -> None:
     if not (root / ".git").exists():
         pytest.skip("the mutation copy has no git history")
     assert check_all(repo_root=root)["ok"] is True
+
+
+def test_two_records_deleted_in_one_commit_are_both_flagged(repo: Path, registry_dir: Path) -> None:
+    register(registry_dir, {"id": "0001-first", "look_number": 1})
+    register(registry_dir, {"id": "0002-second", "look_number": 2})
+    register(registry_dir, _SPENT | {"id": "0003-ran", "look_number": 3})
+    _commit(repo, "register three records")
+    _git(repo, "rm", "-q", "experiments/0001-first.json", "experiments/0002-second.json")
+    _git(repo, "commit", "-q", "-m", "remove two records")
+    assert deleted_record_ids(["0003-ran"], repo) == ["0001-first", "0002-second"]
+
+
+def test_a_record_that_came_back_is_not_flagged_and_its_second_deletion_is(
+    repo: Path, registry_dir: Path
+) -> None:
+    register(registry_dir, {"id": "0001-unrun", "look_number": 1})
+    _commit(repo, "register the first record")
+    _remove(repo, "0001-unrun")
+    register(registry_dir, {"id": "0001-unrun", "look_number": 1})
+    register(registry_dir, _SPENT | {"id": "0002-ran", "look_number": 2})
+    _commit(repo, "the record comes back, and a higher one is registered")
+    assert deleted_record_ids(["0001-unrun", "0002-ran"], repo) == []
+    _remove(repo, "0001-unrun")
+    assert deleted_record_ids(["0002-ran"], repo) == ["0001-unrun"]
+
+
+_HEX = st.text(alphabet="0123456789abcdef", min_size=40, max_size=40)
+_IDS = st.from_regex(r"[0-9]{4}-[a-z][a-z0-9]{0,8}", fullmatch=True)
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    commits=st.lists(
+        st.tuples(_HEX, st.lists(st.tuples(_IDS, st.sampled_from([".json", ".csv"])), max_size=4)),
+        max_size=5,
+    )
+)
+def test_the_deletion_log_gives_back_the_json_files_that_it_was_built_from(
+    commits: list[tuple[str, list[tuple[str, str]]]],
+) -> None:
+    text = ""
+    for sha, files in commits:
+        text += f"commit:{sha}\n\n" + "".join(f"experiments/{n}{ext}\n" for n, ext in files)
+    expected = [(sha, n) for sha, files in commits for n, ext in files if ext == ".json"]
+    assert parse_deletion_log(text) == expected
+
+
+@settings(max_examples=100, deadline=None)
+@given(text=st.text(max_size=200))
+def test_the_deletion_log_parser_returns_pairs_or_raises_the_package_error(text: str) -> None:
+    try:
+        pairs = parse_deletion_log(text)
+    except HockeyModelError:
+        return
+    assert all(isinstance(commit, str) and isinstance(name, str) for commit, name in pairs)
+
+
+def test_a_file_name_before_any_commit_is_refused() -> None:
+    with pytest.raises(HockeyModelError, match="before any commit"):
+        parse_deletion_log("experiments/0001-a.json\n")
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    deleted=st.integers(0, 9998),
+    others=st.lists(st.tuples(st.integers(0, 9999), st.booleans()), max_size=8),
+)
+def test_a_record_is_outlived_exactly_when_a_higher_number_is_a_confirmation(
+    deleted: int, others: list[tuple[int, bool]]
+) -> None:
+    kinds = {f"{number:04d}-x": confirmation for number, confirmation in others}
+    expected = any(
+        number > deleted and confirmation
+        for number, confirmation in ((int(i[:4]), c) for i, c in kinds.items())
+    )
+    ids = list(kinds)
+    assert outlived(f"{deleted:04d}-d", ids, kinds.__getitem__) is expected
+    assert outlived(f"{deleted:04d}-d", reversed(ids), kinds.__getitem__) is expected
+
+
+def test_a_name_that_is_not_a_record_id_never_outlives_a_record() -> None:
+    assert outlived("0001-a", ["9999", "notes", "0002_a"], lambda _: True) is False

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from hockey_model.experiments.looks import CONFIRMATION
@@ -111,6 +112,8 @@ def history_unavailable_reason(repo_root: Path) -> str | None:
         return "not a git work tree"
     if not _has_head(repo_root):
         return "the repository has no commit yet"
+    if _git(["rev-parse", "--is-shallow-repository"], repo_root).strip() == "true":
+        return "the repository is a shallow clone"
     return None
 
 
@@ -155,16 +158,46 @@ def _deleted_below_a_confirmation(gone: set[str], repo_root: Path) -> set[str]:
         repo_root,
     )
     found: set[str] = set()
-    commit = ""
-    for line in log.splitlines():
-        if line.startswith("commit:"):
-            commit = line.removeprefix("commit:")
-            continue
-        record_id = Path(line.strip()).stem
-        if record_id in gone and line.strip().endswith(".json"):
-            if _was_outlived(record_id, commit, repo_root):
-                found.add(record_id)
+    for commit, record_id in parse_deletion_log(log):
+        if record_id in gone and _was_outlived(record_id, commit, repo_root):
+            found.add(record_id)
     return found
+
+
+def parse_deletion_log(text: str) -> list[tuple[str, str]]:
+    """Return ``(commit, record_id)`` for each JSON file that a commit deleted.
+
+    ``text`` is the output of ``git log --diff-filter=D --name-only --format=commit:%H``. A
+    file name before the first ``commit:`` line means that the output is not a log of this
+    form, and it raises.
+    """
+    pairs: list[tuple[str, str]] = []
+    commit: str | None = None
+    for line in text.splitlines():
+        name = line.strip()
+        if name.startswith("commit:"):
+            commit = name.removeprefix("commit:")
+        elif name:
+            if commit is None:
+                raise HockeyModelError(
+                    f"read the deletion log: the file name {name!r} comes before any commit; "
+                    "the log must use --format=commit:%H"
+                )
+            if name.endswith(".json"):
+                pairs.append((commit, Path(name).stem))
+    return pairs
+
+
+def outlived(
+    record_id: str, other_ids: Iterable[str], is_confirmation: Callable[[str], bool]
+) -> bool:
+    """Return True when a record with a higher number than ``record_id`` is a confirmation."""
+    return any(
+        RECORD_STEM.fullmatch(other) is not None
+        and other[:4] > record_id[:4]
+        and is_confirmation(other)
+        for other in other_ids
+    )
 
 
 def _was_outlived(record_id: str, commit: str, repo_root: Path) -> bool:
@@ -173,12 +206,12 @@ def _was_outlived(record_id: str, commit: str, repo_root: Path) -> bool:
     if _field_at(f"{commit}^", relative, "cohort", repo_root) != CONFIRMATION:
         return False
     names = _git(["ls-tree", "--name-only", commit, f"{REGISTRY_DIR_NAME}/"], repo_root).split()
-    return any(
-        RECORD_STEM.fullmatch(other.stem)
-        and other.stem[:4] > record_id[:4]
-        and _field_at(commit, record_relative_path(other.stem), "cohort", repo_root) == CONFIRMATION
-        for other in map(Path, names)
-        if other.suffix == ".json"
+    return outlived(
+        record_id,
+        (Path(name).stem for name in names if name.endswith(".json")),
+        lambda other: (
+            _field_at(commit, record_relative_path(other), "cohort", repo_root) == CONFIRMATION
+        ),
     )
 
 
