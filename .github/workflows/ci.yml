@@ -15,9 +15,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # A pull request that changes only Markdown skips the validation and test jobs. A job that an
+  # `if` skips counts as passed for a required check, so the pull request stays mergeable. A path
+  # filter on the trigger would leave the check pending, which blocks the merge. A push to main
+  # runs every job. editorconfig, smoke, and zizmor always run, because the wheel holds README.md.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      # The diff needs the base commit, so the checkout takes the full history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -o pipefail
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only "$BASE_SHA" HEAD | bash scripts/ci-changes.sh >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   validation:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,7 +60,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: validation
+    needs: [changes, validation]
+    if: needs.changes.outputs.code == 'true'
     steps:
       # The registry checker reads the git history of each record.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
