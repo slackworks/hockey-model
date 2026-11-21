@@ -66,6 +66,16 @@ CREATE TABLE model_fits_v5 (
     created_at TEXT NOT NULL
 )
 """
+# The archive of the values that the 6->7 step found in the dropped columns. A fresh store
+# has no such value, so schema.sql does not create the table.
+_RETIRED_NHL_IDS = """
+CREATE TABLE IF NOT EXISTS retired_nhl_ids (
+    source_table TEXT NOT NULL,
+    observation TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    nhl_id INTEGER NOT NULL
+)
+"""
 # A stored row is known when it carries all four counts. The flag is derived, so the
 # rebuild writes it from the counts instead of trusting a column that a version 2 store
 # may not have.
@@ -135,6 +145,20 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # A row that an earlier version wrote keeps NULL, which means that the cause of the
     # failure is unknown. The reader counts it as transient.
     5: ("ALTER TABLE source_reads ADD COLUMN permanent INTEGER",),
+    # No code wrote or read starter_reads.nhl_id or injury_reads.nhl_id (#73). A value that a
+    # store holds there is copied to retired_nhl_ids, with every other column of its row,
+    # before the column is dropped. A store that holds no value gets an empty archive table.
+    6: (
+        _RETIRED_NHL_IDS,
+        "INSERT INTO retired_nhl_ids (source_table, observation, fetched_at, nhl_id)"
+        " SELECT 'starter_reads', json_array(game_id, team, source, goalie_name, status),"
+        " fetched_at, nhl_id FROM starter_reads WHERE nhl_id IS NOT NULL",
+        "INSERT INTO retired_nhl_ids (source_table, observation, fetched_at, nhl_id)"
+        " SELECT 'injury_reads', json_array(team, player_name, status, return_date),"
+        " fetched_at, nhl_id FROM injury_reads WHERE nhl_id IS NOT NULL",
+        "ALTER TABLE starter_reads DROP COLUMN nhl_id",
+        "ALTER TABLE injury_reads DROP COLUMN nhl_id",
+    ),
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.

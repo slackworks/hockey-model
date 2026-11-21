@@ -14,7 +14,8 @@ def _store(held: tuple[bool, ...]) -> sqlite3.Connection:
     tables: dict[str, list[str]] = {}
     for requirement, present in zip(REQUIREMENTS, held, strict=True):
         columns = tables.setdefault(requirement.table, [])
-        if present:
+        # A held requirement has its column, or lacks it when the version dropped the column.
+        if present == requirement.present:
             rule = " NOT NULL" if requirement.not_null else ""
             columns.append(f"{requirement.column} TEXT{rule}")
     for table, columns in tables.items():

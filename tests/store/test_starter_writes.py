@@ -40,11 +40,11 @@ def test_write_starter_reads_matches_home_and_away(conn: sqlite3.Connection) -> 
     result = write_starter_reads(conn, [read("TOR", "A"), read("UTA", "B")], T0)
     assert (result.written, result.unmatched) == (2, ())
     rows = conn.execute(
-        "SELECT game_id, team, source, goalie_name, nhl_id, status FROM starter_reads ORDER BY team"
+        "SELECT game_id, team, source, goalie_name, status FROM starter_reads ORDER BY team"
     ).fetchall()
     assert rows == [
-        (2026020001, "TOR", "espn", "A", None, "likely"),
-        (2026020001, "UTA", "espn", "B", None, "likely"),
+        (2026020001, "TOR", "espn", "A", "likely"),
+        (2026020001, "UTA", "espn", "B", "likely"),
     ]
 
 
@@ -104,11 +104,11 @@ def test_write_injury_reads_stores_each_player(conn: sqlite3.Connection) -> None
     ]
     assert write_injury_reads(conn, reads, T0) == 2
     rows = conn.execute(
-        "SELECT team, player_name, nhl_id, status, return_date FROM injury_reads ORDER BY team"
+        "SELECT team, player_name, status, return_date FROM injury_reads ORDER BY team"
     ).fetchall()
     assert rows == [
-        ("ANA", "A.J. Greer", None, "Injured Reserve", "2026-11-11"),
-        ("BOS", "Some Player", None, "Day-To-Day", None),
+        ("ANA", "A.J. Greer", "Injured Reserve", "2026-11-11"),
+        ("BOS", "Some Player", "Day-To-Day", None),
     ]
 
 

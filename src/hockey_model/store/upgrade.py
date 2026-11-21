@@ -243,7 +243,7 @@ def _refuse_a_short_shape(conn: sqlite3.Connection) -> None:
     earned, missing = earned_version(conn)
     if missing is not None and earned < SCHEMA_VERSION:
         raise StoreError(
-            f"the steps ran, but {missing.table} still lacks {missing.column}, so the store "
+            f"the steps ran, but {missing.shortfall}, so the store "
             f"holds version {earned} and not {SCHEMA_VERSION}; restore the backup"
         )
 
@@ -330,7 +330,7 @@ def _stamp_ahead_note(path: Path, earned: int, missing: Requirement) -> str:
     return (
         f"the stamp of {str(path)!r} named a newer version than its tables hold; the tables "
         f"earn version {earned}, because version {missing.version} needs "
-        f"{missing.table}.{missing.column}. Every change from version {earned} runs again, "
+        f"{missing.need}. Every change from version {earned} runs again, "
         "and the ledger records it."
     )
 

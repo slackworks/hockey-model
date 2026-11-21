@@ -57,8 +57,8 @@ def write_starter_reads(
             unmatched.append(f"{read.team} {read.start.isoformat()}")
             continue
         conn.execute(
-            "INSERT INTO starter_reads (game_id, team, source, goalie_name, nhl_id, status,"
-            " fetched_at) VALUES (?,?,?,?,NULL,?,?)",
+            "INSERT INTO starter_reads (game_id, team, source, goalie_name, status, fetched_at)"
+            " VALUES (?,?,?,?,?,?)",
             (game_id, read.team, read.source.value, read.goalie_name, read.status.value, stamp),
         )
         written += 1
