@@ -72,8 +72,9 @@ vars == <<store, calm, run, exitCode>>
 
 Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
-\* A permanent failure needs no span. A URL in Blocked fails only with a permanent status,
-\* and any other URL fails only with a transient one, so no streak mixes the two kinds.
+\* A permanent failure needs no span. The model gives each URL one kind of failure: a URL in
+\* Blocked fails only with a permanent status, and any other URL fails only with a transient
+\* one. A streak that mixes the two kinds is a case of tests/store/test_permanent_gaps.py.
 Abandoned(u) == streak[u] >= AbandonReads /\ (span[u] \/ Blocked(u))
 \* _day_complete(): a good read after the day closed.
 Complete(d) == okRead[Score(d)] /\ d \notin open

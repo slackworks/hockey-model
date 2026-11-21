@@ -224,8 +224,8 @@ Day 1 is the oldest day, so window 1 holds days 3 and 4, and day 4 is open.
 
 `specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, and the other constants as above.
 
-`specs/daily_prepare_blocked.cfg` is a small model with one broken score day whose failure is permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {}`, `BlockedScore = {1}`, `BlockedBox = {}`, and the other constants as above.
-TLC finds 14,992 distinct states in it, and every property of the main config holds.
+`specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, and the other constants as above.
+TLC finds 11,338 distinct states in it, and every property of the main config holds.
 
 With these values, TLC finds 27,181,712 distinct states in the first model, and 295,722 in the stall model.
 Before the arrival step, the counts were 4,000,218 and 16,050.
@@ -563,8 +563,9 @@ vars == <<store, calm, run, exitCode>>
 
 Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
-\* A permanent failure needs no span. A URL in Blocked fails only with a permanent status,
-\* and any other URL fails only with a transient one, so no streak mixes the two kinds.
+\* A permanent failure needs no span. The model gives each URL one kind of failure: a URL in
+\* Blocked fails only with a permanent status, and any other URL fails only with a transient
+\* one. A streak that mixes the two kinds is a case of tests/store/test_permanent_gaps.py.
 Abandoned(u) == streak[u] >= AbandonReads /\ (span[u] \/ Blocked(u))
 \* _day_complete(): a good read after the day closed.
 Complete(d) == okRead[Score(d)] /\ d \notin open
@@ -909,9 +910,9 @@ CONSTANTS
     RetryTicks = 2
     OpenDays = {2}
     BrokenScore = {1}
-    BrokenBox = {}
+    BrokenBox = {2}
     BlockedScore = {1}
-    BlockedBox = {}
+    BlockedBox = {2}
     OtherBroken = FALSE
     ArrivalsCount = FALSE
     BacklogFirst = FALSE
