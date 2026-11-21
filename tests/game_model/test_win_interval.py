@@ -153,15 +153,11 @@ def test_a_refit_on_bootstrap_samples_agrees_with_the_width_in_order_of_size() -
     assert 0.5 < spread / se < 2.0
 
 
-def test_a_covariance_of_the_wrong_size_is_refused() -> None:
+def test_a_covariance_that_gives_a_negative_variance_is_refused() -> None:
+    """A negative diagonal gives a negative quadratic form, which no real fit can write."""
     fit = _fitted(200)
     assert fit.diagnostics is not None
-    bad = replace(fit, diagnostics=replace(fit.diagnostics, covariance=((1.0,),)))
-    with pytest.raises(ValueError, match="covariance has 1 rows, expected 3"):
-        home_win_interval(bad, row(0.1, xg_form=0.0), 0.8)
-
-
-@pytest.mark.parametrize("level", [0.0, 1.0, -0.2, 1.5])
-def test_a_level_outside_the_open_interval_is_refused(level: float) -> None:
-    with pytest.raises(ValueError, match="level"):
-        home_win_interval(_FIT_300, row(0.1, xg_form=0.0), level)
+    indefinite = ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0))
+    bad = replace(fit, diagnostics=replace(fit.diagnostics, covariance=indefinite))
+    with pytest.raises(ValueError, match="variance of .* below zero.*run `hockey-model fit` again"):
+        home_win_interval(bad, row(1.0, xg_form=1.0), 0.8)

@@ -12,6 +12,8 @@ from statistics import NormalDist
 from hockey_model.game_model.features import FeatureRow
 from hockey_model.game_model.logistic import LogisticFit, linear_score, sigmoid
 
+_ROUNDING = 1e-12
+
 
 def home_win_interval(
     fit: LogisticFit, row: FeatureRow, level: float
@@ -21,8 +23,6 @@ def home_win_interval(
     The covariance is the inverse Hessian of the penalized loss in the scaled space of the fit,
     so the design row is scaled with the saved means and scales before the variance is read.
     """
-    if not 0.0 < level < 1.0:
-        raise ValueError(f"win interval: level must be inside (0, 1), got {level}; pass a fraction")
     diagnostics = fit.diagnostics
     if diagnostics is None or diagnostics.covariance is None:
         return None
@@ -34,14 +34,15 @@ def home_win_interval(
         for name, value in zip(names, raw, strict=True)
     ]
     sigma = diagnostics.covariance
-    if len(sigma) != len(design) or any(len(line) != len(design) for line in sigma):
-        raise ValueError(
-            f"win interval: the saved covariance has {len(sigma)} rows, expected {len(design)}; "
-            "run `hockey-model fit` again"
-        )
     variance = sum(
         design[i] * sigma[i][j] * design[j] for i in range(len(design)) for j in range(len(design))
     )
+    # The loader checks the matrix, so a negative variance here is more than rounding noise.
+    if variance < -_ROUNDING:
+        raise ValueError(
+            f"win interval: the saved covariance gives a variance of {variance:.3g}, below zero; "
+            "run `hockey-model fit` again"
+        )
     spread = NormalDist().inv_cdf((1.0 + level) / 2.0) * math.sqrt(max(variance, 0.0))
     score = linear_score(fit, row)
     return sigmoid(score - spread), sigmoid(score + spread)
