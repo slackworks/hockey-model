@@ -184,16 +184,17 @@ def inputs_sha256(report: DailyReport) -> str:
 
     Two builds with the same fingerprint publish the same numbers, so the second need not
     publish. The hash covers: the date and the interval level; the model identity (features,
-    ``fit_sha256``, ``code_sha``); ``training_gaps``; and, for each game, the game ID, the
-    start, the state, the skip note, both win chances, ``made_after_start``, ``missing``
-    (the goalie and injury state that the prediction used), ``degraded_inputs``, and
-    ``training``. It leaves out ``generated_at`` and ``credits``. It also leaves out the age in
-    a stale-source note. A source read that changes no covered value, such as a fresh read of
-    the same starter, does not change the hash.
+    ``fit_sha256``, ``code_sha``); ``training_gaps``; the source ``credits``; and, for each game,
+    the game ID, the start, the state, the skip note, both win chances, ``made_after_start``,
+    ``missing`` (the goalie and injury state that the prediction used), ``degraded_inputs``, and
+    ``training``. It leaves out ``generated_at``, and the age in a stale-source note. A source
+    read that changes no covered value, such as a fresh read of the same starter, does not
+    change the hash.
     """
     values = {
         "date": report.day.isoformat(),
         "level": report.level,
+        "credits": _credits(report),
         "games": [_fingerprint_line(line) for line in report.lines],
         "model": _model_json(report.model),
         "training_gaps": list(report.footer_gaps),

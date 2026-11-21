@@ -1,8 +1,9 @@
 """Tests that the report fingerprint follows what a reader sees and ignores the run time."""
 
+import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from hypothesis import given
@@ -25,6 +26,8 @@ from hockey_model.game import (
     TrainingMembership,
 )
 from hockey_model.sources.nhl import GameRow
+from hockey_model.store.source_reads import record_read
+from hockey_model.store.staleness import stale_sources
 from hockey_model.types import Projection
 
 DAY = date(2026, 1, 20)
@@ -100,9 +103,9 @@ def test_the_fingerprint_is_in_the_json_copy() -> None:
     assert report_json(report)["inputs_sha256"] == inputs_sha256(report)
 
 
-def test_credits_do_not_change_the_fingerprint() -> None:
+def test_the_credits_change_the_fingerprint() -> None:
     other = _report(DailyLine(_row(), _prediction(credits=("other",)), ""))
-    assert inputs_sha256(other) == inputs_sha256(_report())
+    assert inputs_sha256(other) != inputs_sha256(_report())
 
 
 def test_a_stale_source_age_does_not_change_the_fingerprint() -> None:
@@ -122,3 +125,55 @@ def test_a_new_stale_source_changes_the_fingerprint() -> None:
 def test_the_fingerprint_ignores_the_time_of_the_run(seconds: int) -> None:
     later = replace(_report(), generated_at=NOW + timedelta(seconds=seconds))
     assert inputs_sha256(later) == inputs_sha256(_report())
+
+
+@given(st.integers(min_value=0, max_value=10**6), st.integers(min_value=0, max_value=10**6))
+def test_any_stale_age_gives_the_same_fingerprint(first: int, second: int) -> None:
+    def build(hours: int) -> DailyReport:
+        note = MissingInput(MissingKind.STALE_SOURCE, None, STALE_NOTE.format(hours))
+        return _report(DailyLine(_row(), _prediction(missing=(note,)), ""))
+
+    assert inputs_sha256(build(first)) == inputs_sha256(build(second))
+
+
+@given(st.sampled_from(sorted(set(MissingKind) - {MissingKind.STALE_SOURCE})), st.integers(1, 99))
+def test_the_age_scrub_leaves_other_notes_alone(kind: MissingKind, hours: int) -> None:
+    """A non-stale note that names an age is an input, so a changed age changes the hash."""
+
+    def build(count: int) -> DailyReport:
+        note = MissingInput(kind, "TOR", f"{count} hours old")
+        return _report(DailyLine(_row(), _prediction(missing=(note,)), ""))
+
+    assert inputs_sha256(build(hours)) != inputs_sha256(build(hours + 1))
+
+
+@given(
+    st.floats(min_value=0.01, max_value=0.99, allow_nan=False),
+    st.floats(min_value=0.01, max_value=0.99, allow_nan=False),
+)
+def test_a_changed_win_chance_changes_the_fingerprint(home: float, other: float) -> None:
+    def build(value: float) -> DailyReport:
+        return _report(DailyLine(_row(), _prediction(home_win=value, away_win=1 - value), ""))
+
+    assert (inputs_sha256(build(home)) == inputs_sha256(build(other))) is (home == other)
+
+
+@pytest.mark.parametrize("hours", [25, 26, 49, 100, 1000])
+def test_the_stale_notes_of_the_store_are_stable_as_time_passes(
+    store: sqlite3.Connection, hours: int
+) -> None:
+    """The scrub must match the wording that the staleness code really writes."""
+    url = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries"
+    record_read(store, "espn_injuries", url, NOW - timedelta(hours=hours))
+    store.commit()
+
+    def build(as_of: datetime) -> DailyReport:
+        notes = tuple(
+            MissingInput(MissingKind.STALE_SOURCE, None, f"{source}: {reason}")
+            for source, reason in stale_sources(store, as_of)
+        )
+        return _report(DailyLine(_row(), _prediction(missing=notes), ""))
+
+    first, later = build(NOW), build(NOW + timedelta(hours=5))
+    assert report_json(first)["games"] != report_json(later)["games"]
+    assert inputs_sha256(first) == inputs_sha256(later)

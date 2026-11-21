@@ -1,9 +1,12 @@
 """Tests for the report-compare step: does a built report have the inputs of the published one."""
 
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from hockey_model.cli import main
 from hockey_model.report_gate import REASON_REPLACE, REASON_UNCHANGED, compare_inputs
@@ -95,3 +98,22 @@ def test_the_command_fails_with_the_error_text(
     code = main(["report-compare", "--built", str(built), "--published", str(published)])
     assert code != 0
     assert "no inputs_sha256" in capsys.readouterr().err
+
+
+_HASHES = st.text(alphabet="0123456789abcdef", min_size=1, max_size=64)
+
+
+@given(built=_HASHES, published=st.one_of(st.none(), _HASHES))
+def test_unchanged_exactly_when_the_published_hash_equals_the_built_hash(
+    built: str, published: str | None
+) -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        directory = Path(raw)
+        pub_payload = {} if published is None else {"inputs_sha256": published}
+        answer = compare_inputs(
+            _write(directory, "built.json", {"inputs_sha256": built}),
+            _write(directory, "pub.json", pub_payload),
+        )
+    assert answer["unchanged"] is (published == built)
+    assert answer["baseline"] is (published is not None)
+    assert answer["reason"] == (REASON_UNCHANGED if published == built else REASON_REPLACE)
