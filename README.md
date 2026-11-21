@@ -418,6 +418,7 @@ uv run pytest
 prek install
 ```
 
+The CI test job and the pre-push hook run `uv run pytest -n auto`, which uses every core.
 See `AGENTS.md` for the commands and rules.
 
 ## Release
@@ -432,11 +433,7 @@ Release in this order:
 4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
 5. Tag the merge commit `vX.Y.Z`, and push the tag.
 
-The `verify` job refuses a tag that is not `v` and `project.version` character for character.
-It also refuses a version that is not a normal PEP 440 version, a version with a local part or a `.dev` part, and a changelog with no section for the version.
-The `build` job runs the installed-wheel smoke test, builds the wheel and the source archive, and checks that both name the version.
-The `publish` job is the only job with write access.
-It attaches the two files to the GitHub release of the tag.
+The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`.
+Re-run only the failed jobs after a failure, because a run of all jobs builds the files again, and a file with other bytes stops the publish.
 A pre-release version, such as `0.2.0rc1`, makes a pre-release.
-A second run for the same tag skips a file with the same bytes and stops on a file with other bytes.
 The workflow publishes to no package index.
