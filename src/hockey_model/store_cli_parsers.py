@@ -165,6 +165,12 @@ def _add_report_decide(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_report_compare(parser: argparse.ArgumentParser) -> None:
+    """Add the two report files that the compare step reads."""
+    parser.add_argument("--built", type=Path, required=True, metavar="PATH")
+    parser.add_argument("--published", type=Path, required=True, metavar="PATH")
+
+
 def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
     """Add the store commands to the CLI parser."""
     add_store_group(add_parser)
@@ -194,5 +200,11 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         add_parser(
             "report-decide",
             help="decide the publish step of a trigger from the facts the gate read",
+        )
+    )
+    _add_report_compare(
+        add_parser(
+            "report-compare",
+            help="say whether a built report has the inputs of the newest published report",
         )
     )

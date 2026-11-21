@@ -15,8 +15,8 @@ ABANDON_AFTER_FAILED_READS = 2
 ABANDON_MIN_SPAN_DAYS = 0.5
 # The source name of the ESPN injury list. Each good read of the list is one snapshot.
 ESPN_INJURIES = "espn_injuries"
-# How old the newest good read of a live feed may be at a prediction cutoff. The morning run
-# reads the feeds each day, so a read older than a day means a run was missed.
+# How old the newest good read of a live feed may be at a prediction cutoff. The hourly prepare
+# and report runs read the feeds, so a read older than a day means a long outage.
 LIVE_FEED_MAX_AGE = timedelta(days=1)
 # The MoneyPuck files change about once a week (REFRESH_AFTER in sources/moneypuck.py), so the
 # limit is two refresh periods.

@@ -40,6 +40,7 @@ def fakes(tmp_path: Path) -> Path:
     gh.write_text(
         "#!/usr/bin/env bash\n"
         'echo "gh $*" >> "$FAKE_CALLS"\n'
+        'echo "gh GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
         # The mutation report reads the open issue list. The default is an empty list.
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
@@ -100,6 +101,8 @@ def fakes(tmp_path: Path) -> Path:
         "  fi\n"
         "fi\n"
         'if [[ "$1 $2" == "release download" ]]; then\n'
+        '  if [[ -n "${FAKE_DOWNLOAD_FAIL:-}" ]]; then echo "download boom" >&2; exit 1; fi\n'
+        '  if [[ -n "${FAKE_DOWNLOAD_EMPTY:-}" ]]; then exit 0; fi\n'
         '  pattern=""; dir=""\n'
         "  while (($# > 0)); do\n"
         '    case "$1" in --pattern) pattern="$2" ;; --dir) dir="$2" ;; esac\n'
@@ -113,6 +116,7 @@ def fakes(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
+        'echo "uv GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         # The mutation report runs the real helper, so its status is the real decision. The
         # path is absolute, because a bare name would find this fake again on PATH.
         'if [[ "$*" == "run python3 scripts/mutation_report.py"* ]]; then\n'
@@ -140,8 +144,20 @@ def fakes(tmp_path: Path) -> Path:
         "  esac\n"
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
+        # The daily command writes the report JSON that a test names in FAKE_BUILT_REPORT.
+        'if [[ "$*" == "run hockey-model daily "* && -n "${FAKE_BUILT_REPORT:-}" ]]; then\n'
+        '  printf "%s\\n" "$FAKE_BUILT_REPORT" > "$7/report-$5.json"\n'
+        "fi\n"
+        # The compare step is the real command: it holds the comparison the script acts on.
+        'if [[ "$*" == "run hockey-model report-compare"* ]]; then\n'
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
+        '  if [[ -n "${FAKE_BACKTEST_FAIL:-}" ]]; then echo "backtest boom" >&2; exit 4; fi\n'
         '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'
+        "fi\n"
+        'if [[ "$*" == "run hockey-model fit "* && -n "${FAKE_FIT_FAIL:-}" ]]; then\n'
+        '  echo "fit boom" >&2; exit 5\n'
         "fi\n"
         "exit 0\n",
         encoding="utf-8",

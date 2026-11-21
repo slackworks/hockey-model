@@ -31,7 +31,7 @@ def due_json(**fields: object) -> str:
         "date": DAY,
         "games": 3,
         "games_outside_window": 0,
-        "prep_too_early": False,
+        "puck_drop_passed": True,
         "prep_blocks_report": False,
     }
     payload.update(fields)

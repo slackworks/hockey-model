@@ -23,11 +23,10 @@ from hockey_model.game_model.training import (
     last_trained_start,
     training_rows,
 )
-from hockey_model.report_gate import decide, warning
+from hockey_model.report_gate import compare_inputs, decide, warning
 from hockey_model.report_trigger import (
     first_puck_drop,
     prep_blocks_report,
-    prep_too_early,
     puck_drop_ahead,
 )
 from hockey_model.sources.http import HttpClient
@@ -51,6 +50,7 @@ STORE_COMMANDS = frozenset(
         "daily",
         "report-due",
         "report-decide",
+        "report-compare",
         "store",
     }
 )
@@ -275,6 +275,10 @@ def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
     return {**asdict(decision), "warning": note}, 0
 
 
+def _report_compare(args: argparse.Namespace) -> tuple[object, int]:
+    return compare_inputs(args.built, args.published), 0
+
+
 def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
     """Return True when a prepare run that holds the store group now outlives the puck drop."""
     if not args.prep_started:
@@ -296,7 +300,6 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
         "games_outside_window": outside,
         "first_puck_drop_utc": iso_utc(first),
         "puck_drop_passed": now >= first,
-        "prep_too_early": day == game_day_of(now) and prep_too_early(now, first, day),
         "prep_blocks_report": _prep_blocking(args, first),
         "due": args.force or puck_drop_ahead(now, first, timedelta(seconds=args.margin_seconds)),
     }, 0
@@ -348,6 +351,7 @@ _HANDLERS = {
     "daily": _daily,
     "report-due": _report_due,
     "report-decide": _report_decide,
+    "report-compare": _report_compare,
     "store": _store,
 }
 

@@ -2,8 +2,11 @@
 # Prepare one game day: refresh every source, run the backtest, and fit the model on the
 # features that the backtest kept.
 #
-# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--help]
-#   --date  Eastern game day to prepare. Default: today in Eastern time.
+# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--force] [--help]
+#   --date   Eastern game day to prepare. Default: today in Eastern time.
+#   --force  Rebuild the backtest and the fit for a day that is already prepared.
+#            Without it, a day with a prepared-DATE marker and a valid backtest-DATE.json
+#            skips both steps and exits 0 after the refresh.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The first backfill runs until a marker file
 # next to the store says it finished. The backfill reads one year at a time, newest year
@@ -17,6 +20,7 @@
 set -euo pipefail
 
 day=""
+force=0
 
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -31,6 +35,10 @@ while (($# > 0)); do
     fi
     day="$2"
     shift 2
+    ;;
+  --force)
+    force=1
+    shift
     ;;
   -h | --help)
     usage
@@ -101,19 +109,52 @@ else
   uv run hockey-model refresh
 fi
 
-# Files from earlier days are stale. The release of each day already holds its own copy.
-find "$store_dir" -maxdepth 1 -type f \( -name 'prepared-*' -o -name 'backtest-*' \) -delete
-backtest_games="$store_dir/backtest-games-$day.csv"
+# A day is complete when its marker and a backtest file with a live_features list of names
+# exist. The refresh above runs first, because it is cheap and keeps the store current for the
+# report. The check runs before any file is replaced, so a skip leaves the day's files in place.
 backtest_json="$store_dir/backtest-$day.json"
-uv run hockey-model backtest --games-out "$backtest_games" >"$backtest_json"
+backtest_games="$store_dir/backtest-games-$day.csv"
+if [[ -f "$store_dir/prepared-$day" ]]; then
+  why=""
+  if [[ ! -f "$backtest_json" ]]; then
+    why="$backtest_json is missing"
+  elif ! jq_error="$(jq -e '.live_features | type == "array" and all(type == "string")' \
+    "$backtest_json" 2>&1 >/dev/null)"; then
+    why="$backtest_json has no live_features list of names (${jq_error:-jq found a wrong type})"
+  fi
+  if [[ -z "$why" && "$force" == 0 ]]; then
+    echo "daily-prepare: $day is already prepared (prepared-$day and backtest-$day.json exist);" \
+      "pass --force to rebuild" >&2
+    exit 0
+  fi
+  if [[ -n "$why" ]]; then
+    echo "daily-prepare: prepared-$day exists but $why; rebuilding" >&2
+  fi
+fi
+
+# Files of earlier days are stale. The release of each day already holds its own copy. A file of
+# a later day stays, because a manual run for a past day must not remove the marker of today.
+shopt -s nullglob
+for stale in "$store_dir"/prepared-* "$store_dir"/backtest-*; do
+  if [[ "${stale##*/}" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) && "${BASH_REMATCH[1]}" < "$day" ]]; then
+    rm -f "$stale"
+  fi
+done
+shopt -u nullglob
+
+# The backtest writes beside the final names. The final files and the marker change only after
+# the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
+uv run hockey-model backtest --games-out "$backtest_games.new" >"$backtest_json.new"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.
-if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json")"; then
-  echo "daily-prepare: $backtest_json has no live_features list of names; the fit needs it" >&2
+if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json.new")"; then
+  echo "daily-prepare: $backtest_json.new has no live_features list of names; the fit needs it" >&2
   exit 1
 fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
 uv run hockey-model fit --features "$live_features" --label live
+mv "$backtest_games.new" "$backtest_games"
+mv "$backtest_json.new" "$backtest_json"
 touch "$store_dir/prepared-$day"

@@ -119,11 +119,10 @@ status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
 required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
 required+=' and (.games_outside_window | type == "number")'
-required+=' and (.prep_too_early | type == "boolean")'
 required+=' and (.prep_blocks_report | type == "boolean")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
   echo "report-gate: report-due payload lacks due, tag, games, date, games_outside_window," \
-    "prep_too_early, or prep_blocks_report: $status_json" >&2
+    "or prep_blocks_report: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
@@ -152,7 +151,7 @@ blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
 # store lock, so it answers here: this run builds nothing, and the next trigger runs again.
 # A forced run is the operator's call, and it still queues, so it is not refused here.
 if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
-  echo "report-gate: warning: a daily-prepare run holds the hockey-model-store group, and its" \
+  echo "::warning::report-gate: a daily-prepare run holds the hockey-model-store group, and its" \
     "timeout reaches past the first puck drop of $day. This run would wait behind it and" \
     "publish after the puck drop, so it builds nothing (#163)." >&2
   jq -c --arg tag "$tag" --arg date "$day" \
