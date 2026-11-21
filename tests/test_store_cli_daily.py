@@ -86,7 +86,6 @@ def test_report_due_prints_only_the_gate_fields(
         "games_outside_window",
         "first_puck_drop_utc",
         "puck_drop_passed",
-        "prep_too_early",
         "prep_blocks_report",
         "due",
     }
@@ -150,13 +149,12 @@ def test_daily_names_the_fit_and_the_commit(
     assert len(payload["model"]["fit_sha256"]) == 64
 
 
-def test_report_due_never_skips_a_day_that_is_not_the_current_game_day(
+def test_report_due_says_a_future_day_has_no_puck_drop_yet(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A mistyped future date must not read as "prep is early": prep_too_early is for today only.
     _feed(monkeypatch, {})
     assert main(["report-due", "--date", "2099-01-01"]) == 0
-    assert json.loads(capsys.readouterr().out)["prep_too_early"] is False
+    assert json.loads(capsys.readouterr().out)["puck_drop_passed"] is False
 
 
 def test_report_due_reads_no_prepare_run_as_no_block(

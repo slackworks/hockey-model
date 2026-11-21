@@ -1,15 +1,16 @@
 # Publishes the daily NHL prediction report as a dated GitHub release.
 #
-# The schedule fires at each trigger slot. The gate job publishes at the first slot that runs
-# while the day's first puck drop is still ahead. Each later slot before the puck drop replaces
-# the release files and notes. After the puck drop, a run skips a published day, and a run that
-# finds no release publishes the first report of the day late. The cron minute and hours
-# MUST match TRIGGER_MINUTE_UTC and TRIGGER_HOURS_UTC in report_trigger.py.
+# The schedule fires every hour. The gate job builds at the first run that starts while the
+# day's first puck drop is still ahead. Each later run before the puck drop builds again, and it
+# publishes only when the inputs differ from the newest published report (inputs_sha256). Every
+# published build adds its own report-DATE-HHMMSSZ files. After the puck drop, a run skips a
+# published day, and a run that finds no release publishes the first report of the day late.
+# The cron minute MUST match TRIGGER_MINUTE_UTC in report_trigger.py.
 name: daily-report
 
 on:
   schedule:
-    - cron: "44 0,11,15-23 * * *"
+    - cron: "44 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -97,6 +98,7 @@ jobs:
       cancel-in-progress: false
     env:
       DAY: ${{ needs.gate.outputs.day }}
+      PUBLISH: ${{ needs.gate.outputs.publish }}
     outputs:
       report_complete: ${{ steps.state.outputs.report_complete }}
     steps:
@@ -125,10 +127,20 @@ jobs:
           exit 1
       - env:
           HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
+          # The compare step reads the release of the day.
+          GH_TOKEN: ${{ github.token }}
         # The step limit stops a hung read while the job still holds the store group. The budget
         # that the script enforces is REPORT_BUDGET_S above.
         timeout-minutes: 15
-        run: bash scripts/daily-report.sh --date "$DAY" --out-dir "$RUNNER_TEMP/report"
+        run: |
+          args=()
+          # A build that will publish first checks that its inputs differ from the release. A dry
+          # run publishes nothing, so it always builds.
+          if [[ "$PUBLISH" == "true" ]]; then
+            args+=(--skip-unchanged)
+          fi
+          bash scripts/daily-report.sh --date "$DAY" --out-dir "$RUNNER_TEMP/report" \
+            ${args[@]+"${args[@]}"}
       # The script writes the complete marker only after every output file is copied. The
       # publish job reads this output, so a report cut short by a crash is never published.
       - id: state

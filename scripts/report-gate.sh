@@ -119,11 +119,10 @@ status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
 required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
 required+=' and (.games_outside_window | type == "number")'
-required+=' and (.prep_too_early | type == "boolean")'
 required+=' and (.prep_blocks_report | type == "boolean")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
   echo "report-gate: report-due payload lacks due, tag, games, date, games_outside_window," \
-    "prep_too_early, or prep_blocks_report: $status_json" >&2
+    "or prep_blocks_report: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"

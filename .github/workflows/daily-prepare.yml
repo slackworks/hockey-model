@@ -1,13 +1,14 @@
 # Prepares the game day before the report triggers: a full refresh, the backtest, and the fit on its live features.
 #
-# The daily-report workflow then refreshes only the starters before it predicts. The
-# prepare run MUST finish before the next hour in TRIGGER_HOURS_UTC in report_trigger.py.
-# It starts after the last late game of the night ends, so its refresh has every result.
+# The daily-report workflow then refreshes only the starters before it predicts. The prepare runs
+# every hour, at minute 14, so a late or failed run is retried within the hour. A day that is
+# already prepared costs seconds: the script refreshes the store and exits (#281). The report
+# runs at minute 44 of each hour, in the middle of the gap between two prepare runs.
 name: daily-prepare
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "14 * * * *"
   workflow_dispatch:
     inputs:
       date:
@@ -30,8 +31,8 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    # The timeout must fit the window from the cron hour to the next trigger hour. The test in
-    # tests/test_daily_prepare_workflow.py checks that it does.
+    # A full prepare takes up to about two hours. The timeout equals PREP_TIMEOUT in
+    # report_trigger.py, which the gate uses to decide whether a running prepare blocks a report.
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

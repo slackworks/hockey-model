@@ -100,6 +100,7 @@ def fakes(tmp_path: Path) -> Path:
         "  fi\n"
         "fi\n"
         'if [[ "$1 $2" == "release download" ]]; then\n'
+        '  if [[ -n "${FAKE_DOWNLOAD_FAIL:-}" ]]; then echo "download boom" >&2; exit 1; fi\n'
         '  pattern=""; dir=""\n'
         "  while (($# > 0)); do\n"
         '    case "$1" in --pattern) pattern="$2" ;; --dir) dir="$2" ;; esac\n'
@@ -138,6 +139,14 @@ def fakes(tmp_path: Path) -> Path:
         "  empty) exit 0 ;;\n"
         '  partial) printf "{\\"due\\": true}"; exit 0 ;;\n'
         "  esac\n"
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
+        # The daily command writes the report JSON that a test names in FAKE_BUILT_REPORT.
+        'if [[ "$*" == "run hockey-model daily "* && -n "${FAKE_BUILT_REPORT:-}" ]]; then\n'
+        '  printf "%s\\n" "$FAKE_BUILT_REPORT" > "$7/report-$5.json"\n'
+        "fi\n"
+        # The compare step is the real command: it holds the comparison the script acts on.
+        'if [[ "$*" == "run hockey-model report-compare"* ]]; then\n'
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'

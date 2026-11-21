@@ -8,16 +8,12 @@ from hypothesis import given
 from hypothesis import strategies as st
 from mutation_copy import require_path
 
-from hockey_model.game_day import game_day_of, game_day_window
+from hockey_model.game_day import game_day_window
 from hockey_model.report_trigger import (
-    PREP_CRON_HOUR_UTC,
-    PREP_WINDOW,
-    TRIGGER_HOURS_UTC,
+    PREP_TIMEOUT,
     TRIGGER_MINUTE_UTC,
     first_puck_drop,
     prep_blocks_report,
-    prep_too_early,
-    prep_window_opened,
     puck_drop_ahead,
 )
 from hockey_model.types import HockeyModelError
@@ -74,9 +70,7 @@ def test_first_puck_drop_is_the_earliest_start() -> None:
     assert first_puck_drop(CLOSES, starts) == at("2026-11-05T00:00")
 
 
-def test_trigger_hours_are_sorted_unique_hours_and_the_minute_is_valid() -> None:
-    assert list(TRIGGER_HOURS_UTC) == sorted(set(TRIGGER_HOURS_UTC))
-    assert all(0 <= hour <= 23 for hour in TRIGGER_HOURS_UTC)
+def test_the_trigger_minute_is_valid() -> None:
     assert 0 <= TRIGGER_MINUTE_UTC <= 59
 
 
@@ -122,87 +116,11 @@ def test_a_negative_margin_is_an_error() -> None:
         puck_drop_ahead(at("2026-11-04T23:00"), at("2026-11-05T00:00"), timedelta(seconds=-1))
 
 
-# A run this far before the first puck drop is too early to call the prep missing an error:
-# the morning prep job has not had its window yet. The window opens at the prep cron, so it
-# closes three hours after 08:00 UTC whatever the puck drop is (#163).
-@pytest.mark.parametrize(
-    ("now", "first", "expected"),
-    [
-        # Hours before the puck drop, and the prep has not run: too early, skip.
-        ("2026-11-13T07:24", "2026-11-13T23:00", True),
-        # Inside the window: a missing prep is a real failure, so it is not too early.
-        ("2026-11-13T16:00", "2026-11-13T19:00", False),
-        # Exactly the window before the puck drop is still inside it.
-        ("2026-11-13T10:00", "2026-11-13T13:00", False),
-        # One second more than the window is outside it.
-        ("2026-11-13T09:59:59", "2026-11-13T13:00", True),
-        # After the puck drop, the prep failure is real.
-        ("2026-11-13T20:00", "2026-11-13T19:00", False),
-    ],
-)
-def test_prep_is_too_early_only_more_than_the_prep_window_before_the_puck_drop(
-    now: str, first: str, expected: bool
-) -> None:
-    assert prep_too_early(at(now), at(first), date(2026, 11, 13)) is expected
-
-
-@pytest.mark.parametrize(
-    ("now", "first", "expected"),
-    [
-        # 2026-11-19: the prep ran from 17:06 to 19:17 with no marker, and the report skipped
-        # every slot before that. After 12:00 UTC the window is closed, and the missing marker
-        # is a failure that a person has to see (#163).
-        ("2026-11-19T12:01", "2026-11-20T05:00", False),
-        # The last minute of the window still skips, because a late prep can still finish.
-        ("2026-11-19T12:00", "2026-11-20T05:00", True),
-        # On the same day a run before the cron skips too.
-        ("2026-11-19T07:44", "2026-11-20T05:00", True),
-    ],
-)
-def test_a_late_puck_drop_does_not_keep_the_prep_window_open(
-    now: str, first: str, expected: bool
-) -> None:
-    """The window closes three hours after the prep cron, whatever the puck drop is."""
-    assert prep_too_early(at(now), at(first), date(2026, 11, 19)) is expected
-
-
-def test_the_prep_window_opens_at_the_prepare_cron() -> None:
-    assert prep_window_opened(date(2026, 11, 13)) == at("2026-11-13T08:00")
-    assert PREP_WINDOW == timedelta(minutes=180)
-
-
-def test_prep_window_matches_the_prepare_job_timeout() -> None:
-    # The prep job timeout in daily-prepare.yml is the window the prep can use.
+def test_the_prepare_timeout_matches_the_prepare_job_timeout() -> None:
+    # The prep job timeout in daily-prepare.yml is the longest time a prepare holds the group.
     prepare = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-prepare.yml"
     workflow = require_path(prepare).read_text(encoding="utf-8")
-    assert f"timeout-minutes: {PREP_WINDOW // timedelta(minutes=1)}" in workflow
-    assert f'cron: "0 {PREP_CRON_HOUR_UTC} * * *"' in workflow
-
-
-def test_prep_too_early_rejects_a_naive_time() -> None:
-    with pytest.raises(HockeyModelError):
-        prep_too_early(datetime(2026, 11, 13, 7, 24), at("2026-11-13T23:00"), date(2026, 11, 13))
-
-
-def test_a_negative_queue_allowance_is_an_error() -> None:
-    with pytest.raises(HockeyModelError, match="must not be negative"):
-        prep_too_early(
-            at("2026-11-13T07:24"), at("2026-11-13T23:00"), date(2026, 11, 13), timedelta(-1)
-        )
-
-
-@given(
-    now=_UTC_TIMES,
-    extra=st.timedeltas(min_value=timedelta(0), max_value=timedelta(days=3)),
-)
-def test_prep_too_early_is_true_only_before_the_window_closes(
-    now: datetime, extra: timedelta
-) -> None:
-    # The window closes ``PREP_WINDOW + extra`` after the cron, whatever the puck drop is.
-    day = game_day_of(now)
-    closes = prep_window_opened(day) + PREP_WINDOW + extra
-    first = max(now, closes) + PREP_WINDOW + timedelta(hours=1)
-    assert prep_too_early(now, first, day, extra) is (now <= closes)
+    assert f"timeout-minutes: {PREP_TIMEOUT // timedelta(minutes=1)}" in workflow
 
 
 @given(
@@ -214,7 +132,7 @@ def test_a_prepare_blocks_a_report_only_when_its_window_reaches_the_puck_drop(
     prep: datetime, gap: timedelta, margin: timedelta
 ) -> None:
     first = prep + gap
-    assert prep_blocks_report(prep, first, margin) is (prep + PREP_WINDOW + margin >= first)
+    assert prep_blocks_report(prep, first, margin) is (prep + PREP_TIMEOUT + margin >= first)
 
 
 def test_the_report_margin_extends_the_hold_that_a_prepare_has() -> None:

@@ -517,21 +517,22 @@ def test_daily_run_without_the_morning_fails_and_runs_nothing(fakes: Path, tmp_p
     assert not (out / f"backtest-{DAY}.json").exists()
 
 
-def test_daily_run_skips_with_a_notice_when_the_puck_drop_is_far_away(
+def test_daily_run_skips_with_a_notice_before_the_first_puck_drop(
     fakes: Path, tmp_path: Path
 ) -> None:
-    # The prep has not had its window yet, so a missing marker is not an error.
+    # The next hourly prepare can still make the marker, so a missing marker is not an error.
     env = _env(
         fakes,
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
-        FAKE_DUE_JSON=due_json(prep_too_early=True),
+        FAKE_DUE_JSON=due_json(puck_drop_passed=False),
     )
     out = tmp_path / "out"
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(out))
     assert result.returncode == 0, result.stderr
     assert "::notice::" in result.stderr
     assert f"no preparation for {DAY} yet" in result.stderr
+    assert "first puck drop is still ahead" in result.stderr
     assert not any(" refresh " in line or " daily " in line for line in _calls(tmp_path))
     assert not (out / "complete").exists()
 
@@ -713,17 +714,19 @@ def test_gate_stops_when_the_decision_step_fails_or_prints_a_bad_payload(
     assert result.stdout == ""
 
 
-def test_daily_run_refuses_a_prep_field_that_is_not_a_boolean(fakes: Path, tmp_path: Path) -> None:
+def test_daily_run_refuses_a_puck_drop_field_that_is_not_a_boolean(
+    fakes: Path, tmp_path: Path
+) -> None:
     # A string "true" would otherwise skip the run, so the payload shape is checked first.
     env = _env(
         fakes,
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
-        FAKE_DUE_JSON=due_json(prep_too_early="true"),
+        FAKE_DUE_JSON=due_json(puck_drop_passed="false"),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 1
-    assert "prep_too_early" in result.stderr
+    assert "puck_drop_passed" in result.stderr
 
 
 def test_daily_run_fails_when_report_due_fails_without_a_marker(
@@ -742,8 +745,8 @@ def test_daily_run_skip_adds_its_notice_to_the_step_summary(fakes: Path, tmp_pat
         tmp_path,
         HOCKEY_MODEL_DB=str(store_path(tmp_path)),
         GITHUB_STEP_SUMMARY=str(summary),
-        FAKE_DUE_JSON=due_json(prep_too_early=True),
+        FAKE_DUE_JSON=due_json(puck_drop_passed=False),
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 0, result.stderr
-    assert "This run skips." in summary.read_text(encoding="utf-8")
+    assert "This run skips;" in summary.read_text(encoding="utf-8")

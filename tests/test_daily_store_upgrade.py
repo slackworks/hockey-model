@@ -65,7 +65,7 @@ def test_the_report_upgrades_the_store_before_it_reads_anything(
                 "date": DAY,
                 "games": 3,
                 "games_outside_window": 0,
-                "prep_too_early": False,
+                "puck_drop_passed": True,
             }
         ),
     )
