@@ -8,7 +8,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from hockey_model.json_schema import _unsupported, validate_json
-from hockey_model.report_schema import REPORT_SCHEMA_FILE, _schema
+from hockey_model.report_schema import REPORT_SCHEMA_FILE, packaged_schema
 from hockey_model.types import HockeyModelError
 
 BOGUS = {"bogus": 1}
@@ -62,7 +62,7 @@ def test_a_keyword_that_jsonschema_does_not_enforce_is_found() -> None:
 
 
 def test_the_shipped_schemas_use_only_enforced_keywords() -> None:
-    assert _unsupported(_schema(REPORT_SCHEMA_FILE)) == []
+    assert _unsupported(packaged_schema(REPORT_SCHEMA_FILE)) == []
 
 
 # One step down a schema: the keyword, and the label that the guard prints for it.
@@ -128,7 +128,7 @@ _VALUES = st.recursive(
 def test_any_input_returns_or_raises_the_registry_error(value: object) -> None:
     """The caller handles one error type, whatever the data holds."""
     try:
-        validate_json(value, _schema(REPORT_SCHEMA_FILE), "report schema")  # type: ignore[arg-type]
+        validate_json(value, packaged_schema(REPORT_SCHEMA_FILE), "report schema")  # type: ignore[arg-type]
     except HockeyModelError:
         pass
 

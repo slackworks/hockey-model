@@ -5,13 +5,12 @@ A refresh reads a live feed on every run and hides the failure of a feed that is
 this list to turn a feed that stays a gap for too long into a red job (#278).
 """
 
-import json
 import sqlite3
-from datetime import datetime
-from importlib import resources
+from datetime import datetime, timedelta
 from typing import Any
 
 from hockey_model.json_schema import validate_json
+from hockey_model.report_schema import packaged_schema
 from hockey_model.store.source_reads import (
     LIVE_FEED_MAX_AGE,
     LIVE_FEEDS,
@@ -23,18 +22,6 @@ from hockey_model.types import HockeyModelError
 
 SCHEMA_FILE = "live_gaps.schema.json"
 _SECONDS_PER_HOUR = 3600
-
-
-def _check(payload: dict[str, Any]) -> None:
-    """Raise ``HockeyModelError`` unless ``payload`` matches the schema beside this module."""
-    try:
-        text = resources.files("hockey_model").joinpath(SCHEMA_FILE).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise HockeyModelError(
-            f"cannot read the schema file {SCHEMA_FILE} from the installed package: {exc}; "
-            "reinstall the hockey-model wheel"
-        ) from exc
-    validate_json(payload, json.loads(text), SCHEMA_FILE)
 
 
 def live_gap_report(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
@@ -54,7 +41,8 @@ def live_gap_report(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
                 "inspect the source_reads rows of that source"
             ) from exc
         for url, since in sorted(found.items()):
-            age = now - since
+            # A start after ``now`` comes from clock skew between two runners, so it has no age.
+            age = max(now - since, timedelta(0))
             last_ok = good[url]
             gaps.append(
                 {
@@ -70,5 +58,5 @@ def live_gap_report(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
         "limit_hours": LIVE_FEED_MAX_AGE.total_seconds() / _SECONDS_PER_HOUR,
         "gaps": gaps,
     }
-    _check(payload)
+    validate_json(payload, packaged_schema(SCHEMA_FILE), SCHEMA_FILE)
     return payload

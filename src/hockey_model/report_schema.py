@@ -21,7 +21,8 @@ INDEX_SCHEMA_FILE = "report_index.schema.json"
 
 
 @cache
-def _schema(file_name: str) -> dict[str, Any]:
+def packaged_schema(file_name: str) -> dict[str, Any]:
+    """Return the JSON Schema that ships beside this package, read once."""
     try:
         text = resources.files("hockey_model").joinpath(file_name).read_text(encoding="utf-8")
     except OSError as exc:
@@ -34,12 +35,12 @@ def _schema(file_name: str) -> dict[str, Any]:
 
 def check_report(payload: Mapping[str, Any]) -> None:
     """Raise ``HockeyModelError`` unless ``payload`` is a daily report of this schema version."""
-    validate_json(payload, _schema(REPORT_SCHEMA_FILE), REPORT_SCHEMA_FILE)
+    validate_json(payload, packaged_schema(REPORT_SCHEMA_FILE), REPORT_SCHEMA_FILE)
 
 
 def check_index(payload: Mapping[str, Any]) -> None:
     """Raise ``HockeyModelError`` unless ``payload`` is a build index of this schema version."""
-    validate_json(payload, _schema(INDEX_SCHEMA_FILE), INDEX_SCHEMA_FILE)
+    validate_json(payload, packaged_schema(INDEX_SCHEMA_FILE), INDEX_SCHEMA_FILE)
 
 
 def version_file(report: Mapping[str, Any]) -> str:

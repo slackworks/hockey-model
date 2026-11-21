@@ -10,8 +10,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hockey_model import live_gaps
-from hockey_model.live_gaps import live_gap_report
+from hockey_model.json_schema import validate_json
+from hockey_model.live_gaps import SCHEMA_FILE, live_gap_report
+from hockey_model.report_schema import packaged_schema
 from hockey_model.sources.errors import SourceError
 from hockey_model.store.db import connect
 from hockey_model.store.source_reads import (
@@ -118,7 +119,7 @@ def test_a_fetched_at_that_is_not_a_time_fails_with_context(conn: sqlite3.Connec
 def test_a_payload_that_breaks_the_schema_is_refused() -> None:
     payload = {"limit_hours": 24, "gaps": [{"source": "nhl_scores"}]}
     with pytest.raises(HockeyModelError, match="live_gaps.schema.json"):
-        live_gaps._check(payload)
+        validate_json(payload, packaged_schema(SCHEMA_FILE), SCHEMA_FILE)
 
 
 @settings(max_examples=30, deadline=None)
@@ -161,3 +162,10 @@ def test_the_command_does_not_create_a_missing_store(tmp_path: Path) -> None:
     with pytest.raises(HockeyModelError, match="no store file at .*absent.db"):
         run_store_command(_args(absent))
     assert not absent.exists()
+
+
+def test_a_gap_that_starts_after_now_has_no_age(conn: sqlite3.Connection) -> None:
+    # Two runners can disagree on the time by a few seconds.
+    _gap_since(conn, NOW + timedelta(minutes=2))
+    [gap] = live_gap_report(conn, NOW)["gaps"]
+    assert (gap["age_hours"], gap["over_limit"]) == (0.0, False)
