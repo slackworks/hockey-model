@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      checks: read
+      actions: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
@@ -39,8 +39,8 @@ jobs:
             echo "commit $SHA is not on main; merge it, then tag the merge commit" >&2
             exit 1
           fi
-      # The tag must name a commit whose ci jobs succeeded.
-      - name: The ci jobs of the tagged commit succeeded
+      # The tag must name a commit whose push run of ci.yml succeeded.
+      - name: The ci run of the tagged commit succeeded
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

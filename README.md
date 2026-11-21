@@ -431,7 +431,7 @@ Release in this order:
 4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
 5. Tag the merge commit `vX.Y.Z`, and push the tag.
 
-The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`, and a commit whose `ci` jobs did not all succeed (`scripts/check-commit-ci.sh`).
+The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`, and a commit with no successful push run of `ci.yml` (`scripts/check-commit-ci.sh`).
 Re-run only the failed jobs after a failure, because a run of all jobs builds the files again, and a file with other bytes stops the publish.
 A pre-release version, such as `0.2.0rc1`, makes a pre-release.
 The workflow publishes to no package index.

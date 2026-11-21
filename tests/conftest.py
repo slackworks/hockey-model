@@ -73,11 +73,11 @@ def fakes(tmp_path: Path) -> Path:
         '    printf "%s\\n" "$runs_json"\n'
         "    exit 0\n"
         "  fi\n"
-        # The check runs of a commit answer FAKE_CHECK_RUNS. It defaults to a list with no run.
-        '  if [[ "$path" == */check-runs* ]]; then\n'
-        '    if [[ -n "${FAKE_CHECK_RUNS_FAIL:-}" ]]; then echo "checks boom" >&2; exit 1; fi\n'
-        '    runs_json="${FAKE_CHECK_RUNS:-}"\n'
-        '    if [[ -z "$runs_json" ]]; then runs_json=\'{"check_runs":[]}\'; fi\n'
+        # The ci runs of a commit answer FAKE_CI_RUNS. It defaults to a list with no run.
+        '  if [[ "$path" == */actions/workflows/*/runs* ]]; then\n'
+        '    if [[ -n "${FAKE_CI_RUNS_FAIL:-}" ]]; then echo "runs boom" >&2; exit 1; fi\n'
+        '    runs_json="${FAKE_CI_RUNS:-}"\n'
+        '    if [[ -z "$runs_json" ]]; then runs_json=\'{"workflow_runs":[]}\'; fi\n'
         '    printf "%s\\n" "$runs_json"\n'
         "    exit 0\n"
         "  fi\n"
