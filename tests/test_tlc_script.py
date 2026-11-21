@@ -30,6 +30,14 @@ def test_help_prints_usage_and_exits_zero() -> None:
     assert "Exit codes:" in result.stdout
 
 
+def test_help_lists_every_config_in_specs() -> None:
+    configs = sorted(path.name for path in (SCRIPT.parents[1] / "specs").glob("*.cfg"))
+    assert configs, "specs/ holds no .cfg file"
+    usage = _run("--help").stdout
+    missing = [name for name in configs if f"specs/{name}" not in usage]
+    assert not missing, f"tlc.sh --help does not list {missing}"
+
+
 def test_help_names_the_deadlock_exit_code() -> None:
     assert "for a deadlock" in _run("--help").stdout
 
@@ -274,6 +282,7 @@ def test_all_configs_pass_and_the_small_configs_run_first(tmp_path: Path) -> Non
     assert "-config specs/daily_prepare_blocked.cfg" in calls[1]
     assert "-config specs/daily_prepare.cfg " in calls[2]
     assert "-config specs/daily_prepare_false_stall.cfg " in calls[3]
+    assert "expected violation of StallOnlyForBacklog" in result.stdout
     assert all("-workers auto" in call for call in calls)
 
 
@@ -298,13 +307,6 @@ def test_a_failed_main_config_returns_its_code(tmp_path: Path) -> None:
     assert "specs/daily_prepare.cfg failed" in result.stderr
 
 
-def test_the_known_failure_config_must_report_its_violation(tmp_path: Path) -> None:
-    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0)
-    assert result.returncode == 0
-    assert "expected violation of StallOnlyForBacklog" in result.stdout
-    assert len(calls) == 4
-
-
 def test_a_known_failure_config_that_passes_fails_the_run(tmp_path: Path) -> None:
     known = {"FAKE_KNOWN_RC": "0", "FAKE_KNOWN_TEXT": ""}
     result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
@@ -313,10 +315,36 @@ def test_a_known_failure_config_that_passes_fails_the_run(tmp_path: Path) -> Non
 
 
 def test_a_known_failure_config_must_name_its_property(tmp_path: Path) -> None:
-    known = {"FAKE_KNOWN_TEXT": "Error: Invariant TypeOK is violated."}
+    known = {"FAKE_KNOWN_TEXT": "Error: Action property DoneStaysDone is violated."}
     result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
     assert result.returncode == 13
     assert "not a violation of StallOnlyForBacklog" in result.stderr
+
+
+def test_the_property_text_with_another_exit_code_fails_the_run(tmp_path: Path) -> None:
+    known = {"FAKE_KNOWN_RC": "12"}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 12
+    assert "ended with exit 12" in result.stderr
+
+
+def test_a_known_failure_crash_prints_the_whole_log(tmp_path: Path) -> None:
+    # The cause of a crash is at the end of the log, past the head that a pass prints.
+    lines = [f"Progress line {n}" for n in range(60)] + ["java.lang.OutOfMemoryError"]
+    known = {"FAKE_KNOWN_RC": "3", "FAKE_KNOWN_TEXT": "\n".join(lines)}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 3
+    assert "java.lang.OutOfMemoryError" in result.stdout
+
+
+def test_a_known_failure_that_holds_prints_only_the_head(tmp_path: Path) -> None:
+    lines = ["Error: Action property StallOnlyForBacklog is violated."]
+    lines += [f"Trace line {n}" for n in range(100)]
+    known = {"FAKE_KNOWN_TEXT": "\n".join(lines)}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 0
+    assert "Trace line 10" in result.stdout
+    assert "Trace line 90" not in result.stdout
 
 
 def test_a_known_failure_config_that_crashes_fails_the_run(tmp_path: Path) -> None:
