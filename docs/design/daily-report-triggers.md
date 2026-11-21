@@ -82,7 +82,14 @@ After the first puck drop, the same missing marker fails, because a person has t
 The report no longer assumes that one morning prepare finishes inside a fixed window.
 `PREP_WINDOW`, `PREP_QUEUE_ALLOWANCE`, `PREP_CRON_HOUR_UTC`, `prep_too_early`, and the `prep_too_early` field of `report-due` are gone (#280).
 The measured start delay of 6.7 to 10.4 hours for the old `0 8 * * *` cron no longer matters, because the next hourly run replaces a late one.
-The cause of that delay is still open in #280.
+The delay sits in GitHub's scheduler (#280).
+For each of the 16 scheduled runs of the 30 days before 2026-11-21, the `created_at` time of the run, its `run_started_at` time, and the `started_at` time of its job were the same, within a minute.
+The run was therefore created late, and it did not wait in the concurrency group or in a runner queue.
+The default branch held the cron `0 8 * * *`, and no scheduled run was cancelled near 08:00 UTC.
+The report cron of the same repository runs with a much shorter delay, so the repository is not blocked from scheduled runs.
+A repository or organization setting is not ruled out, because the token of the check cannot read the Actions permissions of the repository.
+GitHub documents that scheduled runs at the top of the hour are the most delayed.
+The hourly prepare runs at minute 14 for that reason, so its delay is the first measurement that can confirm the cause.
 The operator can run the `daily-prepare` workflow with a date, then run the report again.
 A prepare that fails every hour shows as red `daily-prepare` runs. The green report skips before the first puck drop do not show it.
 
