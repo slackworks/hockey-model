@@ -14,8 +14,11 @@ from typing import Any
 
 from hockey_model.backtest.game_records import GameRecord, write_game_records
 from hockey_model.backtest.runner import BacktestReport
+from hockey_model.game_model.logistic import LogisticFit
+from hockey_model.store.timestamps import iso_utc
 
-# Nine decimals are far below the effect of any model change and far above a last-bit difference.
+# A change in the solver stop tolerance moves a value at this scale, and a change of the model
+# moves a reported value by about 1e-2. A last-bit difference between machines is far below it.
 DECIMALS = 9
 
 
@@ -24,13 +27,14 @@ def report_text(report: BacktestReport) -> str:
     return json.dumps(asdict(report), sort_keys=True, indent=2) + "\n"
 
 
-def _rounded(value: Any) -> Any:
+def rounded(value: Any) -> Any:
+    """Return ``value`` with every float rounded to ``DECIMALS``, through dicts and sequences."""
     if isinstance(value, float):
         return round(value, DECIMALS)
     if isinstance(value, dict):
-        return {key: _rounded(item) for key, item in value.items()}
+        return {key: rounded(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_rounded(item) for item in value]
+        return [rounded(item) for item in value]
     return value
 
 
@@ -41,18 +45,18 @@ def _sha256(data: bytes) -> str:
 def exact_hashes(report_path: Path, games_path: Path) -> dict[str, str]:
     """Return the SHA-256 of the bytes of the report file and of the games file."""
     return {
-        "report_sha256": _sha256(report_path.read_bytes()),
-        "games_sha256": _sha256(games_path.read_bytes()),
+        "exact_report_sha256": _sha256(report_path.read_bytes()),
+        "exact_games_sha256": _sha256(games_path.read_bytes()),
     }
 
 
 def canonical_hashes(report: BacktestReport, records: Sequence[GameRecord]) -> dict[str, str]:
     """Return hashes of the report and the records with every float rounded to ``DECIMALS``."""
-    rounded_report = json.dumps(_rounded(asdict(report)), sort_keys=True)
+    rounded_report = json.dumps(rounded(asdict(report)), sort_keys=True)
     rows = [
         [
             record.game_id,
-            record.start.isoformat(),
+            iso_utc(record.start),
             record.home,
             record.away,
             record.run,
@@ -62,26 +66,38 @@ def canonical_hashes(report: BacktestReport, records: Sequence[GameRecord]) -> d
         for record in records
     ]
     return {
-        "report_sha256": _sha256(rounded_report.encode("utf-8")),
-        "games_sha256": _sha256(json.dumps(rows).encode("utf-8")),
+        "canonical_report_sha256": _sha256(rounded_report.encode("utf-8")),
+        "canonical_games_sha256": _sha256(json.dumps(rows).encode("utf-8")),
         "decimals": str(DECIMALS),
     }
 
 
+def canonical_fit_hash(fit: LogisticFit) -> str:
+    """Return the hash of the weights of a fit, with every float rounded to ``DECIMALS``.
+
+    The diagnostics describe the fit and change no prediction, so the hash leaves them out.
+    """
+    values = {
+        "features": list(fit.features),
+        "intercept": fit.intercept,
+        "elo_weight": fit.elo_weight,
+        "weights": dict(fit.weights),
+    }
+    return _sha256(json.dumps(rounded(values), sort_keys=True).encode("utf-8"))
+
+
 def write_golden_files(
     report: BacktestReport, records: Sequence[GameRecord], out_dir: Path
-) -> dict[str, dict[str, str]]:
+) -> dict[str, str]:
     """Write ``report.json``, ``games.csv``, and ``hashes.json`` to ``out_dir``.
 
-    Return the exact and the canonical hashes. The caller pastes both in a pull request.
+    Return the exact and the canonical hashes in one dict. The caller pastes both in a pull
+    request. The key names say which form each hash has.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path, games_path = out_dir / "report.json", out_dir / "games.csv"
     report_path.write_text(report_text(report), encoding="utf-8")
     write_game_records(games_path, records)
-    hashes = {
-        "exact": exact_hashes(report_path, games_path),
-        "canonical": canonical_hashes(report, records),
-    }
+    hashes = {**exact_hashes(report_path, games_path), **canonical_hashes(report, records)}
     (out_dir / "hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
     return hashes

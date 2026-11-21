@@ -3,14 +3,14 @@
 ## Goal
 
 Make `hockey-model backtest` and `hockey-model experiments run` faster with no change in any output.
-The JSON report and the per-game CSV MUST stay byte-identical for the same store.
+The canonical hashes of the JSON report and the per-game CSV gate every change in the tests. The exact hashes of the two files MUST match on one machine before and after a change.
 
 ## Step 1: the golden check
 
 Build this before any speed change, in its own pull request.
 
-1. `scripts/backtest_golden.py --db PATH --out DIR` runs the backtest and writes `report.json`, `games.csv`, and `hashes.json`. `hashes.json` holds the exact SHA-256 of the two files, which two runs on one machine must match, and a canonical form with every float rounded to nine decimals, which also holds across machines.
-2. `tests/backtest/test_golden.py` runs the same backtest on the seeded store and compares the canonical hashes with the values committed in `tests/fixtures/backtest_golden.json`, for one worker and for two. A change that moves a hash fails the test.
+1. `scripts/backtest_golden.py --db PATH --out DIR` runs the backtest and writes `report.json`, `games.csv`, and `hashes.json`. `hashes.json` holds the exact SHA-256 of the two files (`exact_report_sha256`, `exact_games_sha256`), which two runs on one machine must match, and a canonical form with every float rounded to nine decimals (`canonical_*`), which also holds across machines.
+2. `tests/backtest/test_golden.py` runs the same backtest on the seeded store and compares the canonical hashes with the values committed in `tests/fixtures/backtest_golden.json`, for one worker and for two. The fixture also holds the hash of the fitted weights of the seeded store (`canonical_fit_sha256`), so a change to the fit, such as #289, is gated too. A change that moves a hash fails the test.
 3. A change that is meant to move a number is a model change. It runs the test with `UPDATE_GOLDEN=1`, updates the golden file in a separate commit, and the pull request says why.
 
 Run the script on the real store (`~/.cache/hockey-model/real.db`) before and after each speed change too, and paste the two hashes in the pull request.
