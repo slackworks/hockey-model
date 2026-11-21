@@ -37,7 +37,10 @@ jobs:
         run: |
           set -o pipefail
           if [ "$EVENT" = pull_request ]; then
-            git diff --name-only "$BASE_SHA" HEAD | bash scripts/ci-changes.sh >> "$GITHUB_OUTPUT"
+            # --no-renames lists both paths of a rename, so a code file that moves to a
+            # Markdown name still counts as a code change.
+            git diff --name-only --no-renames "$BASE_SHA" HEAD |
+              bash scripts/ci-changes.sh >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
@@ -60,8 +63,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [changes, validation]
-    if: needs.changes.outputs.code == 'true'
+    needs: validation
     steps:
       # The registry checker reads the git history of each record.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,6 +106,25 @@ jobs:
           echo "${EC_SHA256}  $archive" | sha256sum -c -
           tar -xzf "$archive" -C /usr/local/bin editorconfig-checker
       - run: editorconfig-checker
+
+  # The one check that a branch rule can require for the code jobs. A job that an `if` skips
+  # counts as passed, so a failed changes job would let validation and test skip and pass.
+  # scripts/ci-gate.sh fails then. It runs after the three jobs, even when one of them fails.
+  ci-result:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, validation, test]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          VALIDATION_RESULT: ${{ needs.validation.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: bash scripts/ci-gate.sh
 
   # Builds the wheel and runs it from a clean venv, so a missing package-data file or entry point
   # fails here. The source-tree jobs above cannot see that.
