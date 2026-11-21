@@ -101,7 +101,7 @@ class TestCheckAll:
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
         assert result["errors"][0] == (
-            "0001-valid: $.status in schema: 'invalid_status' is not one of "
+            "0001-valid: $.status in EXPERIMENT_SCHEMA: 'invalid_status' is not one of "
             "['registered', 'rejected', 'inconclusive', 'promoted'] (rule 'enum'); "
             "change the value to match the schema"
         )

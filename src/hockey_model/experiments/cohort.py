@@ -10,13 +10,13 @@ from datetime import date, datetime, timedelta
 
 from hockey_model.experiments.looks import promotion_tail
 from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.experiments.schemas import DATE_PATTERN
 from hockey_model.game_day import game_day_of, game_day_window
 from hockey_model.game_model.seasons import SeasonPlan, confirmation_plan, in_cohort, season_of
 from hockey_model.store.reads import LATEST_GAME, final_games_before
 from hockey_model.types import HockeyModelError
 
-# fromisoformat also reads 20261031 and 2026-W44-6, which are not the registered form.
-_CUTOFF_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_CUTOFF_SHAPE = re.compile(DATE_PATTERN)
 
 
 def cutoff_instant(record: ExperimentRecord) -> datetime:
