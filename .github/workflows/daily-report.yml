@@ -183,11 +183,16 @@ jobs:
       && needs.build.outputs.report_complete == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The script reads index-DATE.json from the release, adds this build, and uploads it again.
+    # Two publishes of one day at once would drop an entry, so they run one at a time. A third
+    # publish that waits replaces the second, and the next hourly run publishes that build again.
+    concurrency:
+      group: hockey-model-publish-${{ needs.gate.outputs.day }}
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
       DAY: ${{ needs.gate.outputs.day }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Start the job timer
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -201,7 +206,13 @@ jobs:
       # The publish script checks the report against its schema with the package code.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
+      # Only this step holds the release token. The sync above runs without it, and the script
+      # runs the synced environment as it is, so no package code is built while the token is set.
       - run: bash scripts/publish-daily-report.sh --date "$DAY" --report-dir "$RUNNER_TEMP/report"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UV_NO_SYNC: "1"
+          UV_FROZEN: "1"
       - if: always()
         name: Report the job time
         run: echo "::notice::publish job took $(( $(date +%s) - JOB_START ))s"

@@ -69,3 +69,16 @@ def test_the_gate_step_checks_each_output_before_it_writes_it() -> None:
     # jq -e exits 1 for a false value, so no gate step may read a boolean with it.
     assert "jq -e" not in gate
     assert '"due=$(jq' not in gate
+
+
+def test_the_publish_job_runs_one_at_a_time_for_a_day_and_holds_the_token_for_the_script() -> None:
+    """The index is a read-modify-write, and the sync must run without the release token."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    publish = text[text.index("\n  publish:\n") :]
+    assert "group: hockey-model-publish-${{ needs.gate.outputs.day }}" in publish
+    assert "cancel-in-progress: false" in publish
+    job_env = publish[publish.index("    env:\n") : publish.index("    steps:\n")]
+    assert "GH_TOKEN" not in job_env
+    step = publish[publish.index("      - run: bash scripts/publish-daily-report.sh") :]
+    assert "GH_TOKEN: ${{ github.token }}" in step
+    assert 'UV_NO_SYNC: "1"' in step
