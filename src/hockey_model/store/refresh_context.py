@@ -48,8 +48,7 @@ class RefreshRun:
     written: Counter[str] = field(default_factory=Counter)
     errors: list[HockeyModelError] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    # Read the MoneyPuck files even when they are fresh. The upgrade needs this so the
-    # attempt counts arrive at once, instead of after the weekly refresh.
+    # Read the MoneyPuck files even when they are fresh, instead of after the weekly refresh.
     reread_moneypuck: bool = False
     # Read a unit again that earlier reads left as a known gap. One good read clears the gap.
     retry_skipped: bool = False

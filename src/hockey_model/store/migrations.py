@@ -10,10 +10,10 @@ from hockey_model.store.db import StoreError
 
 
 def mp_team_games_ddl(table: str) -> str:
-    """Return the current ``mp_team_games`` DDL under another table name.
+    """Return the ``mp_team_games`` DDL of version 7 under another table name.
 
-    The 1->2 and the 3->4 steps both rebuild this table. One definition keeps the two
-    results identical, and the test compares each result against a fresh store.
+    The 1->2 and the 3->4 steps both rebuild this table, with the four counts. One definition
+    keeps the two results identical, and the test compares each result against a fresh store.
     """
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
         raise StoreError(
@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS retired_mp_unblocked (
     team TEXT,
     fetched_at TEXT NOT NULL,
     unblocked_for INTEGER,
-    unblocked_against INTEGER
+    unblocked_against INTEGER,
+    PRIMARY KEY (game_id, team, fetched_at)
 )
 """
 # The archive of the values that the 6->7 step found in the dropped columns. A fresh store
@@ -194,14 +195,17 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # key of its row before the rebuild drops the columns.
     7: (
         _RETIRED_MP_UNBLOCKED,
-        "INSERT INTO retired_mp_unblocked (game_id, team, fetched_at, unblocked_for,"
+        "INSERT OR IGNORE INTO retired_mp_unblocked (game_id, team, fetched_at,"
+        " unblocked_for,"
         " unblocked_against) SELECT game_id, team, fetched_at, unblocked_for, unblocked_against"
         " FROM mp_team_games WHERE unblocked_for IS NOT NULL OR unblocked_against IS NOT NULL",
         _MP_TEAM_GAMES_V8,
         "INSERT INTO mp_team_games_v8 (game_id, team, game_date, xg_for, xg_against,"
         " shot_attempts_for, shot_attempts_against, attempts_known, fetched_at)"
         " SELECT game_id, team, game_date, xg_for, xg_against, shot_attempts_for,"
-        " shot_attempts_against, attempts_known, fetched_at FROM mp_team_games",
+        " shot_attempts_against,"
+        " CASE WHEN shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL"
+        " THEN 1 ELSE 0 END, fetched_at FROM mp_team_games",
         "DROP TABLE mp_team_games",
         "ALTER TABLE mp_team_games_v8 RENAME TO mp_team_games",
         "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",

@@ -71,7 +71,7 @@ def test_a_store_with_the_columns_earns_version_7(v7: Path) -> None:
 def test_the_step_drops_both_columns_and_keeps_every_other_value(v7: Path) -> None:
     report = upgrade_store(v7)
     assert (report.from_version, report.to_version, report.changed) == (7, SCHEMA_VERSION, True)
-    assert version_of(v7) == SCHEMA_VERSION == 8
+    assert version_of(v7) == SCHEMA_VERSION
     assert "unblocked_for" not in _columns(v7)
     assert "unblocked_against" not in _columns(v7)
     kept = rows(v7, f"SELECT {_KEPT} FROM mp_team_games ORDER BY game_id, fetched_at")
@@ -206,3 +206,59 @@ def test_any_unblocked_value_is_archived_and_every_kept_value_survives(
         " ORDER BY game_id",
     )
     assert archive == [(r[0], r[7], r[8]) for r in data if r[7] is not None]
+
+
+@settings(max_examples=15, deadline=None)
+@given(counts=st.lists(st.tuples(_COUNT, _COUNT), min_size=1, max_size=5))
+def test_a_second_upgrade_changes_no_table_for_any_stored_counts(
+    tmp_path_factory: pytest.TempPathFactory, counts: list[tuple[int | None, int | None]]
+) -> None:
+    data = [
+        (n, "TOR", "2026-01-01", 1.0, 2.0, 50, 40, a, b, 1, f"2026-01-02T00:{n:02d}:00Z")
+        for n, (a, b) in enumerate(counts)
+        if a is not None and b is not None
+    ] or [ROWS[3]]
+    path = _v7(tmp_path_factory.mktemp("twice") / "store.db", data)
+    upgrade_store(path)
+    first = (
+        rows(path, "SELECT * FROM mp_team_games ORDER BY rowid"),
+        rows(path, "SELECT * FROM retired_mp_unblocked ORDER BY rowid"),
+    )
+    assert upgrade_store(path).changed is False
+    assert first == (
+        rows(path, "SELECT * FROM mp_team_games ORDER BY rowid"),
+        rows(path, "SELECT * FROM retired_mp_unblocked ORDER BY rowid"),
+    )
+
+
+def test_a_rerun_of_the_archive_insert_adds_no_duplicate(v7: Path) -> None:
+    """The archive keys each value by the primary key of its row, so a repeat is ignored."""
+    upgrade_store(v7)
+    conn = sqlite3.connect(v7)
+    try:
+        before = conn.execute("SELECT COUNT(*) FROM retired_mp_unblocked").fetchone()
+        conn.execute(
+            "INSERT OR IGNORE INTO retired_mp_unblocked SELECT game_id, team, fetched_at, 1, 1"
+            " FROM mp_team_games WHERE game_id = 1"
+        )
+        assert conn.execute("SELECT COUNT(*) FROM retired_mp_unblocked").fetchone() == before
+    finally:
+        conn.close()
+
+
+def test_the_flag_follows_the_two_counts_that_remain(tmp_path: Path) -> None:
+    """A row with both shot counts and no unblocked counts is known after the step."""
+    path = tmp_path / "flag.db"
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    restore_unblocked_columns(conn)
+    conn.execute(
+        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, attempts_known, fetched_at)"
+        " VALUES (7, 'TOR', '2026-01-01', 1, 1, 50, 40, 0, '2026-01-02T00:00:00Z')"
+    )
+    conn.execute("UPDATE schema_version SET version = 7")
+    conn.commit()
+    conn.close()
+    upgrade_store(path)
+    assert rows(path, "SELECT attempts_known FROM mp_team_games") == [(1,)]
