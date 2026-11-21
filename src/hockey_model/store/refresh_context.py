@@ -58,10 +58,21 @@ class RefreshRun:
     timed_out: bool = False
     # The boxscores this refresh already read, so one game costs one request per refresh.
     boxscores_read: set[int] = field(default_factory=set)
+    # The time of the newest read of the clock, for the progress lines.
+    last_stamp: datetime | None = None
 
     def stamp(self) -> datetime:
         """Return the time to store with a read: the clock when one is set, else ``now``."""
-        return self.now if self.clock is None else self.clock()
+        self.last_stamp = self.now if self.clock is None else self.clock()
+        return self.last_stamp
+
+    def seconds_left(self) -> float | None:
+        """Return the seconds of the time budget that are left, or None when there is none."""
+        if self.deadline is None:
+            return None
+        # The last stamp is the time of the latest read. The clock is not read again here, so a
+        # progress line does not change the times that a refresh stores.
+        return max(0.0, (self.deadline - (self.last_stamp or self.now)).total_seconds())
 
     def out_of_time(self) -> bool:
         """Return True once the time budget of this refresh is spent."""

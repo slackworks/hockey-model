@@ -2,9 +2,11 @@
 
 import sqlite3
 from collections.abc import Collection, Sequence
+from contextlib import AbstractContextManager
 from datetime import date, datetime, timedelta
 from typing import NamedTuple
 
+from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of, game_day_window
 from hockey_model.sources.nhl import (
     FINAL_STATES,
@@ -167,6 +169,19 @@ class ReadResult(NamedTuple):
     timed_out: bool = False  # set only when the time budget ran out
 
 
+def _stop(run: RefreshRun, note: str) -> None:
+    """Record why a read stopped, in the notes of the refresh and in the progress step."""
+    run.notes.append(note)
+    progress_log.stopped(note)
+
+
+def counted_step(
+    run: RefreshRun, kind: str, label: str, total: int
+) -> AbstractContextManager[progress_log.Step]:
+    """Return the progress step of one read: ``kind`` names the work and ``label`` its range."""
+    return progress_log.step("refresh", f"{kind}[{label}]", total=total, budget=run.seconds_left())
+
+
 def _timed_out(run: RefreshRun, progress: int) -> ReadResult:
     """Return the result of a read that the time budget stopped, and mark the run."""
     run.timed_out = True
@@ -208,13 +223,14 @@ def read_days(
     for index, day in enumerate(worklist):
         if failures >= MAX_UNIT_FAILURES:
             left = len(worklist) - index
-            run.notes.append(f"{SCORES}: stopped after {failures} failed days; {left} not tried")
+            _stop(run, f"{SCORES}: stopped after {failures} failed days; {left} not tried")
             return ReadResult(clean=False, stopped=True, progress=progress)
         if day in gaps or (day not in due and _day_complete(run, day)):
             failures = 0
+            progress_log.advance()
             continue
         if run.out_of_time():
-            run.notes.append(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
+            _stop(run, f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
             return _timed_out(run, progress)
 
         def unit(stamp: datetime, current: date = day) -> int:
@@ -226,6 +242,7 @@ def read_days(
         # A day that this read completed is finished. An open day, or a due day, is read again.
         if ok and day not in due and (backlog_before is None or day < backlog_before):
             progress += _day_complete(run, day)
+        progress_log.advance()
     return ReadResult(clean, stopped=False, progress=progress)
 
 
@@ -239,7 +256,9 @@ def score_days(run: RefreshRun) -> None:
     first = _first_day(run)
     unresolved, due = plan_unresolved(run)
     window = (first + timedelta(days=n) for n in range((last_day - first).days + 1))
-    read_days(run, sorted({*due, *window}), score_gaps(run), due)
+    worklist = sorted({*due, *window})
+    with counted_step(run, "score-days", f"{first}..{last_day}", len(worklist)):
+        read_days(run, worklist, score_gaps(run), due)
     note_unresolved(run, unresolved)
 
 
@@ -318,18 +337,17 @@ def read_boxscores(
     for index, game_id in enumerate(waiting):
         if failures >= MAX_UNIT_FAILURES:
             left = len(waiting) - index
-            run.notes.append(
-                f"{BOXSCORES}: stopped after {failures} failed reads; {left} not tried"
-            )
+            _stop(run, f"{BOXSCORES}: stopped after {failures} failed reads; {left} not tried")
             return ReadResult(clean=False, stopped=True, progress=progress)
         if run.out_of_time():
             left = len(waiting) - index
-            run.notes.append(f"{BOXSCORES}: stopped, because the time ran out; {left} not tried")
+            _stop(run, f"{BOXSCORES}: stopped, because the time ran out; {left} not tried")
             return _timed_out(run, progress)
         url = boxscore_url(game_id)
         if failed_since(run.conn, BOXSCORES, url, run.now - RETRY_FAILED_AFTER):
             skipped += 1
             clean = False
+            progress_log.advance()
             continue
 
         def unit(stamp: datetime, game_id: int = game_id) -> int:
@@ -343,5 +361,6 @@ def read_boxscores(
         clean = clean and ok
         if ok:
             progress += _after_read(run, game_id, game_id not in recent, unresolved)
+        progress_log.advance()
     _note_boxscore_gaps(run, skipped, unresolved)
     return ReadResult(clean, stopped=False, progress=progress)
