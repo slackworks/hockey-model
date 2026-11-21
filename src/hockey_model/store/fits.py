@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from hockey_model.consumer_errors import UnknownFitError
-from hockey_model.game_model.features import feature_name_problem
+from hockey_model.game_model.features import FEATURES, feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
 from hockey_model.game_model.seasons import FIT_FIRST
 from hockey_model.store.db import StoreError
@@ -235,6 +235,13 @@ def _build_fit(features: str, weights: str) -> LogisticFit:
             {name: float(value) for name, value in stored["features"].items()},
             _diagnostics(stored.get("diagnostics")),
         )
+        # A well-formed fit can name a feature that this version removed, such as attempt_form.
+        unknown = [name for name in names if name not in FEATURES]
+        if unknown:
+            raise StoreError(
+                f"load the model fit: the saved fit names {unknown[0]!r}, which this version does "
+                f"not have; run `hockey-model fit` again with features from {', '.join(FEATURES)}"
+            )
         _check_fit(fit)
         return fit
     except (ValueError, KeyError, TypeError, AttributeError) as exc:

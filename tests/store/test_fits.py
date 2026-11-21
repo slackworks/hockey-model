@@ -163,7 +163,6 @@ def test_a_saved_fit_with_a_value_that_is_not_finite_says_to_fit_again(
 @pytest.mark.parametrize(
     ("features", "weights"),
     [
-        ('["luck"]', '{"intercept": 0, "elo_weight": 1, "features": {"luck": 1.0}}'),
         ('["rest"]', '{"intercept": 0, "elo_weight": 1, "features": {}}'),
         ("[]", '{"intercept": 0, "elo_weight": 1, "features": {"rest": 1.0}}'),
     ],
@@ -178,6 +177,24 @@ def test_a_saved_fit_whose_features_and_weights_disagree_says_to_fit_again(
     )
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
         load_fit(store, FitRef(fit_id=1))
+
+
+@pytest.mark.parametrize("name", ["attempt_form", "luck"])
+def test_a_saved_fit_that_names_a_removed_feature_says_which_one(
+    store: sqlite3.Connection, name: str
+) -> None:
+    """A well-formed fit is not malformed. It names a feature that this version lacks."""
+    store.execute(
+        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
+        " VALUES (1, ?, ?, '2026-01-01T00:00:00.000000+00:00')",
+        (f'["{name}"]', f'{{"intercept": 0, "elo_weight": 1, "features": {{"{name}": 1.0}}}}'),
+    )
+    with pytest.raises(StoreError) as caught:
+        load_fit(store, FitRef(fit_id=1))
+    message = str(caught.value)
+    assert f"the saved fit names '{name}', which this version does not have" in message
+    assert "malformed" not in message
+    assert "features from xg_form, goalie_gsax, rest" in message
 
 
 _WEIGHT = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False)
@@ -224,21 +241,6 @@ def test_save_fit_refuses_an_invalid_fit_and_leaves_no_row(
     with pytest.raises(StoreError, match=f"save the model fit.*{reason}"):
         save_fit(store, FitRecord(fit, 20252026, T0))
     assert _row_count(store) == 0
-
-
-def test_a_saved_fit_with_a_removed_feature_says_it_is_incompatible(
-    store: sqlite3.Connection,
-) -> None:
-    store.execute(
-        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
-        " VALUES (1, ?, ?, '2026-01-01T00:00:00.000000+00:00')",
-        (
-            '["old_feature"]',
-            '{"intercept": 0, "elo_weight": 1, "features": {"old_feature": 1}}',
-        ),
-    )
-    with pytest.raises(StoreError, match="unknown feature 'old_feature'.*run `hockey-model fit`"):
-        load_fit(store, FitRef(fit_id=1))
 
 
 _NAMES = st.lists(st.one_of(st.sampled_from(FEATURES), st.text(max_size=6)), max_size=5)
