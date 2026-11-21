@@ -84,10 +84,12 @@ Measured on 2026-11-20 on a copy of the real store (`~/.cache/hockey-model/real.
 | validate elo, elo+xg_form, elo+goalie_gsax, elo+rest (each) | 0.1 |
 | walk-forward fit before 2024-25 and before 2025-26 (each) | 0.1 |
 | score home_rate, elo, model_actual, model_guess incl. bootstrap (each) | 0.1 |
+| final `fit` (builds the actual rows again) | 1213 |
 | total, 1 worker | 4454 |
 | total, 4 workers | 3252 |
 
-The two feature builds are more than 99.9% of the time.
+The two feature builds are more than 99.9% of the time of the backtest.
+The final `fit` that follows in `daily-prepare.sh` builds the actual rows again, which costs as much as the first build; #289 tracks that.
 Every fit and every bootstrap run takes a tenth of a second, so a process pool for them costs more than it saves.
 They stay named units and run in the main process.
 The JSON report and the per-game CSV were byte-identical for 1 and for 4 workers on the real store (checked with `cmp`).
