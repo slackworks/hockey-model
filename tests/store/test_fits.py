@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from hockey_model.game_model.features import FEATURES, feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
 from hockey_model.store.db import StoreError, connect
-from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
+from hockey_model.store.fits import SYMMETRY_TOLERANCE, FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -145,6 +145,116 @@ def test_a_saved_covariance_of_the_wrong_shape_says_to_fit_again(
     store.execute(_INSERT, (stored,))
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
         load_fit(store, FitRef(fit_id=1))
+
+
+def _stored_with(means: str, scales: str, covariance: str) -> str:
+    return (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0,'
+        f' "means": {means}, "scales": {scales}, "stop_reason": "converged",'
+        f' "covariance": {covariance}}}}}'
+    )
+
+
+_GOOD_MEANS = '{"elo_logit": 0.0}'
+_GOOD_SCALES = '{"elo_logit": 1.0}'
+_GOOD_COVARIANCE = "[[1.0, 0.1], [0.1, 1.0]]"
+
+
+@pytest.mark.parametrize(
+    ("means", "scales", "covariance"),
+    [
+        (_GOOD_MEANS, _GOOD_SCALES, "[[1.0, 0.5], [0.0, 1.0]]"),
+        (_GOOD_MEANS, _GOOD_SCALES, "[[0.0, 0.0], [0.0, 1.0]]"),
+        (_GOOD_MEANS, _GOOD_SCALES, "[[1.0, 0.0], [0.0, -1.0]]"),
+        ("{}", _GOOD_SCALES, _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"rest": 1.0}', _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"elo_logit": 0.0}', _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"elo_logit": -2.0}', _GOOD_COVARIANCE),
+        ('{"elo_logit": NaN}', _GOOD_SCALES, _GOOD_COVARIANCE),
+    ],
+)
+def test_a_covariance_that_cannot_give_a_range_says_to_fit_again(
+    store: sqlite3.Connection, means: str, scales: str, covariance: str
+) -> None:
+    store.execute(_INSERT, (_stored_with(means, scales, covariance),))
+    with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
+        load_fit(store, FitRef(fit_id=1))
+
+
+def test_a_good_covariance_with_its_scaling_loads(store: sqlite3.Connection) -> None:
+    store.execute(_INSERT, (_stored_with(_GOOD_MEANS, _GOOD_SCALES, _GOOD_COVARIANCE),))
+    loaded = _loaded(store, 1)
+    assert loaded.diagnostics is not None
+    assert loaded.diagnostics.covariance == ((1.0, 0.1), (0.1, 1.0))
+
+
+_ENTRY = st.floats(min_value=-5.0, max_value=5.0)
+_LOOSE = st.one_of(_ENTRY, st.just(float("nan")), st.just(float("inf")))
+
+
+def _fit_with(features: list[str], covariance: tuple[tuple[float, ...], ...]) -> LogisticFit:
+    names = ("elo_logit", *features)
+    diagnostics = FitDiagnostics(
+        1, 1.0, 0.0, 1.0, 1.0, dict.fromkeys(names, 0.0), dict.fromkeys(names, 1.0), "c", covariance
+    )
+    return LogisticFit(tuple(features), 0.0, 1.0, dict.fromkeys(features, 0.1), diagnostics)
+
+
+def _symmetric(left: float, right: float) -> bool:
+    return abs(left - right) <= SYMMETRY_TOLERANCE * max(1.0, abs(left), abs(right))
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    features=st.lists(st.sampled_from(FEATURES), unique=True, max_size=len(FEATURES)),
+    rows=st.lists(st.lists(_LOOSE, max_size=6), max_size=6),
+)
+def test_save_fit_accepts_a_covariance_exactly_when_it_can_give_a_range(
+    tmp_path_factory: pytest.TempPathFactory, features: list[str], rows: list[list[float]]
+) -> None:
+    """A square, finite, symmetric matrix of the right size with a positive diagonal."""
+    covariance = tuple(tuple(row) for row in rows)
+    size = len(features) + 2
+    square = len(covariance) == size and all(len(row) == size for row in covariance)
+    valid = (
+        square
+        and all(math.isfinite(v) for row in covariance for v in row)
+        and all(covariance[i][i] > 0 for i in range(size))
+        and all(
+            _symmetric(covariance[i][j], covariance[j][i]) for i in range(size) for j in range(i)
+        )
+    )
+    with _fresh_store(tmp_path_factory) as store:
+        fit = _fit_with(features, covariance)
+        if valid:
+            save_fit(store, FitRecord(fit, 20252026, T0))
+        else:
+            with pytest.raises(StoreError):
+                save_fit(store, FitRecord(fit, 20252026, T0))
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    features=st.lists(st.sampled_from(FEATURES), unique=True, max_size=len(FEATURES)),
+    data=st.data(),
+)
+def test_a_covariance_round_trips_exactly_through_the_store(
+    tmp_path_factory: pytest.TempPathFactory, features: list[str], data: Any
+) -> None:
+    size = len(features) + 2
+    raw = [[data.draw(_ENTRY) for _ in range(size)] for _ in range(size)]
+    # A symmetric matrix with a positive diagonal, built from the draws.
+    covariance = tuple(
+        tuple(
+            abs(raw[i][i]) + 1.0 if i == j else (raw[i][j] + raw[j][i]) / 2.0 for j in range(size)
+        )
+        for i in range(size)
+    )
+    fit = _fit_with(features, covariance)
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
 
 
 _FINITE = st.floats(allow_nan=False, allow_infinity=False)

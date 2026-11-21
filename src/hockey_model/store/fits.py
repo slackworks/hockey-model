@@ -275,17 +275,45 @@ def _check_fit(fit: LogisticFit) -> None:
     numbers = [fit.intercept, fit.elo_weight, *fit.weights.values()]
     if not all(math.isfinite(number) for number in numbers):
         raise ValueError("a weight is not a finite number")
-    covariance = None if fit.diagnostics is None else fit.diagnostics.covariance
-    if covariance is not None:
-        _check_covariance(covariance, len(fit.features) + 2)
+    _check_win_range_inputs(fit)
+
+
+def _check_win_range_inputs(fit: LogisticFit) -> None:
+    """Raise ``ValueError`` unless a saved covariance and its scaling can give a win range."""
+    diagnostics = fit.diagnostics
+    if diagnostics is None or diagnostics.covariance is None:
+        return
+    names = {"elo_logit", *fit.features}
+    if set(diagnostics.means) != names or set(diagnostics.scales) != names:
+        raise ValueError("the saved scaling does not name the columns of the fit")
+    scaling = [*diagnostics.means.values(), *diagnostics.scales.values()]
+    if not all(math.isfinite(value) for value in scaling) or any(
+        scale <= 0.0 for scale in diagnostics.scales.values()
+    ):
+        raise ValueError("a saved scaling is not a finite number, or a scale is not above zero")
+    _check_covariance(diagnostics.covariance, len(fit.features) + 2)
+
+
+# A covariance that the fit writes is symmetric up to rounding in the solve of each column.
+SYMMETRY_TOLERANCE = 1e-9
 
 
 def _check_covariance(covariance: tuple[tuple[float, ...], ...], size: int) -> None:
-    """Raise ``ValueError`` unless the covariance is a finite square matrix of ``size`` rows."""
+    """Raise ``ValueError`` unless the covariance is a finite symmetric matrix of ``size`` rows.
+
+    A variance is the diagonal of a covariance, so each diagonal entry must be above zero.
+    """
     if len(covariance) != size or any(len(line) != size for line in covariance):
         raise ValueError(f"the covariance is not a {size} by {size} matrix")
     if not all(math.isfinite(value) for line in covariance for value in line):
         raise ValueError("the covariance holds a value that is not a finite number")
+    if any(covariance[i][i] <= 0.0 for i in range(size)):
+        raise ValueError("the covariance has a variance that is not above zero")
+    for i in range(size):
+        for j in range(i):
+            low, high = covariance[i][j], covariance[j][i]
+            if abs(low - high) > SYMMETRY_TOLERANCE * max(1.0, abs(low), abs(high)):
+                raise ValueError(f"the covariance is not symmetric at row {i}, column {j}")
 
 
 def _diagnostics(stored: dict[str, Any] | None) -> FitDiagnostics | None:
