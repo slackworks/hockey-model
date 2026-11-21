@@ -24,6 +24,7 @@ from hockey_model.game import (
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
+from hockey_model.report_schema import SCHEMA_VERSION, check_report
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
 from hockey_model.store.staleness import training_gaps
@@ -183,7 +184,8 @@ def inputs_sha256(report: DailyReport) -> str:
     """Return the fingerprint of what a reader sees in the report, without the time of the run.
 
     Two builds with the same fingerprint publish the same numbers, so the second need not
-    publish. The hash covers: the date and the interval level; the model identity (features,
+    publish. The hash covers: the ``schema_version``; the date and the interval level; the
+    model identity (features,
     ``fit_sha256``, ``code_sha``); ``training_gaps``; the source ``credits``; and, for each game,
     the game ID, the start, the state, the skip note, both win chances, ``made_after_start``,
     ``missing`` (the goalie and injury state that the prediction used), ``degraded_inputs``, and
@@ -192,6 +194,7 @@ def inputs_sha256(report: DailyReport) -> str:
     change the hash.
     """
     values = {
+        "schema_version": SCHEMA_VERSION,
         "date": report.day.isoformat(),
         "level": report.level,
         "credits": _credits(report),
@@ -205,6 +208,7 @@ def inputs_sha256(report: DailyReport) -> str:
 def report_json(report: DailyReport) -> dict[str, Any]:
     """Return the JSON copy of the report. Every game has the same keys."""
     return {
+        "schema_version": SCHEMA_VERSION,
         "date": report.day.isoformat(),
         "generated_at": iso_utc(report.generated_at),
         "inputs_sha256": inputs_sha256(report),
@@ -302,10 +306,14 @@ def report_markdown(report: DailyReport) -> str:
 def write_report(report: DailyReport, out_dir: Path) -> tuple[Path, Path]:
     """Write the Markdown and JSON copies. Return their paths, Markdown first.
 
-    Both strings are built before either file is written, so a failed build writes nothing.
+    Both strings are built before either file is written, and the JSON must pass the report
+    schema, so a build failure or an invalid report writes no file. A failed disk write can
+    leave the Markdown file alone.
     """
     markdown = report_markdown(report)
-    payload = json.dumps(report_json(report), indent=2, sort_keys=True) + "\n"
+    data = report_json(report)
+    check_report(data)
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
     stem = f"report-{report.day.isoformat()}"
     md_path = out_dir / f"{stem}.md"
     json_path = out_dir / f"{stem}.json"

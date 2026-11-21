@@ -90,7 +90,7 @@ jobs:
       # is exit 1. Exit 2 is a setup failure, and exit 0 is a test that missed the gap.
       - name: Smoke test fails when a package-data file or the entry point is missing
         run: |
-          for name in schema.sql views.sql entry_points.txt; do
+          for name in schema.sql views.sql daily_report.schema.json report_index.schema.json entry_points.txt; do
             code=0
             uv run --no-project python3 scripts/smoke_wheel.py --drop "$name" || code=$?
             if [ "$code" -ne 1 ]; then

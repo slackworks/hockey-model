@@ -152,6 +152,10 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ "$*" == "run hockey-model report-compare"* ]]; then\n'
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
+        # The index step is the real command: it holds the schema check the publish script needs.
+        'if [[ "$*" == "run hockey-model report-index"* ]]; then\n'
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
         '  if [[ -n "${FAKE_BACKTEST_FAIL:-}" ]]; then echo "backtest boom" >&2; exit 4; fi\n'
         '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'

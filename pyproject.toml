@@ -58,6 +58,7 @@ only_mutate = [
     "src/hockey_model/experiments/models.py",
     "src/hockey_model/game_model/elo.py",
     "src/hockey_model/game_model/logistic.py",
+    "src/hockey_model/json_schema.py",
     "src/hockey_model/sources/*.py",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `schema_version` (1) to the published report JSON, with a JSON Schema for the report and for a new `index-DATE.json` release asset that lists every build of the day (`file`, `generated_at`, `code_sha`, `fit_sha256`, `inputs_sha256`, `schema_version`). `daily` checks the report against its schema before it writes, and `publish-daily-report.sh` runs the new `report-index` command, which checks the report and the index before any upload. Both schemas ship in the wheel, and the smoke test runs `daily` and `report-index` from the installed wheel. The `publish` job installs the project so the script can run the check. [feat:report]
 - Add `open_store`, a read-only consumer API that pins one saved fit, reads one snapshot, and predicts a game or lists a day's games. `FitRef` selects the fit by id or by label, and `LIVE_LABEL` names the live fit. [feat:api]
 - Add `GamePrediction.training`, which names the fit and says whether the game is `in_sample`, `out_of_sample`, or `unknown` for it. The CLI JSON, the daily report JSON, the report Markdown, and the consumer result carry it. [feat:model]
 - Add a refresh note that counts the MoneyPuck rows that match no stored game, and the rows whose game is not final yet, and add a `stale_source` note to a prediction whose team's newest MoneyPuck game is older than its newest final game. [feat:store]
@@ -75,6 +76,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fix the gate step of `daily-report`, which failed on every run where `due` or `publish` was false, because `jq -e` exits 1 for a false value. `scripts/gate-outputs.sh` checks the type of each gate field and prints the step outputs. [fix:ci]
+- Fix the publish job so two publishes of one day run one at a time, because the index asset is a read-modify-write. The release token now reaches only the publish script step, and the version names are both checked before either upload, so a name collision leaves no half-published build. [fix:ci]
 - Move the store to schema version 5, which makes `source_reads.fetched_at` and `model_fits.created_at` NOT NULL. An earlier change made the two columns NOT NULL in the schema without a migration step, so an upgraded store kept the weaker shape and accepted a row with no timestamp. The upgrade refuses to run when a stored row holds a NULL in either column, and names the table and the count. [fix:store]
 - Read the shape of the tables before the upgrade trusts the version stamp, so a store stamped higher than its tables can recover. A stamp written while the table kept the old shape made the upgrade skip the changes the store had lost, and the next query failed with `no such column`. The stamp, the changes, the views, and the ledger row now commit together. [fix:store]
 - Name the cause of every store failure instead of a permission bit. Each `sqlite3.Error` and each `OSError` printed "check the file path and permissions", so a damaged store, a full disk, a lock, and a missing column all sent the reader after two things that were not wrong. Each cause now names its own fix, a missing column or table points at `hockey-model store upgrade`, and a cause with no match says so. [fix:cli]

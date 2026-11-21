@@ -19,6 +19,23 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 REAL_UV = shutil.which("uv") or ""
 
 
+def valid_report(generated: str = GENERATED, **fields: object) -> dict[str, object]:
+    """Return a daily report that passes the report schema. Pass a field to change it."""
+    report: dict[str, object] = {
+        "schema_version": 1,
+        "date": DAY,
+        "generated_at": generated,
+        "inputs_sha256": "a" * 64,
+        "level": 0.8,
+        "games": [],
+        "credits": [],
+        "model": {"features": LIVE, "fit_sha256": "b" * 64, "code_sha": SHA},
+        "training_gaps": [],
+    }
+    report.update(fields)
+    return report
+
+
 def due_json(**fields: object) -> str:
     """Return one ``report-due`` payload, with every field the gate prints filled in.
 

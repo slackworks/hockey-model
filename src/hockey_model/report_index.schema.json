@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Index of the builds of one daily report",
+  "description": "The index-YYYY-MM-DD.json release asset. It lists every build of one day, oldest first.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "date", "builds"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "format": "date"},
+    "builds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "generated_at",
+          "code_sha",
+          "fit_sha256",
+          "inputs_sha256",
+          "schema_version"
+        ],
+        "properties": {
+          "file": {"type": "string", "pattern": "^report-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}Z\\.json$"},
+          "generated_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}\\+00:00$"
+          },
+          "code_sha": {"type": ["string", "null"]},
+          "fit_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "inputs_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "schema_version": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}
