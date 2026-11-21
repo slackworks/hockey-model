@@ -135,3 +135,36 @@ def test_an_error_names_the_game_and_the_side(empty_model: NhlGameModel) -> None
     with pytest.raises(HockeyModelError) as caught:
         interval(empty_model, MAX_RATE + 1.0, 0.8)
     assert str(caught.value).startswith("game 100 TOR (home): goal interval: ")
+
+
+@settings(max_examples=80, deadline=None)
+@given(
+    rate=st.floats(min_value=0.1, max_value=MAX_RATE),
+    level=st.floats(min_value=0.01, max_value=0.99),
+)
+def test_the_interval_equals_the_log_space_cdf_for_any_rate_and_level(
+    empty_model: NhlGameModel, rate: float, level: float
+) -> None:
+    result = interval(empty_model, rate, level)
+    assert result.low == min(float(log_cdf_quantile(rate, (1.0 - level) / 2.0)), rate)
+    assert result.high == max(float(log_cdf_quantile(rate, (1.0 + level) / 2.0)), rate)
+
+
+_ANY_FLOAT = st.one_of(
+    st.floats(min_value=-2.0, max_value=MAX_RATE + 5.0),
+    st.sampled_from([math.nan, math.inf, -math.inf, 0.0, 1.0, MAX_RATE]),
+)
+
+
+@settings(max_examples=150, deadline=None)
+@given(rate=_ANY_FLOAT, level=_ANY_FLOAT)
+def test_the_interval_accepts_exactly_the_supported_rates_and_levels(
+    empty_model: NhlGameModel, rate: float, level: float
+) -> None:
+    supported = 0.0 <= rate <= MAX_RATE and 0.0 < level < 1.0 and (1.0 + level) / 2.0 < 1.0
+    if supported:
+        result = interval(empty_model, rate, level)
+        assert result.level == level
+    else:
+        with pytest.raises(HockeyModelError):
+            interval(empty_model, rate, level)
