@@ -129,6 +129,8 @@ The same scheduled check turns a gap that is older than `LIVE_FEED_MAX_AGE` into
 `hockey-model store gaps --live` lists each gap of the three live feeds as JSON, with the time of its first failure, its age, and `over_limit`.
 `scripts/check-live-feeds.sh` prints one `::error::` line for each gap that is over the limit, and the line names the source, the URL, and the age.
 A gap of a dated source does not raise this alert, because a newer score day or MoneyPuck file covers it.
+A store that no run writes any more makes no new failure, so no gap ages.
+The same command also lists the newest read of each live feed, and the check fails for a feed whose newest read is older than `LIVE_FEED_MAX_AGE`, or that has none (#294).
 A good read clears the gap with nobody involved, so the alert needs no operator step except a check of the host.
 
 A feed that returns a permanent HTTP status, such as 403, becomes a gap on the second failed read, with no wait for `ABANDON_MIN_SPAN_DAYS` (#279).

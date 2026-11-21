@@ -24,8 +24,18 @@ def _gap(source: str, over: bool, age: float = 30.5) -> dict[str, object]:
     }
 
 
-def _payload(*gaps: dict[str, object]) -> str:
-    return json.dumps({"limit_hours": 24.0, "gaps": list(gaps)})
+def _feed(source: str, over: bool = False, newest: str | None = "2026-11-21T11:00:00.000000+00:00"):
+    age = None if newest is None else 1.0
+    return {"source": source, "newest_read": newest, "age_hours": age, "over_limit": over}
+
+
+def _fresh_feeds() -> list[dict[str, object]]:
+    return [_feed(name) for name in ("espn_starters", "espn_injuries", "daily_faceoff")]
+
+
+def _payload(*gaps: dict[str, object], feeds: list[dict[str, object]] | None = None) -> str:
+    listed = _fresh_feeds() if feeds is None else feeds
+    return json.dumps({"limit_hours": 24.0, "gaps": list(gaps), "feeds": listed})
 
 
 @pytest.fixture
@@ -121,6 +131,8 @@ def test_a_failed_command_stops_the_check(fake_uv: Path, tmp_path: Path) -> None
         "not json",
         "[]",
         json.dumps({"limit_hours": 24, "gaps": "none"}),
+        json.dumps({"limit_hours": 24, "gaps": []}),
+        json.dumps({"limit_hours": 24, "gaps": [], "feeds": [{"source": "daily_faceoff"}]}),
         json.dumps({"gaps": []}),
         json.dumps({"limit_hours": 24, "gaps": [{"source": "daily_faceoff"}]}),
     ],
@@ -159,3 +171,33 @@ def test_a_missing_jq_is_named_before_the_command_runs(fake_uv: Path, tmp_path: 
     assert result.returncode == 1
     assert "jq is not on PATH" in result.stderr
     assert not (tmp_path / "calls.log").exists()
+
+
+def test_a_feed_with_an_old_newest_read_names_the_feed_and_the_read(
+    fake_uv: Path, tmp_path: Path
+) -> None:
+    feeds = [_feed("daily_faceoff", over=True, newest="2026-11-18T10:00:00.000000+00:00")]
+    result = _run(tmp_path, fake_uv, _payload(feeds=feeds))
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == [
+        "::error::check-live-feeds: daily_faceoff has no read in the last 24 hours "
+        "(newest read: 2026-11-18T10:00:00.000000+00:00). Check that daily-prepare and "
+        "daily-report still run and save the store cache."
+    ]
+
+
+def test_a_feed_that_was_never_read_says_none(fake_uv: Path, tmp_path: Path) -> None:
+    feeds = [_feed("espn_injuries", over=True, newest=None)]
+    result = _run(tmp_path, fake_uv, _payload(feeds=feeds))
+    assert result.returncode == 1
+    assert "(newest read: none)" in result.stderr
+
+
+def test_a_gap_and_a_silent_feed_each_get_their_own_line(fake_uv: Path, tmp_path: Path) -> None:
+    feeds = [_feed("espn_starters", over=True, newest=None)]
+    result = _run(tmp_path, fake_uv, _payload(_gap("daily_faceoff", over=True), feeds=feeds))
+    assert result.returncode == 1
+    assert [line.split()[1] for line in result.stderr.splitlines()] == [
+        "daily_faceoff",
+        "espn_starters",
+    ]

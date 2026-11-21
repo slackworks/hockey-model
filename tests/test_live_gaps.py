@@ -48,11 +48,41 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection.close()
 
 
-def test_an_empty_store_has_no_gap(conn: sqlite3.Connection) -> None:
-    assert live_gap_report(conn, NOW) == {
-        "limit_hours": LIVE_FEED_MAX_AGE.total_seconds() / 3600,
-        "gaps": [],
+def test_an_empty_store_has_no_gap_and_no_feed_read(conn: sqlite3.Connection) -> None:
+    report = live_gap_report(conn, NOW)
+    assert report["limit_hours"] == LIVE_FEED_MAX_AGE.total_seconds() / 3600
+    assert report["gaps"] == []
+    assert report["feeds"] == [
+        {"source": source, "newest_read": None, "age_hours": None, "over_limit": True}
+        for source in LIVE_FEEDS
+    ]
+
+
+def test_a_feed_is_over_the_limit_only_when_its_newest_read_is_older(
+    conn: sqlite3.Connection,
+) -> None:
+    record_read(conn, "espn_starters", URL, NOW - LIVE_FEED_MAX_AGE)
+    record_read(conn, "espn_injuries", URL, NOW - LIVE_FEED_MAX_AGE - timedelta(minutes=1))
+    record_failed_read(conn, "daily_faceoff", URL, NOW - timedelta(hours=2), _blocked())
+    conn.commit()
+    feeds = {f["source"]: f for f in live_gap_report(conn, NOW)["feeds"]}
+    assert feeds["espn_starters"]["over_limit"] is False
+    assert feeds["espn_injuries"]["over_limit"] is True
+    # A failed read counts: the run still reads the feed.
+    assert feeds["daily_faceoff"] == {
+        "source": "daily_faceoff",
+        "newest_read": iso_utc(NOW - timedelta(hours=2)),
+        "age_hours": 2.0,
+        "over_limit": False,
     }
+
+
+def test_the_newest_read_of_any_url_of_a_feed_counts(conn: sqlite3.Connection) -> None:
+    record_read(conn, "espn_starters", URL + "1", NOW - timedelta(days=5))
+    record_read(conn, "espn_starters", URL + "2", NOW - timedelta(hours=3))
+    conn.commit()
+    [feed] = [f for f in live_gap_report(conn, NOW)["feeds"] if f["source"] == "espn_starters"]
+    assert feed["age_hours"] == 3.0
 
 
 def test_a_gap_younger_than_the_limit_is_listed_and_not_over(conn: sqlite3.Connection) -> None:
