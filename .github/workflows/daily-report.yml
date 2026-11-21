@@ -205,6 +205,9 @@ jobs:
         with:
           name: daily-report
           path: ${{ runner.temp }}/report
+      # The publish script checks the report against its schema with the package code.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --locked
       - run: bash scripts/publish-daily-report.sh --date "$DAY" --report-dir "$RUNNER_TEMP/report"
       - if: always()
         name: Report the job time

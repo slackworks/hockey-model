@@ -9,8 +9,9 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from mutation_copy import require_path
-from report_script_support import DAY, GENERATED, SHA, TAG, _calls, _env, _run
+from report_script_support import DAY, SHA, TAG, _calls, _env, _run, valid_report
 
+from hockey_model.report_schema import add_build
 from hockey_model.store.timestamps import iso_utc
 
 require_path(Path(__file__).resolve().parents[1] / "scripts")
@@ -20,7 +21,7 @@ def _write_report(report_dir: Path, day: str = DAY) -> None:
     report_dir.mkdir()
     (report_dir / f"report-{day}.md").write_text("# report\n", encoding="utf-8")
     (report_dir / f"report-{day}.json").write_text(
-        json.dumps({"generated_at": GENERATED}) + "\n", encoding="utf-8"
+        json.dumps(valid_report(date=day)) + "\n", encoding="utf-8"
     )
     (report_dir / f"backtest-{day}.json").write_text("{}\n", encoding="utf-8")
     (report_dir / f"backtest-games-{day}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
@@ -235,7 +236,7 @@ def _write_build(report_dir: Path, generated: str) -> None:
     report_dir.mkdir(exist_ok=True)
     (report_dir / f"report-{DAY}.md").write_text("# report\n", encoding="utf-8")
     (report_dir / f"report-{DAY}.json").write_text(
-        json.dumps({"generated_at": generated}) + "\n", encoding="utf-8"
+        json.dumps(valid_report(generated)) + "\n", encoding="utf-8"
     )
     (report_dir / f"backtest-{DAY}.json").write_text("{}\n", encoding="utf-8")
     (report_dir / f"backtest-games-{DAY}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
@@ -260,3 +261,83 @@ def test_publish_names_each_version_by_the_hhmmss_of_its_generated_time(
     assert result.returncode == 0, result.stderr
     created = [line for line in _calls(tmp_path) if line.startswith("gh release create")][-1]
     assert f"report-{DAY}-{moment:%H%M%S}Z.json" in created
+
+
+def _index(report_dir: Path) -> dict:
+    return json.loads((report_dir / f"index-{DAY}.json").read_text(encoding="utf-8"))
+
+
+def test_publish_uploads_the_index_with_the_first_build(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path)
+    assert result.returncode == 0, result.stderr
+    create = _calls_with(tmp_path, "gh release create", f" {TAG} ")
+    assert f"/index-{DAY}.json" in create[0]
+    assert [b["file"] for b in _index(tmp_path / "report")["builds"]] == [
+        f"report-{DAY}-202013Z.json"
+    ]
+
+
+def test_publish_adds_a_rebuild_to_the_index_on_the_release(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    earlier = add_build(
+        None, valid_report("2026-11-04T10:00:00.000000+00:00"), f"report-{DAY}-100000Z.json"
+    )
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / f"index-{DAY}.json").write_text(json.dumps(earlier), encoding="utf-8")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"report-{DAY}-100000Z.json\nindex-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 0, result.stderr
+    files = [b["file"] for b in _index(tmp_path / "report")["builds"]]
+    assert files == [f"report-{DAY}-100000Z.json", f"report-{DAY}-202013Z.json"]
+    alias = [line for line in _calls(tmp_path) if "--clobber" in line]
+    assert alias and f"/index-{DAY}.json" in alias[0]
+
+
+def test_publish_starts_an_index_when_the_release_has_none(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 0, result.stderr
+    assert len(_index(tmp_path / "report")["builds"]) == 1
+    assert not _calls_with(tmp_path, "gh release download", "index-")
+
+
+def test_publish_stops_before_any_upload_when_the_report_does_not_match_the_schema(
+    fakes: Path, tmp_path: Path
+) -> None:
+    report = tmp_path / "report"
+    _write_report(report)
+    broken = valid_report()
+    del broken["games"]
+    (report / f"report-{DAY}.json").write_text(json.dumps(broken) + "\n", encoding="utf-8")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 1
+    assert "'games' is a required property" in result.stderr
+    assert "Nothing was published" in result.stderr
+    assert not any(line.startswith("gh release upload") for line in _calls(tmp_path))
+    assert not any(line.startswith("gh release create") for line in _calls(tmp_path))
+
+
+def test_publish_stops_when_the_index_on_the_release_is_not_valid(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _write_report(tmp_path / "report")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / f"index-{DAY}.json").write_text("{}", encoding="utf-8")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"index-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 1
+    assert "report_index.schema.json" in result.stderr
+    assert not any(line.startswith("gh release upload") for line in _calls(tmp_path))

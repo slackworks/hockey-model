@@ -9,6 +9,8 @@
 # The release target is GITHUB_SHA, the commit that built the first report of the day. Each build
 # adds its report as report-DATE-HHMMSSZ files, named by its generated_at time. A published
 # version is never replaced. The report-DATE files and the backtest files move to the newest build.
+# The index-DATE.json asset lists every build (file, generated_at, code_sha, fit_sha256,
+# inputs_sha256, schema_version). A rebuild adds its entry and drops none.
 set -euo pipefail
 
 day=""
@@ -98,7 +100,8 @@ version_md="$report_dir/report-$day-$stamp.md"
 version_json="$report_dir/report-$day-$stamp.json"
 cp "$md" "$version_md"
 cp "$json" "$version_json"
-latest=("$md" "$json" "$backtest" "$backtest_games")
+index="$report_dir/index-$day.json"
+latest=("$md" "$json" "$backtest" "$backtest_games" "$index")
 notes="$report_dir/release-notes-$day.md"
 {
   echo "Every build's report is kept. Each report-$day-HHMMSSZ file set is one build, named by its"
@@ -127,6 +130,20 @@ publish_version() {
   exit 1
 }
 
+# The index lists every build of the day. The command checks the report against its schema and
+# the index against its own, and it exits non-zero on a mismatch, so no upload follows a bad
+# report. $1 is the index already on the release, or empty for the first build.
+build_index() {
+  local args=(--report "$json" --name "$(basename "$version_json")" --out "$index")
+  if [[ -n "${1:-}" ]]; then
+    args+=(--existing "$1")
+  fi
+  if ! uv run hockey-model report-index "${args[@]}" >/dev/null; then
+    echo "publish-daily-report: $json or the index of $day is not valid; its error is above. Nothing was published." >&2
+    exit 1
+  fi
+}
+
 answer="$(release_status "$tag")"
 case "$answer" in
 published)
@@ -134,12 +151,19 @@ published)
   existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
   check_dir="$report_dir/published-check"
   mkdir -p "$check_dir"
+  if grep -qxF "index-$day.json" <<<"$existing_assets"; then
+    gh release download "$tag" --pattern "index-$day.json" --dir "$check_dir"
+    build_index "$check_dir/index-$day.json"
+  else
+    build_index ""
+  fi
   publish_version "$version_md"
   publish_version "$version_json"
   gh release upload "$tag" "${latest[@]}" --clobber
   gh release edit "$tag" --notes-file "$notes"
   ;;
 missing)
+  build_index ""
   gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
