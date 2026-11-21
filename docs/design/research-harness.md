@@ -33,7 +33,7 @@ The builder MUST check the versions again at build time (global rule), and MUST 
 Rules:
 
 1. Add a library in the first pull request that needs it, not before. Add it to `[project] dependencies` in `pyproject.toml` with `~=`, then run `uv lock`.
-2. Run `uv run python3 scripts/smoke_wheel.py` after the change. The wheel now installs its dependencies, so the smoke test proves the pins resolve.
+2. Run `uv run python3 scripts/smoke_wheel.py` after the change. The smoke test installs the dependencies that `uv.lock` pins, so once the project has a runtime dependency it proves the pins resolve.
 3. Seed every random draw with `numpy.random.default_rng(seed)`. Never use the global NumPy or `random` state.
 4. Do not rewrite `game_model/logistic.py` with a library in a research pull request. The live fit must not change. #138 owns any change to it.
 5. A library result that feeds a stored value MUST be checked by a test against a small case that is solved by hand or by a second method.

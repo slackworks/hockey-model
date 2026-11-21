@@ -165,41 +165,18 @@ def _locked_requirements(work: Path, env: dict[str, str]) -> Path:
     return path
 
 
-def _has_requirements(path: Path) -> bool:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return any(line.strip() and not line.lstrip().startswith("#") for line in lines)
-
-
 def _install(work: Path, wheel: Path, env: dict[str, str]) -> Path:
     """Install the locked dependencies, then the wheel alone, so the tree matches uv.lock."""
     venv = work / "venv"
     _run(["uv", "venv", "--python", "3.14", str(venv)], cwd=work, env=env, setup=True)
     python = str(venv / "bin" / "python")
     requirements = _locked_requirements(work, env)
-    if _has_requirements(requirements):
-        _run(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                python,
-                "--require-hashes",
-                "-r",
-                str(requirements),
-            ],
-            cwd=work,
-            env=env,
-            setup=True,
-        )
-    else:
-        print("locked dependencies: none to install")
-    _run(
-        ["uv", "pip", "install", "--python", python, "--no-deps", str(wheel)],
-        cwd=work,
-        env=env,
-        setup=True,
-    )
+    # An export with no requirement is a normal case, and uv installs nothing from it.
+    install = ["uv", "pip", "install", "--python", python]
+    _run([*install, "--require-hashes", "-r", str(requirements)], cwd=work, env=env, setup=True)
+    _run([*install, "--no-deps", str(wheel)], cwd=work, env=env, setup=True)
+    # A dependency that the wheel needs and the lock lacks is a setup failure, not a smoke failure.
+    _run(["uv", "pip", "check", "--python", python], cwd=work, env=env, setup=True)
     return venv
 
 
