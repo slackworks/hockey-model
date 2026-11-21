@@ -190,7 +190,10 @@ def test_the_training_memberships_in_the_schema_match_the_code() -> None:
 def test_the_schema_lists_the_fields_the_report_writes(built: dict[str, Any]) -> None:
     schema = packaged_schema(REPORT_SCHEMA_FILE)
     assert sorted(schema["required"]) == sorted(built) == sorted(TOP_FIELDS)
-    assert sorted(schema["$defs"]["game"]["required"]) == sorted(built["games"][0])
+    game = schema["$defs"]["game"]
+    # An optional field never raises the version, so the schema does not require it.
+    assert sorted(game["required"]) == sorted(set(built["games"][0]) - {"win_interval"})
+    assert "win_interval" in game["properties"]
 
 
 def test_write_report_refuses_an_invalid_report_and_writes_no_file(

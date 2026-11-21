@@ -24,6 +24,7 @@ from hockey_model.game import (
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
+from hockey_model.report_interval import away_interval, interval_json, interval_notes, win_cell
 from hockey_model.report_schema import SCHEMA_VERSION, check_report
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
@@ -154,6 +155,7 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
             "missing": [],
             "degraded_inputs": [],
             "training": None,
+            "win_interval": None,
         }
     return {
         **base,
@@ -163,6 +165,7 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
         "missing": _missing_json(prediction.missing),
         "degraded_inputs": _degraded_json(prediction),
         "training": _training_json(prediction.training),
+        "win_interval": interval_json(prediction),
     }
 
 
@@ -187,7 +190,8 @@ def inputs_sha256(report: DailyReport) -> str:
     publish. The hash covers: the ``schema_version``; the date and the interval level; the
     model identity (features,
     ``fit_sha256``, ``code_sha``); ``training_gaps``; the source ``credits``; and, for each game,
-    the game ID, the start, the state, the skip note, both win chances, ``made_after_start``,
+    the game ID, the start, the state, the skip note, both win chances, the win ranges,
+    ``made_after_start``,
     ``missing`` (the goalie and injury state that the prediction used), ``degraded_inputs``, and
     ``training``. It leaves out ``generated_at``, and the age in a stale-source note. A source
     read that changes no covered value, such as a fresh read of the same starter, does not
@@ -228,10 +232,6 @@ def _model_json(model: ModelIdentity | None) -> dict[str, Any] | None:
         "fit_sha256": model.fit_sha256,
         "code_sha": model.code_sha,
     }
-
-
-def _percent(value: float | None) -> str:
-    return "-" if value is None else f"{value:.1%}"
 
 
 def _cell(text: str) -> str:
@@ -281,10 +281,13 @@ def report_markdown(report: DailyReport) -> str:
             out.append(
                 f"| {_cell(f'{row.away} at {row.home}')} ({row.game_id}) | {iso_utc(row.start)}"
                 f" | {_cell(row.state)}"
-                f" | {_percent(p.home_win if p else None)}"
-                f" | {_percent(p.away_win if p else None)} | {_notes(line)} |"
+                f" | {win_cell(p.home_win if p else None, p.home_win_interval if p else None)}"
+                f" | {win_cell(p.away_win if p else None, away_interval(p))} | {_notes(line)} |"
             )
     out.append("")
+    predictions = [line.prediction for line in report.lines if line.prediction is not None]
+    for note in interval_notes(predictions, report.level):
+        out.extend([note, ""])
     if report.model is not None:
         features = ", ".join(report.model.features) or "Elo only"
         code = report.model.code_sha or "unknown"
