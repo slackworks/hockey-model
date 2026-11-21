@@ -419,3 +419,24 @@ prek install
 ```
 
 See `AGENTS.md` for the commands and rules.
+
+## Release
+
+A tag that starts with `v` runs the release workflow (`.github/workflows/release.yml`).
+The workflow publishes only after the gate passes.
+Release in this order:
+
+1. Rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, and add a new `## [Unreleased]` section above it.
+2. Set `project.version` in `pyproject.toml` to `X.Y.Z`.
+3. Merge both changes to `main`.
+4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
+5. Tag the merge commit `vX.Y.Z`, and push the tag.
+
+The `verify` job refuses a tag that is not `v` and `project.version` character for character.
+It also refuses a version that is not a normal PEP 440 version, a version with a local part or a `.dev` part, and a changelog with no section for the version.
+The `build` job runs the installed-wheel smoke test, builds the wheel and the source archive, and checks that both name the version.
+The `publish` job is the only job with write access.
+It attaches the two files to the GitHub release of the tag.
+A pre-release version, such as `0.2.0rc1`, makes a pre-release.
+A second run for the same tag skips a file with the same bytes and stops on a file with other bytes.
+The workflow publishes to no package index.
