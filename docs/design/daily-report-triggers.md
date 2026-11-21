@@ -54,6 +54,7 @@ A release with no versioned asset falls back to the alias.
 Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`.
 Equal hashes end the run with reason `unchanged` and no `complete` marker, so the publish job skips.
 An alias with no `inputs_sha256`, from a build before the field existed, counts as changed once.
+The hash covers `schema_version`, so a build with a new report shape publishes again. The shape and the build index are in [report-contract.md](report-contract.md).
 A failed release lookup or download stops the run with exit code 1.
 The workflow passes the flag only when the gate decided to publish, so a dry run always builds.
 A day with no release builds and publishes without a comparison, which keeps the first report of a day and the late report.
