@@ -126,7 +126,7 @@ if [[ "$actual" != "$TLA_TOOLS_SHA256" ]]; then
   exit 1
 fi
 
-# One spec, three configs. The two small configs run first, so a mistake fails in seconds.
+# One spec, four configs. The two small configs run first, so a mistake fails in seconds.
 rc=0
 for cfg in specs/daily_prepare_stall.cfg specs/daily_prepare_blocked.cfg \
   specs/daily_prepare.cfg; do
@@ -140,6 +140,32 @@ for cfg in specs/daily_prepare_stall.cfg specs/daily_prepare_blocked.cfg \
     break
   fi
 done
+
+# A known failure: TLC must find a counterexample for the property that the config names (#191).
+# The run fails when TLC passes it, or when TLC stops for any other reason.
+known_cfg=specs/daily_prepare_false_stall.cfg
+known_property=StallOnlyForBacklog
+if ((rc == 0)); then
+  echo "tlc.sh: checking specs/daily_prepare.tla with $known_cfg (expects a violation)"
+  mkdir -p "$tmp/states/known_failure"
+  known_rc=0
+  java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto \
+    -metadir "$tmp/states/known_failure" -config "$known_cfg" specs/daily_prepare.tla \
+    >"$tmp/known_failure.log" 2>&1 || known_rc=$?
+  # The counterexample trace is long. Print only the head of it.
+  head -n 40 "$tmp/known_failure.log"
+  if ((known_rc == 13)) && grep -q "property $known_property is violated" "$tmp/known_failure.log"; then
+    echo "tlc.sh: $known_cfg found the expected violation of $known_property."
+  elif ((known_rc == 0)); then
+    echo "tlc.sh: $known_cfg passed, so $known_property holds now." >&2
+    echo "  Move $known_property into the main config and delete $known_cfg." >&2
+    rc=1
+  else
+    echo "tlc.sh: $known_cfg ended with exit $known_rc, not a violation of $known_property." >&2
+    rc=$known_rc
+    ((rc != 0)) || rc=1
+  fi
+fi
 
 case "$rc" in
 0) ;;
