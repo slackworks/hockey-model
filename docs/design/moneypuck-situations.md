@@ -34,7 +34,7 @@ Keep the two lists as tuples of `(csv_name, column_name, kind)` in the new parse
 
 ## Storage
 
-Schema version 6, added through `hockey-model store upgrade` (`store/upgrade.py`), with the backup and the one-transaction rule that the upgrade already has.
+A new schema version, added through `hockey-model store upgrade` (`store/upgrade.py`), with the backup and the one-transaction rule that the upgrade already has.
 
 ```sql
 CREATE TABLE mp_team_situations (
