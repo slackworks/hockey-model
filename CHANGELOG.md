@@ -44,6 +44,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `hockey-model store upgrade`, which moves a version 1 store to the current schema. It keeps every row and fit ID, writes a backup first, and runs in one transaction. `--if-missing skip` exits 0 when the store file does not exist, for a first run that writes one later. [feat:store]
 - Add a pre-push mutation check. It runs mutmut on the functions that a push changes, and it fails on a survivor or a timeout on a changed line, on any other incomplete result, and on a mutant whose line it cannot find. A timeout off the changed lines is listed and does not fail the push. [chore:test]
 - Add a scheduled check that alerts when a game day with games has no `reports-DATE` release, or when every game row of its report was made after the start. A day with no games raises no alert. [feat:report]
+- Skip the backtest and the fit in `daily-prepare.sh` for a day that has its `prepared-DATE` marker and a valid `backtest-DATE.json`. The refresh still runs. `--force`, and the `force` input of a manual `daily-prepare` run, rebuild the day. [feat:report]
+- Add `inputs_sha256` to the daily report JSON, and add `hockey-model report-compare` with `daily-report.sh --skip-unchanged`. A report build that has the inputs of the newest published report does not publish. [feat:report]
 
 ### Changed
 
@@ -64,6 +66,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Name the feed games that fall outside a game day's window in the `report-due` output, instead of dropping them without a word. [refactor:report]
 - Replace the daily report's release files and notes with each later build before the first puck drop. The release can therefore change until then, and its notes say so. [feat:report]
 - Keep each daily report build as its own `report-DATE-HHMMSSZ` file, named by its `generated_at` time, so a rerun no longer replaces a published version. The `report-DATE` files stay as the alias for the newest build. [fix:report]
+- Run `daily-prepare` at minute 14 and `daily-report` at minute 44 of every hour. A late or failed run is retried within the hour, and a confirmed goalie reaches the release within the hour. A report run that finds no prepared marker skips before the first puck drop and fails after it. [feat:report]
+- Remove `TRIGGER_HOURS_UTC`, `scripts/trigger_hours.py`, `PREP_WINDOW`, `PREP_QUEUE_ALLOWANCE`, `PREP_CRON_HOUR_UTC`, `prep_too_early`, and the `prep_too_early` field of `report-due`. `report-due` still says `puck_drop_passed`. [refactor:report]
 
 ### Fixed
 
