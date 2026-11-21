@@ -14,7 +14,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from seeding import add_game, add_team_form
 
-from hockey_model.store import sql_text, upgrade
+from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.store.shape import Requirement, earned_version
@@ -550,7 +550,7 @@ def test_a_table_name_that_is_not_an_identifier_is_refused() -> None:
     """The DDL builder interpolates its argument, so a bad name must stop before any SQL."""
     for bad in ("mp; DROP TABLE games", "a b", "", "1t", 'x"'):
         with pytest.raises(StoreError, match="is not a table name"):
-            upgrade._mp_team_games_ddl(bad)
+            migrations.mp_team_games_ddl(bad)
 
 
 def test_a_damaged_ledger_is_named_instead_of_read_as_no_backup(v1: Path) -> None:
