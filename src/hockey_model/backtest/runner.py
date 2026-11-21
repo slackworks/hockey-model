@@ -239,6 +239,19 @@ def merge_scored(parts: Sequence[_Scored]) -> list[_Scored]:
     return sorted(parts, key=lambda g: (g.row.game.season, g.row.game.start, g.row.game.game_id))
 
 
+def _check_same_games(actual: Sequence[TrainingRow], guess: Sequence[TrainingRow]) -> None:
+    """Raise unless the actual run and the guess run scored the same games."""
+    only_actual = {r.game.game_id for r in actual} - {r.game.game_id for r in guess}
+    only_guess = {r.game.game_id for r in guess} - {r.game.game_id for r in actual}
+    if only_actual or only_guess:
+        raise HockeyModelError(
+            f"backtest: the actual run and the guess run differ in the scored games: "
+            f"{len(only_actual)} only in the actual run (first {sorted(only_actual)[:5]}), "
+            f"{len(only_guess)} only in the guess run (first {sorted(only_guess)[:5]}); "
+            "build both runs from the same games"
+        )
+
+
 def _score_seasons(
     actual: Sequence[TrainingRow],
     guess: Sequence[TrainingRow],
@@ -249,6 +262,7 @@ def _score_seasons(
     by_game = {r.game.game_id: r for r in guess}
     scored: list[_Scored] = []
     cohort = [r for r in actual if in_cohort(r.game, plan)]
+    _check_same_games(cohort, [r for r in guess if in_cohort(r.game, plan)])
     windows = _fit_windows(actual, plan)
     units = [
         Unit(f"walk-forward fit before season {season}", _season_fit, (season, rows, tested))

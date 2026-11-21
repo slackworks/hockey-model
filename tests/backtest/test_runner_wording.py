@@ -306,3 +306,34 @@ def test_success_holds_exactly_when_the_upper_end_is_below_zero(
         report, _ = runner.run_backtest(shared_seeded, PLAN, candidates=FEATURES)
     assert report.success is (upper < 0.0)
     assert bool(report.live_features) is (upper < 0.0)
+
+
+def _games(*ids: int) -> Any:
+    """Return stand-in rows that carry only a game ID."""
+    return [SimpleNamespace(game=SimpleNamespace(game_id=i)) for i in ids]
+
+
+def test_the_same_games_in_both_runs_pass_the_check() -> None:
+    runner._check_same_games(_games(1, 2, 3), _games(3, 2, 1))
+
+
+@pytest.mark.parametrize(
+    ("actual", "guess", "text"),
+    [
+        ((1, 2, 3), (1, 2), "1 only in the actual run (first [3]), 0 only in the guess run"),
+        ((1, 2), (1, 2, 9), "0 only in the actual run (first []), 1 only in the guess run"),
+        ((1,), (2,), "1 only in the actual run (first [1]), 1 only in the guess run (first [2])"),
+    ],
+)
+def test_a_game_in_only_one_run_raises_and_names_the_game(
+    actual: tuple[int, ...], guess: tuple[int, ...], text: str
+) -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        runner._check_same_games(_games(*actual), _games(*guess))
+    assert text in str(caught.value)
+
+
+def test_scoring_refuses_a_guess_run_that_lacks_a_game(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, "in_cohort", lambda game, plan: True)
+    with pytest.raises(HockeyModelError, match="differ in the scored games"):
+        runner._score_seasons(_games(1, 2), _games(1), ("rest",), PLAN)
