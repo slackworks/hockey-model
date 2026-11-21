@@ -5,6 +5,8 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import (
     add_game,
     add_goalie,
@@ -19,10 +21,12 @@ from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.features import (
     ATTEMPT_FEATURES,
     FEATURES,
+    NEUTRAL_FORM,
     REST_CAP_DAYS,
     GoalieMode,
     build_features,
 )
+from hockey_model.store.db import connect
 from hockey_model.types import Player, Slot
 
 START = utc("2026-01-20T00:00")
@@ -41,6 +45,13 @@ def features(
     names: tuple[str, ...] = FEATURES,
 ):
     return build_features(store, game(), as_of, EloBook(), goalie_mode=mode, names=names)
+
+
+def rest_only(conn: sqlite3.Connection, game: Game):
+    """Build the rest feature of ``game`` alone."""
+    return build_features(
+        conn, game, AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=("rest",)
+    )
 
 
 def kinds(row) -> list[MissingKind]:
@@ -195,10 +206,64 @@ def test_rest_caps_at_four(store: sqlite3.Connection) -> None:
     assert REST_CAP_DAYS == 4.0
 
 
-def test_rest_first_game_in_store_is_the_cap(store: sqlite3.Connection) -> None:
+def test_rest_with_the_away_team_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
+    add_game(store, 2, "2026-01-18T00:00", home=HOME, away="MTL")
+    add_game(store, 3, "2026-01-20T00:00", home=HOME, away=AWAY)
+    row = features(store)
+    assert row.values["rest"] == NEUTRAL_FORM
+    notes = [m for m in row.missing if m.kind is MissingKind.REST_UNKNOWN]
+    assert [m.team for m in notes] == [AWAY]
+    assert notes[0].note == "no earlier game in the store; the rest difference is neutral"
+
+
+def test_rest_with_the_home_team_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
     add_game(store, 2, "2026-01-18T00:00", home="NYR", away=AWAY)
     row = features(store)
-    assert row.values["rest"] == pytest.approx(REST_CAP_DAYS - 2.0)
+    assert row.values["rest"] == NEUTRAL_FORM
+    assert [m.team for m in row.missing if m.kind is MissingKind.REST_UNKNOWN] == [HOME]
+
+
+def test_rest_with_both_teams_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
+    row = features(store)
+    assert row.values["rest"] == NEUTRAL_FORM
+    assert sorted(m.team for m in row.missing if m.kind is MissingKind.REST_UNKNOWN) == [AWAY, HOME]
+
+
+def test_a_relocated_franchise_has_its_rest_from_the_old_code(store: sqlite3.Connection) -> None:
+    # Arizona's games count for Utah, so Utah's first game of a season has a rest.
+    add_game(store, 1, "2026-01-18T00:00", home="ARI", away="MTL")
+    add_game(store, 2, "2026-01-18T00:00", home="NYR", away=AWAY)
+    row = rest_only(store, Game(100, "UTA", AWAY, START))
+    assert MissingKind.REST_UNKNOWN not in kinds(row)
+    assert row.values["rest"] == pytest.approx(0.0)
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    home_gap=st.one_of(st.none(), st.integers(1, 8)),
+    away_gap=st.one_of(st.none(), st.integers(1, 8)),
+)
+def test_swapping_the_teams_negates_a_known_rest_difference_and_keeps_a_neutral_one(
+    tmp_path_factory: pytest.TempPathFactory, home_gap: int | None, away_gap: int | None
+) -> None:
+    conn = connect(tmp_path_factory.mktemp("store") / "store.db")
+    try:
+        for number, (team, gap, other) in enumerate(
+            ((HOME, home_gap, "MTL"), (AWAY, away_gap, "NYR")), start=1
+        ):
+            if gap is not None:
+                day = (START - timedelta(days=gap)).strftime("%Y-%m-%dT%H:%M")
+                add_game(conn, number, day, home=team, away=other)
+        straight = rest_only(conn, Game(100, HOME, AWAY, START))
+        swapped = rest_only(conn, Game(100, AWAY, HOME, START))
+    finally:
+        conn.close()
+    assert swapped.values["rest"] == -straight.values["rest"]
+    if home_gap is None or away_gap is None:
+        assert straight.values["rest"] == NEUTRAL_FORM
+    else:
+        expected = min(home_gap, REST_CAP_DAYS) - min(away_gap, REST_CAP_DAYS)
+        assert straight.values["rest"] == pytest.approx(expected)
 
 
 def test_features_use_only_games_before_start(store: sqlite3.Connection) -> None:

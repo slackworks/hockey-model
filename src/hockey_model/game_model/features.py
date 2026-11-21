@@ -38,6 +38,8 @@ FORM_WINDOW = 10
 GOALIE_WINDOW = 20
 REST_CAP_DAYS = 4.0
 # The value of a form feature when either team has no form: no difference between the teams.
+# The rest differential follows the same rule: a team with no earlier game in the store gives
+# no difference, as a goalie with no rate does (#66, #144).
 NEUTRAL_FORM = 0.0
 _DAY = timedelta(days=1)
 
@@ -184,16 +186,23 @@ def _days_rested(
 def _rest(
     conn: sqlite3.Connection, game: Game, cutoff: datetime
 ) -> tuple[float, list[MissingInput]]:
-    """Return home minus away rest. A team with no earlier game counts as fully rested."""
-    days: dict[str, float] = {}
+    """Return home minus away rest. A team with no earlier game makes the difference neutral.
+
+    The store has no information about the rest of that team, so the known side does not pass
+    through as a difference against a guessed rest (#144).
+    """
+    days: dict[str, float | None] = {}
     missing: list[MissingInput] = []
     for team in (game.home, game.away):
         found = _days_rested(conn, team, game.start, cutoff)
         if found is None:
-            note = f"no earlier game in the store; {REST_CAP_DAYS:g} days of rest is used"
+            note = "no earlier game in the store; the rest difference is neutral"
             missing.append(MissingInput(MissingKind.REST_UNKNOWN, team, note))
-        days[team] = REST_CAP_DAYS if found is None else found
-    return days[game.home] - days[game.away], missing
+        days[team] = found
+    home, away = days[game.home], days[game.away]
+    if home is None or away is None:
+        return NEUTRAL_FORM, missing
+    return home - away, missing
 
 
 def _degraded(name: str, kind: MissingKind, gaps: Sequence[MissingInput]) -> DegradedInput:
