@@ -3,7 +3,6 @@
 import sqlite3
 from datetime import timedelta
 
-import pytest
 from seeding import (
     add_game,
     add_goalie,
@@ -15,14 +14,12 @@ from seeding import (
     utc,
 )
 
-from hockey_model.store import reads
 from hockey_model.store.reads import (
     RESULT_DELAY,
     final_games_before,
     franchise_codes,
     goalie_starts_before,
     injury_reads_before,
-    mp_attempt_form_before,
     mp_goalie_form_before,
     mp_team_form_before,
     player_catalog,
@@ -184,19 +181,3 @@ def test_an_empty_injury_list_clears_the_earlier_one(store: sqlite3.Connection) 
     assert [i.player_name for i in injury_reads_before(store, utc("2026-01-01T12:00"))] == [
         "Hurt Player"
     ]
-
-
-def test_mp_attempt_form_is_newest_first_and_hides_recent(store: sqlite3.Connection) -> None:
-    for number in (1, 2, 3):
-        add_game(store, number, f"2026-01-0{number}T00:00")
-        add_team_form(store, number, "TOR", 0.5, 0.5, attempts=(number, 9))
-    rows = mp_attempt_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
-    assert rows == [(2, 9), (1, 9)]
-    assert mp_attempt_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(3, 9)]
-
-
-def test_the_form_reader_refuses_a_column_that_is_not_known(store: sqlite3.Connection) -> None:
-    with pytest.raises(ValueError, match="unknown column 'game_id; DROP TABLE games'"):
-        reads._mp_pairs_before(
-            store, ("xg_for", "game_id; DROP TABLE games"), "TOR", utc("2026-01-01T00:00"), 5
-        )

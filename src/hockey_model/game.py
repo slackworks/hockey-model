@@ -36,7 +36,6 @@ class MissingKind(StrEnum):
     GOALIE_UNKNOWN = "goalie_unknown"
     GOALIE_CONFLICT = "goalie_conflict"
     XG_FORM = "xg_form"
-    ATTEMPT_FORM = "attempt_form"
     FORM_GAMES_LEFT_OUT = "form_games_left_out"
     GOALIE_FORM = "goalie_form"
     STALE_SOURCE = "stale_source"

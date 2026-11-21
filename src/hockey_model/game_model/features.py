@@ -17,22 +17,18 @@ from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.goalies import boxscore_starter, resolve_goalie
 from hockey_model.identity import Catalog
 from hockey_model.store.reads import (
-    mp_attempt_form_before,
     mp_goalie_form_before,
     mp_team_form_before,
     player_catalog,
     team_games_before,
 )
 
-# The production candidates. The attempt set replaces only xg_form, for the leak test (#77).
+# The production candidates.
 FEATURES = ("xg_form", "goalie_gsax", "rest")
-ATTEMPT_FEATURES = ("attempt_form", "goalie_gsax", "rest")
 TeamFormReader = Callable[[sqlite3.Connection, str, datetime, int], Sequence[tuple[float, float]]]
 _FORM_READERS: dict[str, tuple[TeamFormReader, MissingKind]] = {
     "xg_form": (mp_team_form_before, MissingKind.XG_FORM),
-    "attempt_form": (mp_attempt_form_before, MissingKind.ATTEMPT_FORM),
 }
-ALL_FEATURE_NAMES = ("xg_form", "attempt_form", "goalie_gsax", "rest")
 GOALIE_FEATURE = "goalie_gsax"
 FORM_WINDOW = 10
 GOALIE_WINDOW = 20
@@ -66,9 +62,9 @@ class FeatureRow:
 
 def feature_name_problem(names: Sequence[str]) -> str | None:
     """Return why ``names`` is not a usable feature list, or ``None`` when it is."""
-    unknown = [name for name in names if name not in ALL_FEATURE_NAMES]
+    unknown = [name for name in names if name not in FEATURES]
     if unknown:
-        return f"unknown feature {unknown[0]!r}; use any of {', '.join(ALL_FEATURE_NAMES)}"
+        return f"unknown feature {unknown[0]!r}; use any of {', '.join(FEATURES)}"
     repeated = sorted({name for name in names if names.count(name) > 1})
     if repeated:
         return f"feature {repeated[0]!r} is named more than once"

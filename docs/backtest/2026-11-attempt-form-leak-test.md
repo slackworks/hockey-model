@@ -67,3 +67,20 @@ Limits of this result:
 - This result does not change the separate comparison with the DraftKings no-vig line, which runs outside this repository.
 
 Outputs: `~/.cache/hockey-model/results-attempts/` (`xg.json`, `attempt.json`, and the per-game CSVs).
+
+## Reproduce
+
+The attempt candidate set and its CLI option were removed after this result (#93).
+Commit `9e15efb` is the last revision of `main` that holds them.
+Check out that commit, rebuild the store as the protocol says, and run `hockey-model backtest --candidates attempt --games-out PATH` to repeat the attempt run.
+The same command with `--candidates xg` repeats the xG run.
+
+The result files are on the machine of the owner, in `~/.cache/hockey-model/results-attempts/`.
+Their SHA-256 sums are:
+
+| File | SHA-256 |
+| --- | --- |
+| `xg.json` | `6541a135089037dbf3656a9d5d202d2c1514df23f1a88c07e89ea4f220e5954c` |
+| `attempt.json` | `aa1efcf3089ea43b24a0f69f44b183747bacd05121833009f2406732f4ba910e` |
+| `xg-games.csv` | `2080b80f1e923247ff477f3b5af6a25568ead445b556d1f32ee727a0e847ab6e` |
+| `attempt-games.csv` | `9a7672d98090f3b752ea432a5dd94bd7f8c5bf54e032fd530e250d6e55636b46` |

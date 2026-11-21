@@ -5,10 +5,7 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from hockey_model.game_model.features import ATTEMPT_FEATURES, FEATURES
 from hockey_model.store_group import add_store_group
-
-CANDIDATE_SETS: dict[str, tuple[str, ...]] = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
 
 
 def _add_refresh(parser: argparse.ArgumentParser) -> None:
@@ -98,15 +95,9 @@ def _add_workers(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_backtest(parser: argparse.ArgumentParser) -> None:
-    """Add the backtest options that pick the candidate set and the game records."""
+    """Add the backtest options that pick the game records and the workers."""
     parser.add_argument(
         "--games-out", type=Path, metavar="PATH", help="write one CSV row per predicted game"
-    )
-    parser.add_argument(
-        "--candidates",
-        choices=sorted(CANDIDATE_SETS),
-        default="xg",
-        help="xg: the production candidates; attempt: xg_form replaced by attempt_form (#77)",
     )
     _add_workers(parser)
 

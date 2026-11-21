@@ -19,7 +19,7 @@ INJURY_HISTORY_NOTE = (
     "guess run never leaves out an injured goalie. The live model does."
 )
 # Every feature here reads MoneyPuck data, so a run that uses one carries the credit and the note.
-MONEYPUCK_FEATURES = frozenset({"xg_form", "attempt_form", "goalie_gsax"})
+MONEYPUCK_FEATURES = frozenset({"xg_form", "goalie_gsax"})
 
 
 def joint_test_notes(

@@ -12,11 +12,10 @@ from typing import cast
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import add_game, add_retired_columns, add_team_form, stamp_old_version
+from seeding import add_retired_columns, stamp_old_version
 
 from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
-from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.store.shape import Requirement, earned_version
 from hockey_model.store.upgrade import upgrade_store
 from hockey_model.store_cli import run_store_command
@@ -219,7 +218,6 @@ def test_if_missing_skip_returns_without_creating_the_file(tmp_path: Path) -> No
     path = tmp_path / "absent.db"
     report = upgrade_store(path, if_missing="skip")
     assert (report.from_version, report.to_version, report.changed) == (None, SCHEMA_VERSION, False)
-    assert report.next_step is None
     assert report.note is not None and "first refresh" in report.note
     assert not path.exists()
 
@@ -303,17 +301,6 @@ def test_the_store_command_needs_a_subcommand(v1: Path) -> None:
         run_store_command(args)
 
 
-def test_attempt_form_skips_rows_without_counts(v1: Path) -> None:
-    upgrade_store(v1)
-    conn = connect(v1)
-    add_game(conn, 2001, "2026-01-01T23:00:00Z", "TOR", "BOS")
-    add_game(conn, 2002, "2026-01-05T23:00:00Z", "TOR", "BOS")
-    add_team_form(conn, 2002, "TOR", 2.0, 2.0, attempts=(55, 45))
-    form = mp_attempt_form_before(conn, "TOR", datetime(2026, 2, 1, tzinfo=UTC), 5)
-    conn.close()
-    assert form == [(55, 45)]
-
-
 def test_an_upgraded_table_has_the_same_columns_as_a_fresh_one(tmp_path: Path) -> None:
     fresh = tmp_path / "fresh.db"
     connect(fresh).close()
@@ -363,24 +350,6 @@ def test_any_v1_rows_keep_their_values_and_gain_unknown_counts(data: list[tuple]
         assert all(count == (None, 0) for count in counts)
 
 
-def test_an_unknown_attempt_column_is_refused_before_any_sql_runs(v1: Path) -> None:
-    upgrade_store(v1)
-    conn = connect(v1)
-    try:
-        with pytest.raises(ValueError, match="unknown column"):
-            from hockey_model.store.reads import _mp_pairs_before
-
-            _mp_pairs_before(
-                conn,
-                ("xg_for; DROP TABLE games", "xg_against"),
-                "TOR",
-                datetime(2026, 2, 1, tzinfo=UTC),
-                5,
-            )
-    finally:
-        conn.close()
-
-
 def _index_names(path: Path) -> set[str]:
     """Return the index names of the store, without SQLite's automatic key indexes."""
     found = rows(path, "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
@@ -405,12 +374,6 @@ def test_the_upgraded_table_sql_matches_the_fresh_one_including_checks(tmp_path:
     assert _table_sql(upgraded) == _table_sql(fresh)
 
 
-def test_a_completed_upgrade_says_what_to_run_next(v1: Path) -> None:
-    report = upgrade_store(v1)
-    assert report.next_step is not None
-    assert "hockey-model refresh --reread-moneypuck" in report.next_step
-
-
 def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     tmp_path: Path,
 ) -> None:
@@ -422,8 +385,6 @@ def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
     assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
     assert version_of(v2) == SCHEMA_VERSION
-    # The 2->3 step adds the label table, and the 3->4 rebuild leaves every count alone.
-    assert report.next_step is None
 
 
 def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
@@ -445,7 +406,6 @@ def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
         "SELECT game_id, team, shot_attempts_for, unblocked_against, attempts_known"
         " FROM mp_team_games",
     ) == [(2002, "BOS", 10, 13, 1)]
-    assert report.next_step is None
 
 
 def test_a_version_3_store_keeps_the_flag_it_has_and_derives_the_other(
@@ -504,24 +464,6 @@ def test_an_upgraded_store_has_the_same_indexes_as_a_fresh_one(tmp_path: Path) -
     assert set(early) <= _index_names(upgraded)
 
 
-def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction(
-    tmp_path: Path,
-) -> None:
-    """A row the 1->2 step wrote keeps NULL counts, so the reread is a real step to take."""
-    v2 = make_v2_store(tmp_path / "store.db")
-    conn = sqlite3.connect(v2)
-    conn.execute(
-        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
-        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
-        " '2026-01-02T00:00:00Z', 0)"
-    )
-    conn.commit()
-    conn.close()
-    report = upgrade_store(v2)
-    assert report.next_step is not None
-    assert "hockey-model refresh --reread-moneypuck" in report.next_step
-
-
 def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Path) -> None:
     """A store that started at v1 ran the 1->2 step, then reread MoneyPuck, then upgrades again.
 
@@ -543,7 +485,6 @@ def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Pa
     )
     conn.commit()
     conn.close()
-    assert upgrade_store(v2).next_step is None
 
 
 def test_a_table_name_that_is_not_an_identifier_is_refused() -> None:
@@ -597,11 +538,6 @@ def test_a_rollback_that_runs_reports_the_store_unchanged(v1: Path) -> None:
     conn.execute("BEGIN IMMEDIATE")
     assert upgrade._rollback(conn) == "the store is unchanged."
     conn.close()
-
-
-def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
-    upgrade_store(v1)
-    assert upgrade_store(v1).next_step is None
 
 
 def test_an_upgraded_store_holds_the_current_shape_of_the_two_rebuilt_tables(

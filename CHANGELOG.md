@@ -90,6 +90,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Drop `starter_reads.nhl_id` and `injury_reads.nhl_id` from the store, which is now schema version 7. No code wrote a value there or read one. `hockey-model store upgrade` copies any value that it finds in these columns, with the other columns of its row, to the new table `retired_nhl_ids` before it drops them. A store that holds no value gets an empty table. [feat:store]
 - Skip the `validation` and `test` jobs of CI for a pull request that changes only Markdown, through a new `changes` job and `scripts/ci-changes.sh`. A change to the TLA design note still runs them, because a test reads it. [feat:ci]
 - Run `pytest` with `-n auto` (pytest-xdist) in the CI test job and in the pre-push coverage hook. [feat:ci]
+- Remove the attempt-form research path of the leak test (#77, #93): the `--candidates` option of `hockey-model backtest`, the `attempt_form` feature and the `attempt_form` missing kind, `mp_attempt_form_before`, and the `next_step` field of `hockey-model store upgrade`, which only asked for a reread before an attempt-form backtest. A fit or a candidate list that names `attempt_form` now fails with the list of features. The stored attempt columns stay. The report `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that reproduces it. [refactor:model]
 
 ### Fixed
 

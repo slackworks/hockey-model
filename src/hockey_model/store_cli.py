@@ -13,7 +13,7 @@ from hockey_model.backtest.shards import actual_rows
 from hockey_model.daily_report import build_report, model_identity, report_tag, write_report
 from hockey_model.game import game_win_probability
 from hockey_model.game_day import game_day_of, game_day_window
-from hockey_model.game_model.features import feature_name_problem
+from hockey_model.game_model.features import FEATURES, feature_name_problem
 from hockey_model.game_model.imputation import check_imputation
 from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
@@ -37,7 +37,6 @@ from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, sav
 from hockey_model.store.reads import game_row
 from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
-from hockey_model.store_cli_parsers import CANDIDATE_SETS
 from hockey_model.store_group import run_store_group
 from hockey_model.types import HockeyModelError
 
@@ -315,9 +314,7 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
 def _backtest(args: argparse.Namespace) -> tuple[object, int]:
     conn = connect(db_path_from_env(os.environ))
     try:
-        report, records = run_backtest(
-            conn, candidates=CANDIDATE_SETS[args.candidates], workers=args.workers
-        )
+        report, records = run_backtest(conn, candidates=FEATURES, workers=args.workers)
     finally:
         conn.close()
     if args.games_out is not None:

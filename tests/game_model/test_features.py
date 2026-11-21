@@ -20,7 +20,6 @@ from hockey_model.game import Game, GoalieStart, MissingKind, StarterSource, Sta
 from hockey_model.game_model import features as feature_module
 from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.features import (
-    ATTEMPT_FEATURES,
     FEATURES,
     NEUTRAL_FORM,
     REST_CAP_DAYS,
@@ -341,36 +340,6 @@ def test_a_goalie_with_no_nhl_id_reports_goalie_form(store: sqlite3.Connection) 
     )
 
 
-def test_attempt_form_uses_shot_attempts_not_expected_goals(store: sqlite3.Connection) -> None:
-    # Expected goals give a 0.75 and 0.25 share. The attempt counts give 0.6 and 0.3.
-    add_game(store, 10, "2026-01-18T00:00", home=HOME, away="MTL")
-    add_game(store, 110, "2026-01-18T00:00", home="MTL", away=AWAY)
-    add_team_form(store, 10, HOME, 3.0, 1.0, attempts=(60, 40))
-    add_team_form(store, 110, AWAY, 1.0, 3.0, attempts=(30, 70))
-    row = features(store, names=("xg_form", "attempt_form", "goalie_gsax", "rest"))
-    assert row.values["attempt_form"] == pytest.approx(0.6 - 0.3)
-    assert row.values["xg_form"] == pytest.approx(0.75 - 0.25)
-    assert row.uses_moneypuck
-
-
-def test_attempt_form_missing_reports_attempt_form(store: sqlite3.Connection) -> None:
-    row = features(store, names=ATTEMPT_FEATURES)
-    assert row.values["attempt_form"] == 0.0
-    assert kinds(row).count(MissingKind.ATTEMPT_FORM) == 2
-
-
-def test_production_features_do_not_read_attempts(store: sqlite3.Connection) -> None:
-    row = features(store)
-    assert "attempt_form" not in row.values
-    assert MissingKind.ATTEMPT_FORM not in kinds(row)
-
-
-def test_attempt_candidates_do_not_read_expected_goals(store: sqlite3.Connection) -> None:
-    row = features(store, names=ATTEMPT_FEATURES)
-    assert "xg_form" not in row.values
-    assert MissingKind.XG_FORM not in kinds(row)
-
-
 def test_an_unknown_feature_name_is_refused(store: sqlite3.Connection) -> None:
     with pytest.raises(ValueError, match="unknown feature 'nope'"):
         features(store, names=("nope",))
@@ -476,3 +445,8 @@ def test_swapping_the_teams_negates_the_xg_form_and_keeps_the_gaps(
     assert backward.values["xg_form"] == pytest.approx(-forward.values["xg_form"])
     gaps = lambda row: sorted((m.kind, m.team, m.note) for m in row.missing)  # noqa: E731
     assert gaps(forward) == gaps(backward)
+
+
+def test_the_retired_attempt_form_is_an_unknown_feature(store: sqlite3.Connection) -> None:
+    with pytest.raises(ValueError, match="unknown feature 'attempt_form'"):
+        features(store, names=("attempt_form",))
