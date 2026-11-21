@@ -87,7 +87,14 @@ The operator can run the `daily-prepare` workflow with a date, then run the repo
 A prepare that fails every hour shows as red `daily-prepare` runs. The green report skips before the first puck drop do not show it.
 
 Both workflows share one concurrency group, and GitHub keeps one waiting run for a group.
-A newer waiting run replaces an older one. A manual `force` prepare that waits behind a running prepare is therefore replaced by the next hourly run, which skips a prepared day (#285).
+A newer waiting run replaces an older one, so a manual `force` prepare that waits behind a running prepare could be replaced by the next run that joins the group (#285).
+The `prepare` job of `daily-prepare.yml` holds the group, and a `gate` job before it has none.
+On a scheduled run the gate calls `scripts/manual-prepare-pending.sh`, and the run stands aside while a manual `daily-prepare` run is pending, queued, waiting, or running.
+A manual dispatch never stands aside.
+A failed lookup fails the gate, so the hourly run turns red and the next hour retries.
+Two cases remain.
+The `build` job of `daily-report.yml` can still take the waiting slot of a manual prepare, because the report must not wait for an operator's rebuild (#295).
+A scheduled gate and a manual dispatch that start in the same few seconds can also race.
 
 Both workflows share one concurrency group, because both write the cached store.
 The group is on the `build` job of `daily-report.yml`, not on the workflow, so the gate job starts at the trigger.

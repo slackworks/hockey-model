@@ -30,7 +30,6 @@ from hockey_model.experiments.cohort import (
 from hockey_model.experiments.history import (
     check_immutable_fields,
     check_one_shot,
-    deleted_record_ids,
     registration_commit,
 )
 from hockey_model.experiments.looks import CONFIRMATION, look_problem
@@ -46,13 +45,12 @@ from hockey_model.experiments.models import (
 from hockey_model.experiments.registry import (
     REGISTRY_DIR_NAME,
     RESULTS_DIR_NAME,
-    duplicate_numbers,
     get_record,
     list_records,
-    misnamed_record_files,
     registry_dir,
     results_dir,
 )
+from hockey_model.experiments.registry_checks import registry_errors, registry_notes
 from hockey_model.experiments.schemas import CHECK_OUTPUT_SCHEMA, EXPERIMENT_SCHEMA
 from hockey_model.experiments.withdrawn import check_withdrawn
 from hockey_model.game_model.features import feature_name_problem
@@ -79,6 +77,7 @@ class CheckOutput(TypedDict):
     ok: bool
     records: list[CheckEntry]
     errors: list[str]
+    notes: list[str]
 
 
 class RunPayload(TypedDict, total=False):
@@ -118,7 +117,7 @@ def check_all(repo_root: Path | None = None) -> CheckOutput:
         )
     results: list[CheckEntry] = []
     ids = list_records(root)
-    errors = _registry_errors(ids, root)
+    errors = registry_errors(ids, root)
 
     for record_id in ids:
         try:
@@ -127,7 +126,12 @@ def check_all(repo_root: Path | None = None) -> CheckOutput:
             errors.append(f"{record_id}: {exc}")
             results.append({"id": record_id, "valid": False, "error": str(exc)})
 
-    output: CheckOutput = {"ok": len(errors) == 0, "records": results, "errors": errors}
+    output: CheckOutput = {
+        "ok": len(errors) == 0,
+        "records": results,
+        "errors": errors,
+        "notes": registry_notes(root),
+    }
     validate_against_schema(output, CHECK_OUTPUT_SCHEMA, "CHECK_OUTPUT_SCHEMA")
     return output
 
@@ -201,25 +205,6 @@ def run_experiment(
     if games_out is not None:
         payload["games_out"] = str(games_out)
     return payload, [_export_entry(record) for record in game_records]
-
-
-def _registry_errors(ids: list[str], repo_root: Path) -> list[str]:
-    """Return the errors that belong to the registry as a whole, not to one record."""
-    errors = [
-        f"registry number {number} is used by more than one record; a new record needs a new number"
-        for number in duplicate_numbers(ids)
-    ]
-    errors.extend(
-        f"{record_id}: tracked in the repository history but missing from the working tree; "
-        "a registered record cannot be deleted"
-        for record_id in deleted_record_ids(ids, repo_root)
-    )
-    errors.extend(
-        f"{name}: the registry holds this JSON file, but its name is not a record id, so the "
-        "look count skips it; rename it to NNNN-slug.json or remove it"
-        for name in misnamed_record_files(repo_root)
-    )
-    return errors
 
 
 def _check_one(record_id: str, repo_root: Path) -> CheckEntry:

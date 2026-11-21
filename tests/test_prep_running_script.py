@@ -38,7 +38,8 @@ def _runs(*runs: tuple[str, str | None], status: str = "in_progress") -> str:
 
 def _jobs(started: str | None) -> str:
     """Return a job list payload whose one job started at ``started``, or has not started."""
-    return json.dumps({"jobs": [{"name": "prepare", "started_at": started}]})
+    status = "in_progress" if started is not None else "queued"
+    return json.dumps({"jobs": [{"name": "prepare", "status": status, "started_at": started}]})
 
 
 def _env_for(
@@ -80,15 +81,106 @@ def test_a_job_that_has_not_started_names_now(fakes: Path, tmp_path: Path) -> No
     assert _ISO.match(result.stdout), result.stdout
 
 
+def test_a_gate_job_that_started_early_does_not_move_the_window(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The gate job starts at once, and the prepare job waits for the group (#285)."""
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"name": "gate", "status": "in_progress", "started_at": "2026-11-04T06:00:00Z"},
+                {"name": "prepare", "status": "in_progress", "started_at": _STARTED},
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    assert (result.returncode, result.stdout) == (0, _STARTED)
+
+
+def test_a_prepare_job_that_waits_for_the_group_names_now_not_the_gate_start(
+    fakes: Path, tmp_path: Path
+) -> None:
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"name": "gate", "status": "in_progress", "started_at": "2026-11-04T06:00:00Z"},
+                {"name": "prepare", "status": "queued", "started_at": None},
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout != "2026-11-04T06:00:00Z"
+    assert _ISO.match(result.stdout), result.stdout
+
+
+@pytest.mark.parametrize("status", ["queued", "waiting", "pending", "requested"])
+def test_a_waiting_prepare_job_names_now_even_when_it_carries_a_start(
+    fakes: Path, tmp_path: Path, status: str
+) -> None:
+    """GitHub fills started_at of a job that waits with its creation time."""
+    created = "2026-11-04T06:00:00Z"
+    jobs = json.dumps({"jobs": [{"name": "prepare", "status": status, "started_at": created}]})
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, created))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout != created
+    assert _ISO.match(result.stdout), result.stdout
+
+
+def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_path: Path) -> None:
+    skipped = json.dumps(
+        {
+            "jobs": [
+                {
+                    "name": "prepare",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "started_at": "2026-11-04T06:00:00Z",
+                }
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": skipped})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout != "2026-11-04T06:00:00Z"
+    assert _ISO.match(result.stdout), result.stdout
+
+
+def test_the_script_reads_the_job_that_the_workflow_names_prepare() -> None:
+    """A renamed job would match nothing, and the lookup would print the current time."""
+    root = Path(__file__).resolve().parents[1]
+    workflow = require_path(root / ".github" / "workflows" / "daily-prepare.yml")
+    text = workflow.read_text(encoding="utf-8")
+    prepare = re.search(r"^  prepare:\n(.*?)(?=^  [a-z-]+:\n|\Z)", text, re.DOTALL | re.MULTILINE)
+    assert prepare is not None
+    assert not re.search(r"^    name:", prepare.group(1), re.MULTILINE)
+    script = require_path(root / "scripts" / "prep-running.sh").read_text(encoding="utf-8")
+    assert '.name == "prepare"' in script
+
+
 def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
     # The earlier start holds the group first, so it is the one that the report waits behind.
     earlier = "2026-11-04T08:00:00Z"
+    later = "2026-11-04T09:30:00Z"
     env = _env(
         fakes,
         tmp_path,
-        FAKE_RUNS_JSON_IN_PROGRESS=_runs((_PREPARE, "2026-11-04T09:30:00Z"), (_PREPARE, earlier)),
+        FAKE_RUNS_JSON_IN_PROGRESS=_runs((_PREPARE, later), (_PREPARE, earlier)),
         FAKE_JOBS_JSON=json.dumps(
-            {"jobs": [{"started_at": "2026-11-04T09:30:00Z"}, {"started_at": earlier}]}
+            {
+                "jobs": [
+                    {
+                        "name": "prepare",
+                        "status": "in_progress",
+                        "started_at": "2026-11-04T09:30:00Z",
+                    },
+                    {"name": "prepare", "status": "in_progress", "started_at": earlier},
+                ]
+            }
         ),
     )
     result = _run("prep-running.sh", env)

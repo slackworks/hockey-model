@@ -31,7 +31,8 @@ The harmonic schedule summed to `BASE_TAIL` times the `n`-th harmonic number, wh
 
 A registered record counts as a look when it exists, whether or not it has run.
 This counts more looks than the runs that happened, so it errs on the strict side.
-Deleting a registered record that never ran is not detected, and a new record can then take its number (#291).
+Deleting a registered record that never ran fails the check when a higher confirmation record existed in the commit that deleted it, because a new record could then take its number (#291).
+A deletion from before any higher record existed is allowed, so the old history stays valid.
 Withdraw such a record instead (see Withdrawn records).
 
 `MAX_LOOKS` caps the look number.
