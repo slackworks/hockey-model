@@ -21,7 +21,7 @@ from hockey_model.experiments.cohort import (
     plan_for,
     require_scored_cohort,
 )
-from hockey_model.experiments.looks import BASE_TAIL
+from hockey_model.experiments.looks import BASE_TAIL, MAX_LOOKS
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
 from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
@@ -61,8 +61,8 @@ class TestRegistryLookNumbers:
 class TestRunUsesTheLook:
     """run_experiment scores a later look against a stricter bar."""
 
-    @pytest.mark.parametrize("look", [1, 3])
-    def test_the_interval_tail_is_the_base_tail_over_the_look(
+    @pytest.mark.parametrize("look", [1, MAX_LOOKS])
+    def test_the_interval_tail_follows_the_summable_schedule_of_the_look(
         self, registry_dir: Path, store, monkeypatch: pytest.MonkeyPatch, look: int
     ):
         _prepare(store)
@@ -78,7 +78,7 @@ class TestRunUsesTheLook:
 
         monkeypatch.setattr(check, "run_backtest", spy)
         run_experiment("0009-now", store, repo_root=registry_dir.parent)
-        assert seen == [pytest.approx(BASE_TAIL / look)]
+        assert seen == [pytest.approx(BASE_TAIL / (look * (look + 1)))]
 
     def test_a_wrong_look_number_refuses_before_any_run(self, registry_dir: Path, store):
         _prepare(store)

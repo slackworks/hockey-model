@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from hockey_model.experiments.looks import MAX_LOOKS
+from hockey_model.experiments.models import VALID_STATUSES
 
 # A record id is a four-digit number and a slug. The number is the record's slot in the registry.
 RECORD_ID_PATTERN = "^[0-9]{4}-[a-z0-9][a-z0-9-]*$"
@@ -66,7 +67,7 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
         "failure_outcome": {"type": "string"},
         "status": {
             "type": "string",
-            "enum": ["registered", "rejected", "inconclusive", "promoted"],
+            "enum": list(VALID_STATUSES),
         },
         "result": {
             "type": ["object", "null"],

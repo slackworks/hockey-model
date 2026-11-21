@@ -1,7 +1,8 @@
 """Git-history checks for experiment records.
 
-Two registry rules are enforced against commits, not against the file alone:
-a record is frozen at registration, and a confirmation run is one-shot.
+Three registry rules are enforced against commits, not against the file alone:
+a record is frozen at registration, a confirmation run is one-shot,
+and a withdrawn record stays withdrawn.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from hockey_model.experiments.models import (
     IMMUTABLE_FIELDS,
+    STATUS_WITHDRAWN,
     ExperimentRecord,
     record_from_text,
 )
@@ -77,7 +79,7 @@ def check_one_shot(record: ExperimentRecord, repo_root: Path) -> None:
     # A stored blob holds lists where the record holds tuples, so compare as JSON.
     current = json.loads(json.dumps(record.to_dict().get("result")))
     for commit, relative in _history(record.id, repo_root):
-        prior = _result_at(commit, relative, repo_root)
+        prior = _field_at(commit, relative, "result", repo_root)
         if prior is None:
             continue
         if prior != current:
@@ -85,6 +87,22 @@ def check_one_shot(record: ExperimentRecord, repo_root: Path) -> None:
                 f"experiment {record.id!r}: commit {commit} recorded a result that the "
                 "record no longer holds; a confirmation run is one-shot, so a new run "
                 "needs a new record"
+            )
+
+
+def check_withdrawn_stays(record: ExperimentRecord, repo_root: Path) -> None:
+    """Raise when a commit stored the record as withdrawn and HEAD does not.
+
+    A withdrawn record is final. A later status would hide that the hypothesis was dropped
+    before it ran, so a changed plan needs a new record.
+    """
+    if record.status == STATUS_WITHDRAWN:
+        return
+    for commit, relative in _history(record.id, repo_root):
+        if _field_at(commit, relative, "status", repo_root) == STATUS_WITHDRAWN:
+            raise HockeyModelError(
+                f"experiment {record.id!r}: commit {commit} recorded the status 'withdrawn', "
+                f"so the record cannot return to {record.status!r}; register a new record"
             )
 
 
@@ -178,8 +196,8 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
     return pairs
 
 
-def _result_at(commit: str, relative: str, repo_root: Path) -> object:
-    """Return the ``result`` field of a record as one commit stored it."""
+def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object:
+    """Return one field of a record as one commit stored it."""
     text = _git(["show", f"{commit}:{relative}"], repo_root)
     try:
         data = json.loads(text)
@@ -190,7 +208,7 @@ def _result_at(commit: str, relative: str, repo_root: Path) -> object:
             f"read {relative} at commit {commit}: a record must be a JSON object, "
             f"got a {type(data).__name__}"
         )
-    return data.get("result")
+    return data.get(field)
 
 
 def _is_work_tree(repo_root: Path) -> bool:

@@ -102,7 +102,7 @@ class TestCheckAll:
         assert result["ok"] is False
         assert result["errors"][0] == (
             "0001-valid: $.status in EXPERIMENT_SCHEMA: 'invalid_status' is not one of "
-            "['registered', 'rejected', 'inconclusive', 'promoted'] (rule 'enum'); "
+            "['registered', 'rejected', 'inconclusive', 'promoted', 'withdrawn'] (rule 'enum'); "
             "change the value to match the schema"
         )
 

@@ -20,7 +20,16 @@ STATUS_REGISTERED = "registered"
 STATUS_REJECTED = "rejected"
 STATUS_INCONCLUSIVE = "inconclusive"
 STATUS_PROMOTED = "promoted"
-VALID_STATUSES = (STATUS_REGISTERED, STATUS_REJECTED, STATUS_INCONCLUSIVE, STATUS_PROMOTED)
+# A withdrawn record never ran and never will. It keeps its place in the history, spends no look,
+# holds no result, and cannot return to another status.
+STATUS_WITHDRAWN = "withdrawn"
+VALID_STATUSES = (
+    STATUS_REGISTERED,
+    STATUS_REJECTED,
+    STATUS_INCONCLUSIVE,
+    STATUS_PROMOTED,
+    STATUS_WITHDRAWN,
+)
 
 # Immutable fields that must not change after registration.
 IMMUTABLE_FIELDS = (

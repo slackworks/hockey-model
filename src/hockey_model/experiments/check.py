@@ -30,6 +30,7 @@ from hockey_model.experiments.cohort import (
 from hockey_model.experiments.history import (
     check_immutable_fields,
     check_one_shot,
+    check_withdrawn_stays,
     deleted_record_ids,
     registration_commit,
 )
@@ -39,6 +40,7 @@ from hockey_model.experiments.models import (
     STATUS_PROMOTED,
     STATUS_REGISTERED,
     STATUS_REJECTED,
+    STATUS_WITHDRAWN,
     ExperimentRecord,
     validate_against_schema,
 )
@@ -229,6 +231,7 @@ def _check_one(record_id: str, repo_root: Path) -> CheckEntry:
     else:
         check_immutable_fields(record, commit, repo_root)
         check_one_shot(record, repo_root)
+        check_withdrawn_stays(record, repo_root)
         entry["registration_commit"] = commit
 
     if record.result is not None:
@@ -248,10 +251,14 @@ def _check_features_known(record: ExperimentRecord) -> None:
 def _check_status_matches_result(record: ExperimentRecord) -> None:
     """Raise when the status and the result disagree.
 
-    A registered record holds no result. A promoted or rejected record holds one.
+    A registered or withdrawn record holds no result. A promoted or rejected record holds one.
     An inconclusive record may lack one, because a run without an interval writes none.
     """
     has_result = record.result is not None
+    if record.status == STATUS_WITHDRAWN and has_result:
+        raise HockeyModelError(
+            f"experiment {record.id!r}: status is 'withdrawn' but the record holds a result"
+        )
     if record.status == STATUS_REGISTERED and has_result:
         raise HockeyModelError(
             f"experiment {record.id!r}: status is 'registered' but the record holds a result"
