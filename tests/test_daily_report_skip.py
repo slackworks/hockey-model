@@ -140,3 +140,75 @@ def test_help_names_the_flag(fakes: Path, tmp_path: Path) -> None:
     result = _run("daily-report.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
     assert "--skip-unchanged" in result.stdout
+
+
+def test_the_newest_versioned_build_is_the_one_compared(fakes: Path, tmp_path: Path) -> None:
+    """A failed alias upload leaves report-DATE.json behind the newest build, so it is not read."""
+    remote = _published(tmp_path, {"inputs_sha256": HASH_B})
+    newest = f"report-{DAY}-203000Z.json"
+    (remote / newest).write_text(json.dumps({"inputs_sha256": HASH_A}), encoding="utf-8")
+    assets = "\n".join([f"report-{DAY}-103000Z.json", newest, f"report-{DAY}.json"])
+    env = _env_for(
+        fakes, tmp_path, {"inputs_sha256": HASH_A}, FAKE_RELEASES=TAG, FAKE_ASSETS=assets
+    )
+    code, stderr, out = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 0, stderr
+    assert newest in stderr
+    assert not (out / "complete").exists()
+
+
+def test_a_download_that_writes_no_file_stops_the_run(fakes: Path, tmp_path: Path) -> None:
+    _published(tmp_path, {"inputs_sha256": HASH_A})
+    env = _env_for(
+        fakes, tmp_path, {"inputs_sha256": HASH_A}, FAKE_RELEASES=TAG, FAKE_DOWNLOAD_EMPTY="1"
+    )
+    code, stderr, out = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 1
+    assert f"cannot download report-{DAY}.json" in stderr
+    assert not (out / "complete").exists()
+
+
+def test_a_report_left_by_an_earlier_run_is_not_compared(fakes: Path, tmp_path: Path) -> None:
+    """A predict step that writes nothing must not leave a stale file to match the release."""
+    _published(tmp_path, {"inputs_sha256": HASH_A})
+    env = _env_for(fakes, tmp_path, {"inputs_sha256": HASH_A}, FAKE_RELEASES=TAG)
+    del env["FAKE_BUILT_REPORT"]
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / f"report-{DAY}.json").write_text(json.dumps({"inputs_sha256": HASH_A}), encoding="utf-8")
+    code, stderr, _ = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 1
+    assert "cannot read the built report" in stderr
+
+
+@pytest.mark.parametrize("name", [f"backtest-{DAY}.json", f"backtest-games-{DAY}.csv"])
+def test_a_marker_without_its_backtest_files_stops_the_run(
+    fakes: Path, tmp_path: Path, name: str
+) -> None:
+    env = _env_for(fakes, tmp_path, {"inputs_sha256": HASH_A})
+    (store_path(tmp_path).parent / name).unlink()
+    code, stderr, out = _run_report(env, tmp_path)
+    assert code == 1
+    assert name in stderr
+    assert "--force" in stderr
+    assert not (out / "complete").exists()
+    assert not any("hockey-model refresh" in line for line in _calls(tmp_path))
+
+
+def test_the_release_token_reaches_only_the_release_calls(fakes: Path, tmp_path: Path) -> None:
+    _published(tmp_path, {"inputs_sha256": HASH_B})
+    log = tmp_path / "env.log"
+    env = _env_for(
+        fakes,
+        tmp_path,
+        {"inputs_sha256": HASH_A},
+        FAKE_RELEASES=TAG,
+        FAKE_ENV_LOG=str(log),
+        REPORT_GH_TOKEN="secret-token",
+    )
+    code, stderr, _ = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 0, stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert "gh GH_TOKEN=secret-token" in lines
+    assert all(line == "uv GH_TOKEN=unset" for line in lines if line.startswith("uv "))
+    assert all(line == "gh GH_TOKEN=secret-token" for line in lines if line.startswith("gh "))

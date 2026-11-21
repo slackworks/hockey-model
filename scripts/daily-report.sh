@@ -4,11 +4,13 @@
 # Usage: daily-report.sh --date YYYY-MM-DD --out-dir DIR [--skip-unchanged] [--help]
 #   --date            Eastern game day to predict.
 #   --out-dir         Directory for the report and backtest files. Created when missing.
-#   --skip-unchanged  After the prediction, read the newest published report of the day. When
-#                     its inputs_sha256 equals the one of this build, exit 0 and write no
+#   --skip-unchanged  After the prediction, read the newest published build of the day, which
+#                     is the report-DATE-HHMMSSZ.json asset with the latest time. When its
+#                     inputs_sha256 equals the one of this build, exit 0 and write no
 #                     complete marker, so nothing publishes. A day with no release, or a
 #                     published report with no inputs_sha256, builds as usual. A failed
-#                     release lookup or download stops the run with exit code 1.
+#                     release lookup or download stops the run with exit code 1. The release
+#                     calls read REPORT_GH_TOKEN, so the token stays out of the other steps.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The daily-prepare run does the slow work each
 # hour. When its prepared-DATE marker is missing, this script skips with exit code 0 while the
@@ -90,8 +92,8 @@ if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
 fi
 store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$out_dir"
-# A marker from an earlier run in this directory must not stand for this run.
-rm -f "$out_dir/complete"
+# A marker or a report from an earlier run in this directory must not stand for this run.
+rm -f "$out_dir/complete" "$out_dir/report-$day.json"
 if [[ ! -f "$store_dir/prepared-$day" ]]; then
   # The prepare runs every hour. A run before the first puck drop finds no marker when the
   # prepare has not finished, and the next hour can still make it, so that run skips. After the
@@ -130,6 +132,14 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
   echo "daily-report: if it ran, check that it passed and that the store came back from the cache." >&2
   exit 1
 fi
+for needed in "backtest-$day.json" "backtest-games-$day.csv"; do
+  if [[ ! -f "$store_dir/$needed" ]]; then
+    echo "daily-report: prepared-$day exists but $store_dir/$needed is missing." >&2
+    echo "daily-report: run the daily-prepare workflow with date $day and --force, then run" \
+      "this again." >&2
+    exit 1
+  fi
+done
 
 # Run one step and log its name and its seconds to stderr, so the log shows where time goes.
 # A failed step logs its name and exit code too, so the log names the step that stopped the run.
@@ -146,11 +156,25 @@ run_step() {
   fi
 }
 
+# Print the name of the newest published build of the day: the versioned asset with the latest
+# time. The alias report-DATE.json is the fallback for a release with no versioned asset. The
+# alias is uploaded after the versions, so a failed upload can leave it behind the newest build.
+newest_report_asset() {
+  local tag="$1" names newest
+  names="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
+    echo "daily-report: cannot list the assets of release $tag; its error is above" >&2
+    return 1
+  }
+  newest="$(grep -E "^report-${day}-[0-9]{6}Z\.json$" <<<"$names" | sort | tail -n 1 || true)"
+  printf '%s' "${newest:-report-$day.json}"
+}
+
 # Exit 0 with no complete marker when the built report has the inputs of the newest published
-# report of the day, so the publish job skips. The alias report-DATE.json always holds the
-# newest build (publish-daily-report.sh).
+# build of the day, so the publish job skips.
 skip_if_unchanged() {
-  local tag="reports-$day" status compare_dir answer reason
+  # The token reaches only the release calls of this function.
+  local -x GH_TOKEN="${REPORT_GH_TOKEN:-}"
+  local tag="reports-$day" status asset compare_dir answer reason
   status="$(release_status "$tag")"
   case "$status" in
   published) ;;
@@ -160,14 +184,16 @@ skip_if_unchanged() {
     exit 1
     ;;
   esac
+  asset="$(newest_report_asset "$tag")" || exit 1
   compare_dir="$(mktemp -d)"
-  if ! gh release download "$tag" --pattern "report-$day.json" --dir "$compare_dir"; then
-    echo "daily-report: cannot download report-$day.json from release $tag; its error is above" >&2
+  if ! gh release download "$tag" --pattern "$asset" --dir "$compare_dir" ||
+    [[ ! -s "$compare_dir/$asset" ]]; then
+    echo "daily-report: cannot download $asset from release $tag; check that the release holds it" >&2
     rm -rf "$compare_dir"
     exit 1
   fi
-  answer="$(uv run hockey-model report-compare --built "$out_dir/report-$day.json" \
-    --published "$compare_dir/report-$day.json")" || {
+  answer="$(env -u GH_TOKEN uv run hockey-model report-compare --built "$out_dir/report-$day.json" \
+    --published "$compare_dir/$asset")" || {
     echo "daily-report: report-compare failed; its error is above" >&2
     rm -rf "$compare_dir"
     exit 1
@@ -179,7 +205,7 @@ skip_if_unchanged() {
   fi
   if [[ "$reason" == "unchanged" ]]; then
     notice="daily-report: the inputs of the $day report are unchanged since the newest"
-    notice+=" published report. Nothing publishes."
+    notice+=" published build $asset. Nothing publishes."
     echo "::notice::$notice" >&2
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       echo "$notice" >>"$GITHUB_STEP_SUMMARY"

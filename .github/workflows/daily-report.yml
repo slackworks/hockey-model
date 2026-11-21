@@ -127,8 +127,9 @@ jobs:
           exit 1
       - env:
           HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
-          # The compare step reads the release of the day.
-          GH_TOKEN: ${{ github.token }}
+          # Only the release calls of the compare step read this token (REPORT_GH_TOKEN in
+          # daily-report.sh), so the feed reads and the packages never see it.
+          REPORT_GH_TOKEN: ${{ github.token }}
         # The step limit stops a hung read while the job still holds the store group. The budget
         # that the script enforces is REPORT_BUDGET_S above.
         timeout-minutes: 15

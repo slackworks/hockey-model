@@ -35,7 +35,8 @@ def test_a_build_that_will_publish_compares_its_inputs_with_the_release() -> Non
     assert "PUBLISH: ${{ needs.gate.outputs.publish }}" in build
     assert '[[ "$PUBLISH" == "true" ]]' in build
     assert text.count("--skip-unchanged") == 1
-    assert "GH_TOKEN: ${{ github.token }}" in build
+    assert "REPORT_GH_TOKEN: ${{ github.token }}" in build
+    assert "\n          GH_TOKEN:" not in build
 
 
 def test_build_job_fails_loudly_on_a_store_cache_miss() -> None:
