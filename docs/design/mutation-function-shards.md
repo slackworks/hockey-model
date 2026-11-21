@@ -55,6 +55,21 @@ In `tests/test_mutation_shards.py`:
 - `merge` with two non-null results for one key exits 1.
 - A `hypothesis` test (the open #156): for a generated module with functions and a generated split, `check_partition` passes exactly when each function is in one entry.
 
+## Timed-out mutants
+
+mutmut stops a mutant at a CPU limit of `(estimated test time + timeout_constant) * timeout_multiplier * 2` seconds.
+The estimate is the sum of the per-test durations of the tests that reach the mutant, and each run measures those durations again.
+A serial run and a shard run therefore set different limits for one mutant, and a mutant near its limit can time out in one run and survive in the next (#274).
+
+The merge job runs `scripts/mutation_timeouts.py` after the export.
+It reads the `.meta` file of each source file, takes every mutant with a timeout exit code, and writes its estimate and its limit to `mutants/mutmut-timeouts.json` beside the stats.
+The report lists those mutants, up to a cap, so a reader can tell a hang from a moved limit.
+The gate does not read the list, and a list that cannot be read changes no status.
+
+A shared stats file would give every shard the same durations and remove the variation.
+That option is not taken here.
+It needs a live run of the workflow to confirm that every shard loads the file and skips its own stats phase, and a wrong guess would break the weekly run.
+
 ## Done when
 
 A manual run of `mutation.yml` has every shard under 10 minutes, and the merged result has the same killed and survived counts as a serial `uv run mutmut run` on the same commit.
