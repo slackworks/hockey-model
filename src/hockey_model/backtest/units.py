@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hockey_model import progress
 from hockey_model.store.db import read_only_uri, sqlite_failure_fix
 from hockey_model.types import HockeyModelError
 
@@ -113,6 +114,11 @@ def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
     the running workers and raises.
     """
     check_workers(workers)
+    with progress.step("backtest", "units", total=len(units)):
+        return _run_all(units, workers)
+
+
+def _run_all(units: Sequence[Unit], workers: int) -> list[Any]:
     if workers == 1 or len(units) <= 1:
         return [_run_here(unit) for unit in units]
     results: list[Any] = [None] * len(units)
@@ -132,6 +138,7 @@ def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
 
 def _log(unit: Unit, seconds: float) -> None:
     print(f"backtest: unit {unit.name} took {seconds:.1f}s", file=sys.stderr)
+    progress.advance()
 
 
 def _run_here(unit: Unit) -> Any:
