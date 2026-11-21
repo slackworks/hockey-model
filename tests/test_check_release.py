@@ -1,6 +1,8 @@
 """Tests for the release gate in scripts/check_release.py (#99)."""
 
 import importlib.util
+import json
+import zipfile
 from pathlib import Path
 from types import ModuleType
 
@@ -180,11 +182,26 @@ def test_a_pyproject_with_no_version_exits_1(
     assert "no string project.version" in capsys.readouterr().err
 
 
-def dist(tmp_path: Path, *names: str) -> Path:
+def write_wheel(path: Path, metadata_version: str | None) -> None:
+    """Write a wheel file. Its METADATA names ``metadata_version``, and None omits the file."""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("hockey_model/__init__.py", "")
+        if metadata_version is not None:
+            text = f"Metadata-Version: 2.4\nName: hockey-model\nVersion: {metadata_version}\n"
+            archive.writestr("hockey_model-x.dist-info/METADATA", text)
+
+
+def dist(tmp_path: Path, *names: str, metadata: str | None = "name") -> Path:
+    """Write a dist folder. A wheel holds METADATA of the version in its name unless told."""
     folder = tmp_path / "dist"
     folder.mkdir()
     for name in names:
-        (folder / name).write_bytes(b"x")
+        if name.endswith(".whl"):
+            parts = name.split("-")
+            inside = parts[1] if metadata == "name" and len(parts) > 1 else metadata
+            write_wheel(folder / name, inside)
+        else:
+            (folder / name).write_bytes(b"x")
     return folder
 
 
@@ -231,3 +248,163 @@ def test_the_tag_v_plus_the_version_passes_and_any_other_tag_fails(parts: list[i
     for other in (str(version), f"V{version}", f"v{version}.1", f"v{version} ", f"v {version}"):
         with pytest.raises(check_release.ReleaseError):
             check_release.check_tag(other, version)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "problem"),
+    [
+        ("0.1.1", "METADATA is version 0.1.1"),
+        (None, "holds 0 METADATA files"),
+        ("not a version", "no valid Version in its METADATA"),
+    ],
+)
+def test_a_wheel_whose_metadata_names_another_version_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], metadata: str | None, problem: str
+) -> None:
+    folder = dist(tmp_path, WHEEL, SDIST, metadata=metadata)
+    assert gate(tmp_path, "v0.1.0", "--dist", str(folder)) == 1
+    assert problem in capsys.readouterr().err
+
+
+def test_a_wheel_that_is_not_a_zip_file_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = dist(tmp_path, SDIST)
+    (folder / WHEEL).write_bytes(b"not a zip")
+    assert gate(tmp_path, "v0.1.0", "--dist", str(folder)) == 1
+    assert "not a zip file" in capsys.readouterr().err
+
+
+def test_a_pyproject_that_is_not_utf8_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_bytes(b'[project]\nversion = "\xff"\n')
+    assert check_release.main(["--tag", "v0.1.0", "--pyproject", str(pyproject)]) == 2
+    assert "pyproject.toml" in capsys.readouterr().err
+
+
+def test_a_changelog_that_is_not_utf8_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = project(tmp_path)
+    (tmp_path / "CHANGELOG.md").write_bytes(b"## [0.1.0]\n\xff\n")
+    assert check_release.main(["--tag", "v0.1.0", *args]) == 2
+    assert "CHANGELOG.md" in capsys.readouterr().err
+
+
+def test_a_project_that_is_not_a_table_exits_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('project = "x"\n', encoding="utf-8")
+    assert check_release.main(["--tag", "v0.1.0", "--pyproject", str(pyproject)]) == 1
+    assert "no string project.version" in capsys.readouterr().err
+
+
+def test_a_notes_file_that_cannot_be_written_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "none" / "notes.md"
+    assert gate(tmp_path, "v0.1.0", "--notes-out", str(out)) == 2
+    assert "write" in capsys.readouterr().err
+
+
+def test_a_dist_error_that_is_not_a_write_does_not_name_a_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert gate(tmp_path, "v0.1.0", "--dist", str(tmp_path / "none")) == 1
+    assert "write" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "### Added\n\n### Fixed\n",
+        "\n\n",
+        "[Unreleased]: https://example.test/compare\n",
+        "### Added\n\n[Unreleased]: https://example.test/compare\n",
+    ],
+)
+def test_a_section_of_only_headings_and_links_is_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], body: str
+) -> None:
+    log = f"## [0.1.0] - 2026-11-21\n\n{body}"
+    assert gate(tmp_path, "v0.1.0", changelog=log) == 1
+    assert "is empty" in capsys.readouterr().err
+
+
+def test_link_definitions_at_the_end_are_not_in_the_notes(tmp_path: Path) -> None:
+    out = tmp_path / "notes.md"
+    log = "## [0.1.0] - 2026-11-21\n\n- A change.\n\n[0.1.0]: https://example.test/tag\n"
+    assert gate(tmp_path, "v0.1.0", "--notes-out", str(out), changelog=log) == 0
+    assert out.read_text(encoding="utf-8") == "- A change.\n"
+
+
+_TEXT = st.text(max_size=40)
+
+
+@given(text=_TEXT)
+def test_read_version_accepts_only_a_normal_version_or_raises_a_release_error(
+    tmp_path_factory: pytest.TempPathFactory, text: str
+) -> None:
+    pyproject = tmp_path_factory.mktemp("rv") / "pyproject.toml"
+    pyproject.write_text(f"[project]\nversion = {json.dumps(text)}\n", encoding="utf-8")
+    try:
+        version = check_release.read_version(pyproject)
+    except check_release.ReleaseError:
+        return
+    assert str(version) == text
+    assert version.local is None and not version.is_devrelease
+
+
+@given(parts=_PARTS)
+def test_read_version_accepts_every_normal_release_version(
+    tmp_path_factory: pytest.TempPathFactory, parts: list[int]
+) -> None:
+    text = ".".join(str(p) for p in parts)
+    pyproject = tmp_path_factory.mktemp("rv") / "pyproject.toml"
+    pyproject.write_text(f'[project]\nversion = "{text}"\n', encoding="utf-8")
+    assert str(check_release.read_version(pyproject)) == text
+
+
+_LINES = st.text(alphabet="abc -.#[]:/", max_size=12).filter(lambda t: not t.startswith("## "))
+
+
+@given(before=st.lists(_LINES, max_size=4), body=st.lists(_LINES, min_size=1, max_size=4))
+def test_the_section_of_a_heading_is_its_body_up_to_the_next_release(
+    before: list[str], body: list[str]
+) -> None:
+    version = check_release.Version("1.2.3")
+    text = "\n".join([*before, "## [1.2.3]", *body, "## [1.2.2]", "- old"])
+    content = [line for line in body if line.strip() and not line.startswith("#")]
+    links = [line for line in body if check_release._LINK_DEFINITION.fullmatch(line)]
+    if not content or content == links:
+        with pytest.raises(check_release.ReleaseError):
+            check_release.changelog_section(text, version)
+        return
+    section = check_release.changelog_section(text, version)
+    assert "- old" not in section and "## [1.2.3]" not in section
+
+
+@given(text=_TEXT)
+def test_the_changelog_search_raises_only_a_release_error(text: str) -> None:
+    try:
+        check_release.changelog_section(text, check_release.Version("1.2.3"))
+    except check_release.ReleaseError:
+        pass
+
+
+@given(good=_PARTS, other=_PARTS)
+def test_a_dist_passes_for_its_own_version_and_fails_for_any_other(
+    tmp_path_factory: pytest.TempPathFactory, good: list[int], other: list[int]
+) -> None:
+    text = ".".join(str(p) for p in good)
+    folder = tmp_path_factory.mktemp("d")
+    write_wheel(folder / f"hockey_model-{text}-py3-none-any.whl", text)
+    (folder / f"hockey_model-{text}.tar.gz").write_bytes(b"x")
+    check_release.check_dist(folder, check_release.Version(text))
+    different = check_release.Version(".".join(str(p) for p in other))
+    if different != check_release.Version(text):
+        with pytest.raises(check_release.ReleaseError, match="is version"):
+            check_release.check_dist(folder, different)

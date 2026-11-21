@@ -26,9 +26,11 @@ that is missing or unreadable.
 """
 
 import argparse
+import email
 import re
 import sys
 import tomllib
+import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -43,6 +45,8 @@ from packaging.version import InvalidVersion, Version
 ROOT = Path(__file__).resolve().parent.parent
 # Keep a Changelog writes a release heading as "## [1.2.3] - 2026-01-31".
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# A link reference at the end of the file, such as "[Unreleased]: https://...".
+_LINK_DEFINITION = re.compile(r"\[[^\]]+\]:\s+\S+.*")
 
 
 class ReleaseError(Exception):
@@ -57,9 +61,10 @@ def read_version(pyproject: Path) -> Version:
     """Return project.version as a normal PEP 440 version, or raise ``ReleaseError``."""
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ReleaseError(f"read {pyproject}: {exc}", setup=True) from exc
-    text = data.get("project", {}).get("version")
+    project = data.get("project")
+    text = project.get("version") if isinstance(project, dict) else None
     if not isinstance(text, str):
         raise ReleaseError(f"{pyproject} has no string project.version; set one, such as 0.1.0")
     try:
@@ -107,10 +112,13 @@ def changelog_section(text: str, version: Version) -> str:
         _check_day(day, version)
     following = re.search(r"^## ", text[found.end() :], re.M)
     end = len(text) if following is None else found.end() + following.start()
-    body = text[found.end() : end].strip()
-    if not body:
+    lines = text[found.end() : end].splitlines()
+    # The last section runs to the end of the file, and that end holds link definitions.
+    while lines and (not lines[-1].strip() or _LINK_DEFINITION.fullmatch(lines[-1])):
+        lines.pop()
+    if not any(line.strip() and not line.startswith("#") for line in lines):
         raise ReleaseError(f"CHANGELOG.md section '## [{version}]' is empty; list the changes")
-    return body
+    return "\n".join(lines).strip()
 
 
 def _check_day(day: str, version: Version) -> None:
@@ -138,12 +146,33 @@ def check_dist(dist: Path, version: Version) -> None:
         sdist_version = parse_sdist_filename(sdists[0])[1]
     except (InvalidWheelFilename, InvalidSdistFilename) as exc:
         raise ReleaseError(f"{dist} holds a file with an invalid name: {exc}") from exc
-    for name, found in ((wheels[0], wheel_version), (sdists[0], sdist_version)):
+    inside = _metadata_version(dist / wheels[0])
+    for name, found in (
+        (wheels[0], wheel_version),
+        (sdists[0], sdist_version),
+        (f"{wheels[0]} METADATA", inside),
+    ):
         if found != version:
             raise ReleaseError(
                 f"{name} is version {found}, and project.version is {version}; "
                 "build again from a clean checkout"
             )
+
+
+def _metadata_version(wheel: Path) -> Version:
+    """Return the Version header of the METADATA file inside ``wheel``."""
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            names = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
+            if len(names) != 1:
+                raise ReleaseError(f"{wheel.name} holds {len(names)} METADATA files, not one")
+            message = email.message_from_bytes(archive.read(names[0]))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ReleaseError(f"read {wheel}: {exc}; build again") from exc
+    try:
+        return Version(str(message["Version"]))
+    except InvalidVersion as exc:
+        raise ReleaseError(f"{wheel.name} has no valid Version in its METADATA") from exc
 
 
 def run(args: argparse.Namespace) -> tuple[Version, str]:
@@ -152,7 +181,7 @@ def run(args: argparse.Namespace) -> tuple[Version, str]:
     check_tag(args.tag, version)
     try:
         changelog = args.changelog.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise ReleaseError(f"read {args.changelog}: {exc}", setup=True) from exc
     section = changelog_section(changelog, version)
     if args.dist is not None:
@@ -170,14 +199,15 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     try:
         version, section = run(args)
-        if args.notes_out is not None:
-            args.notes_out.write_text(section + "\n", encoding="utf-8")
     except ReleaseError as exc:
         print(f"check_release: {exc}", file=sys.stderr)
         return 2 if exc.setup else 1
-    except OSError as exc:
-        print(f"check_release: write {args.notes_out}: {exc}", file=sys.stderr)
-        return 2
+    if args.notes_out is not None:
+        try:
+            args.notes_out.write_text(section + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"check_release: write {args.notes_out}: {exc}", file=sys.stderr)
+            return 2
     print(f"version={version}")
     print(f"prerelease={'true' if version.is_prerelease else 'false'}")
     return 0
