@@ -1,5 +1,6 @@
 """Shared fixtures."""
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 from hypothesis import settings
 
+from hockey_model import progress
 from hockey_model.store.db import connect
 
 # A loaded CI or dev machine makes a 200 ms wall-clock deadline fail a test at random.
@@ -21,6 +23,27 @@ def store(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection = connect(tmp_path / "store.db")
     yield connection
     connection.close()
+
+
+class _ProgressLines(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+@pytest.fixture
+def progress_lines() -> Iterator[list[str]]:
+    """Collect the progress lines that a test makes, as text, in the order they were logged."""
+    handler = _ProgressLines()
+    level = progress.LOGGER.level
+    progress.LOGGER.addHandler(handler)
+    progress.LOGGER.setLevel(logging.INFO)
+    yield handler.lines
+    progress.LOGGER.removeHandler(handler)
+    progress.LOGGER.setLevel(level)
 
 
 @pytest.fixture

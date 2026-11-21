@@ -141,20 +141,11 @@ for needed in "backtest-$day.json" "backtest-games-$day.csv"; do
   fi
 done
 
-# Run one step and log its name and its seconds to stderr, so the log shows where time goes.
-# A failed step logs its name and exit code too, so the log names the step that stopped the run.
-run_step() {
-  local name="$1"
-  local step_start=$SECONDS
-  local rc=0
-  shift
-  "$@" || rc=$?
-  echo "daily-report: step $name took $((SECONDS - step_start))s" >&2
-  if ((rc != 0)); then
-    echo "daily-report: step $name failed with exit code $rc" >&2
-    exit "$rc"
-  fi
-}
+# Each step logs a start line and an end line to stderr, so the log shows where time goes. A
+# failed step logs a stop line with its exit code, so the log names the step that stopped the run.
+# shellcheck source=scripts/run-step.sh
+source "$(dirname "$0")/run-step.sh"
+RUN_STEP_COMMAND=daily-report
 
 # Print the name of the newest published build of the day: the versioned asset with the latest
 # time. The alias report-DATE.json is the fallback for a release with no versioned asset. The

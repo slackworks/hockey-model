@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from hockey_model import progress
 from hockey_model.backtest.game_records import write_game_records
 from hockey_model.backtest.runner import run_backtest
 from hockey_model.backtest.shards import actual_rows
@@ -357,6 +358,23 @@ _HANDLERS = {
 }
 
 
+# These commands can run for more than a minute, so each logs its progress on stderr.
+_LONG_COMMANDS = frozenset(
+    {"refresh", "fit", "backtest", "daily", "experiments", "report-due", "store"}
+)
+
+
 def run_store_command(args: argparse.Namespace) -> tuple[object, int]:
-    """Run a store command. Return the JSON payload and the exit code."""
-    return _HANDLERS[args.command](args)
+    """Run a store command. Return the JSON payload and the exit code.
+
+    A long command runs inside a progress step, so stderr shows its start, a tick at a set
+    interval, and its end with the time it took.
+    """
+    handler = _HANDLERS[args.command]
+    if args.command not in _LONG_COMMANDS:
+        return handler(args)
+    with progress.step(args.command, "run"):
+        payload, code = handler(args)
+        if code != 0:
+            progress.stopped(f"exit code {code}")
+        return payload, code

@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
+from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of
 from hockey_model.game_model.seasons import SEASON_START_MONTH, season_code, season_start_year
 from hockey_model.sources.daily_faceoff import STARTERS_URL, fetch_starters
@@ -73,7 +74,7 @@ def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
     """
     if tried == 0 or not run.out_of_time():
         return False
-    run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    run.stop(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
     run.timed_out = True
     _mark_incomplete(run)
     return True
@@ -136,34 +137,35 @@ def moneypuck(run: RefreshRun) -> None:
                 run, write_team_games(run.conn, fetch_team_games(run.client), stamp)
             ),
         )
-    failures = 0
-    for season in range(FIRST_SEASON, current + 1):
-        url = goalie_games_url(season)
-        if url in gaps:
-            continue
-        if failures >= MAX_UNIT_FAILURES:
-            run.notes.append(
-                f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried"
+    seasons = current - FIRST_SEASON + 1
+    with run.step("moneypuck", "goalie-files", seasons):
+        failures = 0
+        for season in range(FIRST_SEASON, current + 1):
+            progress_log.advance()
+            url = goalie_games_url(season)
+            if url in gaps:
+                continue
+            if failures >= MAX_UNIT_FAILURES:
+                run.stop(f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried")
+                _mark_incomplete(run)
+                break
+            if not _goalie_file_stale(run, season, current):
+                continue
+            if _stop_for_time(run, f"the goalie file of season {season}", tried):
+                break
+
+            def unit(stamp: datetime, season: int = season) -> int:
+                rows = fetch_goalie_games(run.client, season)
+                return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
+
+            ok = run.attempt(
+                MONEYPUCK,
+                url,
+                unit,
+                lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
             )
-            _mark_incomplete(run)
-            break
-        if not _goalie_file_stale(run, season, current):
-            continue
-        if _stop_for_time(run, f"the goalie file of season {season}", tried):
-            break
-
-        def unit(stamp: datetime, season: int = season) -> int:
-            rows = fetch_goalie_games(run.client, season)
-            return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
-
-        ok = run.attempt(
-            MONEYPUCK,
-            url,
-            unit,
-            lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
-        )
-        tried += ok
-        failures = 0 if ok else failures + 1
+            tried += ok
+            failures = 0 if ok else failures + 1
     _note_unmatched(run)
 
 

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hockey_model import progress
 from hockey_model.store.db import read_only_uri, sqlite_failure_fix
 from hockey_model.types import HockeyModelError
 
@@ -105,14 +106,20 @@ def check_workers(workers: int) -> int:
     return workers
 
 
-def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
+def run_units(units: Sequence[Unit], workers: int, label: str = "units") -> list[Any]:
     """Run ``units`` and return their results in the order of ``units``.
 
     With ``workers`` of 1 or one unit, every unit runs in this process, in order. Otherwise a
     pool of at most ``workers`` processes runs them at the same time. The first failure stops
-    the running workers and raises.
+    the running workers and raises. The units run in a progress step named ``label``, which
+    counts the finished units.
     """
     check_workers(workers)
+    with progress.step("backtest", label, total=len(units)):
+        return _run_all(units, workers)
+
+
+def _run_all(units: Sequence[Unit], workers: int) -> list[Any]:
     if workers == 1 or len(units) <= 1:
         return [_run_here(unit) for unit in units]
     results: list[Any] = [None] * len(units)
@@ -127,6 +134,7 @@ def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
                 pool.terminate_workers()
                 raise _pool_failure(units, index, exc) from exc
             _log(units[index], seconds)
+            progress.advance()
     return results
 
 
@@ -140,4 +148,5 @@ def _run_here(unit: Unit) -> Any:
     except Exception as exc:
         raise _failure(unit, exc) from exc
     _log(unit, seconds)
+    progress.advance()
     return result

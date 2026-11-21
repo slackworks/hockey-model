@@ -116,9 +116,9 @@ def test_the_fits_of_a_selection_run_in_this_process(monkeypatch: pytest.MonkeyP
     seen: list[int] = []
     real = runner.run_units
 
-    def spy(units, workers):
+    def spy(units, workers, label):
         seen.append(workers)
-        return real(units, workers)
+        return real(units, workers, label)
 
     monkeypatch.setattr(runner, "run_units", spy)
     monkeypatch.setattr(runner, "_validation_unit", lambda *a: {"guess": 0.5, "actual": 0.5})
@@ -210,9 +210,9 @@ def test_a_serial_run_logs_each_build_by_name_and_all_stages_in_this_process(
     workers: list[int] = []
     real = runner.run_units
 
-    def spy(units, count):
+    def spy(units, count, label):
         workers.append(count)
-        return real(units, count)
+        return real(units, count, label)
 
     monkeypatch.setattr(runner, "run_units", spy)
     runner.run_backtest(seeded, PLAN, candidates=FEATURES)
@@ -253,7 +253,7 @@ def test_a_run_whose_game_count_differs_from_the_elo_run_is_refused() -> None:
 def test_a_result_count_that_differs_from_the_job_count_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runner, "run_units", lambda units, workers: [])
+    monkeypatch.setattr(runner, "run_units", lambda units, workers, label: [])
     rows = _rows((PLAN.select_train[0], PLAN.select_validate[0]))
     # zip(strict=True) raises a ValueError for two lists of different length.
     with pytest.raises(ValueError):

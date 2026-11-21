@@ -63,7 +63,9 @@ def nhl(run: RefreshRun) -> None:
     """Read the score days and the boxscores. A backfill reads them window by window."""
     if run.backfill_from is None:
         score_days(run)
-        read_boxscores(run, games_missing_boxscore(run.conn))
+        waiting = games_missing_boxscore(run.conn)
+        with run.step("boxscores", "missing", len(waiting)):
+            read_boxscores(run, waiting)
         return
     last_day = game_day_of(run.now) + timedelta(days=SCHEDULE_DAYS_AHEAD)
     if run.backfill_from > last_day:
@@ -80,9 +82,12 @@ def nhl(run: RefreshRun) -> None:
     for start, end in windows(run.backfill_from, last_day):
         days = {start + timedelta(days=n) for n in range((end - start).days + 1)}
         window_due = [day for day in due if start <= day <= end]
-        days_read = read_days(run, sorted(days | set(window_due)), gaps, window_due, cutoff)
+        worklist = sorted(days | set(window_due))
+        with run.step("score-days", f"{start}..{end}", len(worklist)):
+            days_read = read_days(run, worklist, gaps, window_due, cutoff)
         missing = games_missing_boxscore(run.conn, start, end)
-        boxes = read_boxscores(run, missing, _recent_games(run, start, end, cutoff))
+        with run.step("boxscores", f"{start}..{end}", len(missing)):
+            boxes = read_boxscores(run, missing, _recent_games(run, start, end, cutoff))
         complete = complete and days_read.clean and boxes.clean
         progress += days_read.progress + boxes.progress
         if days_read.stopped or boxes.stopped:
