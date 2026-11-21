@@ -12,7 +12,10 @@ TLC already checked the reference spec and every break test in this note.
 While the marker `$HOCKEY_MODEL_DB.backfilled` is missing, each run calls `hockey-model refresh --backfill-from ... --budget-seconds "$BACKFILL_BUDGET_S"`.
 The backfill reads the store one window at a time, newest window first, until the time budget is spent.
 A run that does not finish writes no marker, and the next run resumes, because refresh skips what it already read.
-After the marker exists, each run does a plain refresh, the backtest, and the fit, and then writes `prepared-DATE`.
+After the marker exists, each run does a plain refresh.
+A day without a `prepared-DATE` marker and a valid `backtest-DATE.json` then gets the backtest and the fit, and a `prepared-DATE` marker.
+A day that has both skips the backtest and the fit, and `--force` rebuilds it (#281).
+The model covers the backfill only.
 
 The tests check single runs.
 No test checks the rules that must hold across runs.

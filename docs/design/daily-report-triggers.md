@@ -23,8 +23,7 @@ The prepare fires at minute 14, half an hour away from the report, so each job r
 Neither minute is :00.
 GitHub delays and drops scheduled runs most at the top of the hour, and many workflows also use :15, :30, and :45.
 
-An earlier design listed trigger hours that `scripts/trigger_hours.py` derived from the season schedule.
-An hourly cron covers every first puck drop, so the list, the script, and the yearly re-derivation are gone (#162).
+An hourly cron covers every first puck drop, so no list of trigger hours and no yearly re-derivation exist (#162).
 A late or failed run is retried at the next hour.
 
 ## Which run publishes
@@ -45,18 +44,20 @@ A day with some games inside and some outside warns and still decides, because a
 
 The report JSON holds `inputs_sha256`, the hash of what a reader sees.
 It covers the date and the interval level, the model identity (features, `fit_sha256`, `code_sha`), `training_gaps`, and for each game the ID, the start, the state, the skip note, both win chances, `made_after_start`, `missing`, `degraded_inputs`, and `training`.
-It leaves out `generated_at`, `credits`, and the age in a stale-source note, because time passing is not an input.
+It also covers the source `credits`.
+It leaves out `generated_at` and the age in a stale-source note, because time passing is not an input.
 The report JSON shows the goalie and injury state through the win chances and `missing`, not as raw reads.
 A hash of those values changes exactly when a read changes what the report says, and a fresh read of the same value changes nothing.
-`daily-report.sh --skip-unchanged` downloads the `report-DATE.json` alias of the release after it predicts, and `hockey-model report-compare` compares the two hashes.
+`daily-report.sh --skip-unchanged` downloads the newest versioned asset `report-DATE-HHMMSSZ.json` of the release after it predicts, and `hockey-model report-compare` compares the two hashes.
+The versioned asset is the reference, because the publish script uploads the alias `report-DATE.json` after the versions, and a failed alias upload leaves the alias behind the newest build.
+A release with no versioned asset falls back to the alias.
+Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`.
 Equal hashes end the run with reason `unchanged` and no `complete` marker, so the publish job skips.
 An alias with no `inputs_sha256`, from a build before the field existed, counts as changed once.
 A failed release lookup or download stops the run with exit code 1.
 The workflow passes the flag only when the gate decided to publish, so a dry run always builds.
 A day with no release builds and publishes without a comparison, which keeps the first report of a day and the late report.
 
-This replaces the earlier rule, which published only at the last trigger before the puck drop.
-That rule missed the puck drop whenever the last run started late (#159).
 The rule trades freshness for coverage: an early run publishes with the starters known at that time, and a later run publishes again when a starter is confirmed.
 
 ## Two runs per game day
@@ -82,6 +83,10 @@ The report no longer assumes that one morning prepare finishes inside a fixed wi
 The measured start delay of 6.7 to 10.4 hours for the old `0 8 * * *` cron no longer matters, because the next hourly run replaces a late one.
 The cause of that delay is still open in #280.
 The operator can run the `daily-prepare` workflow with a date, then run the report again.
+A prepare that fails every hour shows as red `daily-prepare` runs. The green report skips before the first puck drop do not show it.
+
+Both workflows share one concurrency group, and GitHub keeps one waiting run for a group.
+A newer waiting run replaces an older one. A manual `force` prepare that waits behind a running prepare is therefore replaced by the next hourly run, which skips a prepared day (#285).
 
 Both workflows share one concurrency group, because both write the cached store.
 The group is on the `build` job of `daily-report.yml`, not on the workflow, so the gate job starts at the trigger.
