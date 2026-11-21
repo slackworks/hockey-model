@@ -75,6 +75,30 @@ def test_resolve_first_confirmed_wins(season: sqlite3.Connection) -> None:
     assert start is not None
     assert names(start) == "C. Ingram"
     assert (start.source, start.status) == (StarterSource.DAILY_FACEOFF, StarterStatus.CONFIRMED)
+    assert kinds(missing) == [MissingKind.GOALIE_UNCONFIRMED]
+    note = missing[0].note
+    assert missing[0].team == "TOR"
+    assert "C. Ingram was confirmed first (daily_faceoff, 2026-01-19T14:00" in note
+    assert "J. Woll was confirmed later (espn, 2026-01-19T15:00" in note
+
+
+def test_a_second_confirmation_of_the_same_goalie_is_not_a_conflict(
+    season: sqlite3.Connection,
+) -> None:
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "confirmed", fetched_at="2026-01-19T14:00"
+    )
+    add_starter_read(
+        season,
+        100,
+        "TOR",
+        "daily_faceoff",
+        "C. Ingram",
+        "confirmed",
+        fetched_at="2026-01-19T15:00",
+    )
+    start, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
+    assert names(start) == "C. Ingram"
     assert missing == ()
 
 

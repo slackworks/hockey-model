@@ -94,6 +94,26 @@ def _start_from(read: StarterReadRow, player: Player) -> GoalieStart:
     return GoalieStart(player, read.status, source, read.fetched_at)
 
 
+def _first_confirmed(
+    kept: GoalieStart | None,
+    read: StarterReadRow,
+    player: Player,
+    team: str,
+    notes: list[MissingInput],
+) -> GoalieStart:
+    """Keep the first confirmed start, and note a later confirmation of another goalie."""
+    if kept is None:
+        return _start_from(read, player)
+    if player.canonical_id != kept.player.canonical_id:
+        text = (
+            f"{kept.player.full_name} was confirmed first ({kept.source.value}, "
+            f"{iso_utc(kept.read_at)}) and is used; {player.full_name} was confirmed later "
+            f"({read.source}, {iso_utc(read.fetched_at)})"
+        )
+        notes.append(MissingInput(MissingKind.GOALIE_UNCONFIRMED, team, text))
+    return kept
+
+
 def _from_reads(
     reads: list[StarterReadRow], goalies: _Goalies, team: str
 ) -> tuple[GoalieStart | None, list[MissingInput]]:
@@ -107,8 +127,8 @@ def _from_reads(
         player, why, _ = goalies.find(read.goalie_name)
         if player is None:
             notes.append(_unknown(team, why))
-        elif read.status is StarterStatus.CONFIRMED and confirmed is None:
-            confirmed = _start_from(read, player)
+        elif read.status is StarterStatus.CONFIRMED:
+            confirmed = _first_confirmed(confirmed, read, player, team, notes)
         elif read.status is StarterStatus.LIKELY:
             likely = _start_from(read, player)
     if confirmed is not None:
