@@ -25,6 +25,9 @@ from hockey_model.types import HockeyModelError
 
 SCHEMA_FILE = "live_gaps.schema.json"
 _SECONDS_PER_HOUR = 3600
+# Two runners can disagree on the time by a little. A read dated further ahead than this
+# is bad data, and it would hide a feed that nobody reads.
+FUTURE_READ_TOLERANCE = timedelta(hours=1)
 
 
 def live_gap_report(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
@@ -84,6 +87,12 @@ def _feeds(conn: sqlite3.Connection, now: datetime) -> list[dict[str, Any]]:
                 {"source": source, "newest_read": None, "age_hours": None, "over_limit": True}
             )
             continue
+        if newest - now > FUTURE_READ_TOLERANCE:
+            raise HockeyModelError(
+                f"read the newest read of {source}: it is dated {iso_utc(newest)}, after the "
+                f"time of the check, {iso_utc(now)}; check the clocks and the fetched_at "
+                "values of that source"
+            )
         age = max(now - newest, timedelta(0))
         feeds.append(
             {

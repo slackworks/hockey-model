@@ -185,7 +185,7 @@ Every field is always present.
 | `level` | number | The interval level of the goal ranges, between 0 and 1. |
 | `credits` | list of text | The data sources that the predictions used. |
 | `model` | object or null | `features` (fit features), `fit_sha256` (SHA-256 of the fit weights), and `code_sha` (the commit, null outside Actions). Null when the run did not name a fit. |
-| `training_gaps` | list of text | Source gaps in days older than the previous season. Each moves a win chance by less than `OLD_GAP_MAX_SHIFT_PP` percentage points. |
+| `training_gaps` | list of text | Source gaps in days older than the previous season. The measured case, a gap of up to a week two seasons back, moved a win chance by at most `OLD_GAP_MEASURED_SHIFT_PP` percentage points. |
 | `games` | list | One object for each game that starts on the day. |
 
 A game has these fields.

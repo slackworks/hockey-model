@@ -27,7 +27,7 @@ from hockey_model.models import GameModel
 from hockey_model.report_schema import SCHEMA_VERSION, check_report
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
-from hockey_model.store.staleness import OLD_GAP_MAX_SHIFT_PP, training_gaps
+from hockey_model.store.staleness import OLD_GAP_MEASURED_SHIFT_PP, training_gaps
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.utc import require_utc
 
@@ -296,8 +296,9 @@ def report_markdown(report: DailyReport) -> str:
         out.append("")
     if report.footer_gaps:
         out.append(
-            "Gaps outside the scored, current, and previous seasons (no game row; each moves a "
-            f"win chance by less than {OLD_GAP_MAX_SHIFT_PP} percentage points):"
+            "Gaps outside the scored, current, and previous seasons (no game row; in the measured "
+            "case, a gap of up to a week two seasons back moved a win chance by at most "
+            f"{OLD_GAP_MEASURED_SHIFT_PP} percentage points):"
         )
         out.extend(f"- {gap}" for gap in report.footer_gaps)
         out.append("")

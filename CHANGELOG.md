@@ -83,7 +83,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Give each Hypothesis example its own store or directory in the store, runner, and report tests, so no example sees the state of another, and drop the health-check suppressions that hid this. [test:hygiene]
 - Make a streak of permanent HTTP failures, such as 403, a known gap on the second failed read, with no wait for `ABANDON_MIN_SPAN_DAYS`, so a blocked feed no longer costs a slate. `source_reads` gains a nullable `permanent` column (store version 6), and a row from an older store counts as transient. The TLA+ model gains `BlockedScore` and `BlockedBox`. [fix:store]
 - Fail `experiments check` when a confirmation record that never ran is deleted while a higher confirmation record existed in the deleting commit, so its number cannot go to a new record. A deletion from before any higher record existed stays allowed. [fix:experiments]
-- Put a source gap on the game rows when its season is the season before the current one, and say in the footer that older gaps move a win chance by less than `OLD_GAP_MAX_SHIFT_PP` percentage points. The number comes from a replay of Elo on the real store (`docs/design/elo-gap-effect.md`). [fix:report]
+- Put a source gap on the game rows when its season is the season before the current one, and say in the footer how far a gap moved a win chance in the measured case, `OLD_GAP_MEASURED_SHIFT_PP` percentage points. The number comes from a replay of Elo on the real store (`docs/design/elo-gap-effect.md`). Read the season of a boxscore and of a MoneyPuck goalie file from its URL, so an old one goes to the footer too. [fix:report]
 
 ### Fixed
 

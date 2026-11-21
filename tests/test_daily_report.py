@@ -32,7 +32,7 @@ from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY, FitDiagnostics, LogisticFit
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.sources.nhl import GameRow
-from hockey_model.store.staleness import OLD_GAP_MAX_SHIFT_PP
+from hockey_model.store.staleness import OLD_GAP_MEASURED_SHIFT_PP
 from hockey_model.types import HockeyModelError, Projection
 
 DAY = date(2026, 1, 20)
@@ -298,7 +298,7 @@ def test_json_lists_the_degraded_inputs_of_a_prediction() -> None:
 def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
     gap = (
         "nhl_scores: https://x/score/2017-09-19 failed in every read; "
-        "its day is outside the scored, current, and previous seasons"
+        "its season is outside the scored, current, and previous seasons"
     )
     report = DailyReport(
         date(2026, 11, 13),
@@ -310,8 +310,9 @@ def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
     markdown = report_markdown(report)
     assert markdown.count(gap) == 1
     assert (
-        "Gaps outside the scored, current, and previous seasons (no game row; each moves a win "
-        f"chance by less than {OLD_GAP_MAX_SHIFT_PP} percentage points):"
+        "Gaps outside the scored, current, and previous seasons (no game row; in the measured "
+        "case, a gap of up to a week two seasons back moved a win chance by at most "
+        f"{OLD_GAP_MEASURED_SHIFT_PP} percentage points):"
     ) in markdown
     assert report_json(report)["training_gaps"] == [gap]
 

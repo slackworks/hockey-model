@@ -132,6 +132,7 @@ def test_a_failed_command_stops_the_check(fake_uv: Path, tmp_path: Path) -> None
         "[]",
         json.dumps({"limit_hours": 24, "gaps": "none"}),
         json.dumps({"limit_hours": 24, "gaps": []}),
+        json.dumps({"limit_hours": 24, "gaps": [], "feeds": []}),
         json.dumps({"limit_hours": 24, "gaps": [], "feeds": [{"source": "daily_faceoff"}]}),
         json.dumps({"gaps": []}),
         json.dumps({"limit_hours": 24, "gaps": [{"source": "daily_faceoff"}]}),

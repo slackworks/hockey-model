@@ -41,7 +41,7 @@ report="$(uv run hockey-model store gaps --live)" || {
 if ! jq -e '(.limit_hours | type == "number") and (.gaps | type == "array")
   and all(.gaps[]; (.source | type == "string") and (.url | type == "string")
     and (.age_hours | type == "number") and (.over_limit | type == "boolean"))
-  and (.feeds | type == "array")
+  and (.feeds | type == "array") and (.feeds | length > 0)
   and all(.feeds[]; (.source | type == "string") and (.over_limit | type == "boolean"))' \
   <<<"$report" >/dev/null; then
   echo "check-live-feeds: the gaps payload has another shape than the schema says:" \

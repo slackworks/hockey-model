@@ -182,5 +182,13 @@ def test_the_previous_season_of_20252026_is_20242025() -> None:
 
 
 @given(start=st.integers(1917, 2100))
-def test_the_previous_season_is_the_season_one_year_earlier(start: int) -> None:
-    assert previous_season(season_code(start)) == season_code(start - 1)
+def test_the_previous_season_ends_where_the_season_starts(start: int) -> None:
+    earlier = previous_season(season_code(start))
+    assert earlier % 10000 == start
+    assert earlier // 10000 == start - 1
+
+
+@pytest.mark.parametrize("season", [0, 2025, 20252027, 20262025, 20252025])
+def test_a_season_id_that_is_not_two_consecutive_years_is_refused(season: int) -> None:
+    with pytest.raises(ValueError, match="not two consecutive years"):
+        previous_season(season)

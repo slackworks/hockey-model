@@ -10,7 +10,9 @@ The daily report must say which gaps can matter.
 
 A dated gap is on the game rows when its season is in `SCORED`, is the current season, or is the season before the current one.
 Every other dated gap goes to the footer and to `training_gaps`.
-The footer says that each of these gaps moves a win chance by less than `OLD_GAP_MAX_SHIFT_PP` percentage points.
+The footer says how far a gap moved a win chance in the measured case, `OLD_GAP_MEASURED_SHIFT_PP` percentage points.
+The season of a score day comes from its date, of a boxscore from the first four digits of its game id, and of a MoneyPuck goalie file from its year.
+A URL with no season to read, such as the MoneyPuck team file, stays on the game rows.
 The owner decided this rule on 2026-11-20.
 Today the season before the current one is in `SCORED`, so the rule first changes a report in the 2027-28 season.
 
@@ -35,7 +37,8 @@ Dropped games in 2023-24 reach the scored games of 2024-25 and of 2025-26:
 
 The boundary case of the rule is a gap two seasons before the current one.
 With 2025-26 as the current season, that is 2023-24, and the rows for 2025-26 are the ones to read.
-The largest change there is 0.34 percentage points, so `OLD_GAP_MAX_SHIFT_PP` is 0.5.
+The largest change there is 0.34 percentage points, so `OLD_GAP_MEASURED_SHIFT_PP` is 0.34.
+The footer states this case only, and does not state a bound for every old gap.
 A gap in the season just before the predicted games moves a win chance by about 1 point or less (Elo) in the rows for 2024-25, and by more when the dropped games are close to the predicted games, so that gap stays on the game rows.
 
 An Elo error fades by about 1 percent for each game, so a gap further back moves less.
