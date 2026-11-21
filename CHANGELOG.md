@@ -47,6 +47,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skip the backtest and the fit in `daily-prepare.sh` for a day that has its `prepared-DATE` marker and a valid `backtest-DATE.json`. The refresh still runs. `--force`, and the `force` input of a manual `daily-prepare` run, rebuild the day. [feat:report]
 - Add `inputs_sha256` to the daily report JSON, and add `hockey-model report-compare` with `daily-report.sh --skip-unchanged`. A report build that has the inputs of the newest published report does not publish. [feat:report]
 - Add `hockey-model backtest --workers N`, and the same option of `hockey-model experiments run`. They run the two feature builds in worker processes and log the wall time of each unit. The report and the per-game CSV do not change with N. `daily-prepare.sh` passes `BACKTEST_WORKERS` (default 2). [feat:model]
+- Add `scripts/backtest_golden.py` and a golden test that hash the backtest report, the per-game rows, and the fitted weights on the seeded store with floats rounded to nine decimals, so a speed change that moves a number fails the test. The script also writes the exact hashes of the report and the CSV. [chore:test]
 
 ### Changed
 
