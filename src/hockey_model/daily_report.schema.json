@@ -108,6 +108,18 @@
             }
           }
         },
+        "win_interval": {
+          "description": "Model uncertainty only, at the report level. Null without a range.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["home_low", "home_high", "away_low", "away_high"],
+          "properties": {
+            "home_low": {"$ref": "#/$defs/probability"},
+            "home_high": {"$ref": "#/$defs/probability"},
+            "away_low": {"$ref": "#/$defs/probability"},
+            "away_high": {"$ref": "#/$defs/probability"}
+          }
+        },
         "training": {
           "type": ["object", "null"],
           "additionalProperties": false,

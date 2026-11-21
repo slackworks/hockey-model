@@ -85,6 +85,10 @@ The model is the results-only Elo of sportsbettr plus three features: MoneyPuck 
 A fitted logistic regression sets the weights.
 `made_after_start` is true when the prediction time is at or after the puck drop.
 A caller must never treat such a result as a pregame read.
+`home_win_interval` is a `(low, high)` range of `home_win` at the interval level, or `None` when the fit has no coefficient uncertainty.
+The range comes from the uncertainty of the fitted weights, by the delta method on the log-odds scale.
+It is model uncertainty only: it leaves out noise in the Elo rating, noise in the feature values, and drift between seasons.
+The away range is `1 - high` to `1 - low`.
 The starting goalie comes from the first confirmed ESPN or Daily Faceoff read, then the newest likely read, then the goalie with the most recent starts.
 The result lists a goalie that no source confirmed.
 `degraded_inputs` lists each form feature of the fit that was set to the neutral value `NEUTRAL_FORM`, because a team had no MoneyPuck games before the game.
@@ -146,6 +150,7 @@ Then `success` is false, `live_features` is empty, the interval is `null`, and `
 - `daily [--date YYYY-MM-DD] --out-dir DIR [--level L]` predicts every game of one game day, and writes `report-DATE.md` and `report-DATE.json`. A game day is the Eastern date that the NHL schedule uses, so a 7 pm ET slate that starts after midnight UTC stays in one report. Game starts stay UTC instants. The day defaults to the game day that holds now. A game that already started is still predicted, with its inputs taken as of the puck drop and a `late_run` note. A game that is over is predicted the same way, so a late first report is full. A postponed game gets no prediction. The JSON copy names the model in `model`: the fit features, a SHA-256 of the fit weights (`fit_sha256`), and the code commit from `GITHUB_SHA` (`code_sha`, null outside Actions).
 - `report-due [--date YYYY-MM-DD] [--force] [--prep-started ISO]` prints whether the first puck drop of the game day is still ahead of the run, plus `--margin-seconds`, so the current run may publish the day's report. Every trigger that starts before the first puck drop is due. The first run that publishes creates the release. Later runs before the first puck drop add a new build, and only when the inputs differ from the newest published report (`inputs_sha256` in the report JSON), so a reader can see the release change until then. After the puck drop, runs skip the day. A run that starts after the puck drop publishes the first report of the day late, with a warning. A game day with no games publishes nothing. The output also says `puck_drop_passed`, so a run that finds no prep marker skips before the first puck drop and fails after it. `--prep-started` names the prepare run that holds the store group, and `prep_blocks_report` says that its timeout plus the report budget reaches past the puck drop, so the gate skips the run with reason `prepare-wait`. Each build keeps its own `report-DATE-HHMMSSZ` files, so no published version is replaced. The report runs at minute `TRIGGER_MINUTE_UTC` of every hour, and the cron in `.github/workflows/daily-report.yml` MUST list the same minute. The prepare runs at minute 14 of every hour. The design is in [docs/design/daily-report-triggers.md](docs/design/daily-report-triggers.md).
 - `report-compare --built PATH --published PATH` prints whether a built report JSON has the `inputs_sha256` of the newest published report. The answer has `unchanged`, `baseline`, and `reason` (`unchanged` or `replace`). `scripts/daily-report.sh --skip-unchanged` runs it before a publish.
+- `report-summary --report PATH` checks a report against its schema and prints `summary`, the lines that open the release notes. A header line names the level and says that the ranges are model uncertainty only. Then one line names each game in start order, with the favorite, its win chance in whole percent, and the range, such as `TOR at MTL: TOR 58% (52–64%)`. A game with no prediction says why. A fit with no range says `no interval: Elo only`, or says to fit again. A day with no games says so. `scripts/publish-daily-report.sh` puts these lines before the build note, and a failed summary stops the script before any upload.
 - `report-decide` prints the publish step of one trigger from the facts that `scripts/report-gate.sh` read: `--due`, `--games`, `--date`, `--force`, `--dry-run`, and `--published`. With `--published unknown` it prints `lookup_needed`. When that is true, read the release and ask again with `--published true` or `false`. It prints `due`, `publish`, `reason`, `lookup_needed`, and `warning`.
 - To test the report by hand, run `gh workflow run daily-report -f force=true -f dry_run=true`. The run builds the report for the current game day, skips the trigger slot and the published-release check, and uploads the report as an artifact. It publishes no release.
 - `fit` without `--through-season` fits through the newest season that holds a final game in the store, and records that season.
@@ -196,6 +201,7 @@ A game has these fields.
 | `state` | text | The NHL game state, such as `FUT`, `LIVE`, `OFF`, or `PPD`. |
 | `skipped` | text or null | The reason the game has no prediction. A postponed game holds `game is postponed (state PPD); no prediction`. Null when the game has a prediction. |
 | `home_win`, `away_win` | number or null | The win chances. Null when `skipped` holds a reason. |
+| `win_interval` | object or null | The range of each win chance at the report `level`: `home_low`, `home_high`, `away_low`, and `away_high`. It is model uncertainty only. Null when `skipped` holds a reason, and when the fit has no coefficient uncertainty, such as an Elo-only fit or a fit saved before ranges existed. The schema does not require the field, so a consumer reads a missing field as null. |
 | `made_after_start` | boolean | True when the run made the prediction after the puck drop. |
 | `missing` | list | Inputs that were absent or weak: `kind`, `team` (text or null), and `note`. |
 | `degraded_inputs` | list | Features set to a neutral value for a team with no data: `feature`, `kind`, and `teams`. |
@@ -229,6 +235,7 @@ One report, with one game:
       "skipped": null,
       "home_win": 0.55,
       "away_win": 0.45,
+      "win_interval": {"home_low": 0.49, "home_high": 0.61, "away_low": 0.39, "away_high": 0.51},
       "made_after_start": false,
       "missing": [
         {"kind": "goalie_unconfirmed", "team": "TOR", "note": "starter is expected, not confirmed"}

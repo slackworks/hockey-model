@@ -161,6 +161,11 @@ def fakes(tmp_path: Path) -> Path:
         'if [[ "$*" == "run hockey-model report-compare"* ]]; then\n'
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
+        # The summary step is the real command: it holds the lines that open the release notes.
+        'if [[ "$*" == "run hockey-model report-summary"* ]]; then\n'
+        '  if [[ -n "${FAKE_SUMMARY_FAIL:-}" ]]; then echo "summary boom" >&2; exit 6; fi\n'
+        '  exec "$FAKE_REAL_UV" "$@"\n'
+        "fi\n"
         # The index step is the real command: it holds the schema check the publish script needs.
         'if [[ "$*" == "run hockey-model report-index"* ]]; then\n'
         '  exec "$FAKE_REAL_UV" "$@"\n'

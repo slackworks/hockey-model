@@ -183,6 +183,11 @@ def _add_report_compare(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--published", type=Path, required=True, metavar="PATH")
 
 
+def _add_report_summary(parser: argparse.ArgumentParser) -> None:
+    """Add the report file that the summary step reads."""
+    parser.add_argument("--report", type=Path, required=True, metavar="PATH")
+
+
 def _add_report_index(parser: argparse.ArgumentParser) -> None:
     """Add the files that the index step reads and writes."""
     parser.add_argument("--report", type=Path, required=True, metavar="PATH")
@@ -234,6 +239,12 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         add_parser(
             "report-compare",
             help="say whether a built report has the inputs of the newest published report",
+        )
+    )
+    _add_report_summary(
+        add_parser(
+            "report-summary",
+            help="print the summary lines that open the release notes of a report",
         )
     )
     _add_report_index(

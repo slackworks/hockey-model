@@ -92,3 +92,33 @@ def _run(script: str, env: dict[str, str], *args: str) -> subprocess.CompletedPr
         text=True,
         check=False,
     )
+
+
+def report_game(
+    home: str = "MTL",
+    away: str = "TOR",
+    *,
+    home_win: float | None = 0.42,
+    interval: tuple[float, float] | None = (0.36, 0.48),
+    skipped: str | None = None,
+) -> dict[str, object]:
+    """Return one game of a report JSON, as the report writes it, with the range of both sides."""
+    win = None
+    if home_win is not None and interval is not None:
+        low, high = interval
+        win = {"home_low": low, "home_high": high, "away_low": 1 - high, "away_high": 1 - low}
+    return {
+        "game_id": 1,
+        "away": away,
+        "home": home,
+        "start_utc": "2026-11-04T23:00:00.000000+00:00",
+        "state": "FUT",
+        "skipped": skipped,
+        "home_win": home_win,
+        "away_win": None if home_win is None else 1 - home_win,
+        "made_after_start": False,
+        "missing": [],
+        "degraded_inputs": [],
+        "training": None,
+        "win_interval": win,
+    }

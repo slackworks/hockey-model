@@ -17,6 +17,7 @@ from hockey_model.game_model.elo import replay
 from hockey_model.game_model.features import FORM_WINDOW, GoalieMode, build_features
 from hockey_model.game_model.logistic import predict_logistic
 from hockey_model.game_model.seasons import ELO_BURN_IN, season_of
+from hockey_model.game_model.win_interval import home_win_interval
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
 from hockey_model.store.fits import FitArtifact
@@ -230,4 +231,5 @@ class NhlGameModel:
             credits=credits,
             degraded_inputs=row.imputed,
             training=_training_info(self._artifact, *_stored_game(self._conn, game)),
+            home_win_interval=home_win_interval(self._fit, row, level),
         )

@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from hockey_model.matchup import check_win_pair
+from hockey_model.matchup import check_win_interval, check_win_pair
 from hockey_model.models import GameModel
 from hockey_model.team_codes import NHL_TEAM_CODES
 from hockey_model.types import HockeyModelError, Player, Projection, ProjectionError
@@ -147,6 +147,9 @@ class GamePrediction:
     degraded_inputs: tuple[DegradedInput, ...] = ()
     # None only for a prediction that a model made without a saved fit, such as a test model.
     training: TrainingInfo | None = None
+    # The model-uncertainty range of ``home_win`` at the interval level. None when the fit has no
+    # coefficient uncertainty. The away range is ``1 - high`` to ``1 - low``.
+    home_win_interval: tuple[float, float] | None = None
 
 
 def game_win_probability(
@@ -169,6 +172,8 @@ def game_win_probability(
             "return a GamePrediction"
         )
     check_win_pair((result.home_win, result.away_win), label)
+    if result.home_win_interval is not None:
+        check_win_interval(result.home_win, result.home_win_interval, label)
     validate_projection(result.home_goals, level, f"{label}: home goals", Domain.NONNEGATIVE)
     validate_projection(result.away_goals, level, f"{label}: away goals", Domain.NONNEGATIVE)
     made_after_start = moment >= game.start

@@ -9,7 +9,16 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from mutation_copy import require_path
-from report_script_support import DAY, SHA, TAG, _calls, _env, _run, valid_report
+from report_script_support import (
+    DAY,
+    SHA,
+    TAG,
+    _calls,
+    _env,
+    _run,
+    report_game,
+    valid_report,
+)
 
 from hockey_model.report_schema import add_build
 from hockey_model.store.timestamps import iso_utc
@@ -17,11 +26,11 @@ from hockey_model.store.timestamps import iso_utc
 require_path(Path(__file__).resolve().parents[1] / "scripts")
 
 
-def _write_report(report_dir: Path, day: str = DAY) -> None:
+def _write_report(report_dir: Path, day: str = DAY, games: tuple[dict, ...] = ()) -> None:
     report_dir.mkdir()
     (report_dir / f"report-{day}.md").write_text("# report\n", encoding="utf-8")
     (report_dir / f"report-{day}.json").write_text(
-        json.dumps(valid_report(date=day)) + "\n", encoding="utf-8"
+        json.dumps(valid_report(date=day, games=list(games))) + "\n", encoding="utf-8"
     )
     (report_dir / f"backtest-{day}.json").write_text("{}\n", encoding="utf-8")
     (report_dir / f"backtest-games-{day}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
@@ -79,6 +88,53 @@ def test_publish_notes_say_every_build_is_kept(fakes: Path, tmp_path: Path) -> N
     assert "Every build's report is kept" in notes
     assert "report-" + DAY + "-HHMMSSZ" in notes
     assert f"commit {SHA}" in notes
+
+
+def _notes(tmp_path: Path) -> str:
+    return (tmp_path / "report" / f"release-notes-{DAY}.md").read_text(encoding="utf-8")
+
+
+def test_publish_notes_open_with_one_line_for_each_game(fakes: Path, tmp_path: Path) -> None:
+    games = (report_game(), report_game("BOS", "NYR", home_win=None, skipped="game is postponed"))
+    _write_report(tmp_path / "report", games=games)
+    result = _publish(fakes, tmp_path)
+    assert result.returncode == 0, result.stderr
+    lines = _notes(tmp_path).splitlines()
+    assert "model uncertainty only" in lines[0]
+    assert lines[1:3] == [
+        "TOR at MTL: TOR 58% (52\u201364%)",
+        "NYR at BOS: no prediction (game is postponed)",
+    ]
+    assert lines[3] == ""
+    assert lines[4].startswith("Every build's report is kept")
+
+
+def test_publish_notes_of_a_day_without_games_say_so(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    assert _publish(fakes, tmp_path).returncode == 0
+    assert _notes(tmp_path).startswith("No games start on this day.\n\nEvery build's report")
+
+
+def test_publish_of_a_rebuild_replaces_the_summary_in_the_notes(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _write_report(tmp_path / "report", games=(report_game(home_win=0.30, interval=(0.2, 0.4)),))
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 0, result.stderr
+    notes = _notes(tmp_path)
+    assert "TOR at MTL: TOR 70% (60\u201380%)" in notes
+    edit = [line for line in _calls(tmp_path) if line.startswith("gh release edit")]
+    assert edit and f"release-notes-{DAY}.md" in edit[0]
+
+
+def test_publish_stops_before_any_upload_when_the_summary_cannot_be_built(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _write_report(tmp_path / "report", games=(report_game(),))
+    result = _publish(fakes, tmp_path, FAKE_SUMMARY_FAIL="1")
+    assert result.returncode == 1
+    assert "cannot build the summary" in result.stderr
+    assert not any(line.startswith("gh release") for line in _calls(tmp_path))
 
 
 def test_publish_needs_the_build_commit(fakes: Path, tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ The version rises by one in a change that does one of these:
 3. It changes the meaning of a field, such as the unit or the time basis.
 
 A new field does not raise the version when the schema marks it optional, which means it is not in `required`.
+The game field `win_interval` is the first such field (#212). The report always writes it, and a consumer reads a missing field as null.
 A consumer that reads a version it does not know MUST stop and name the version.
 A change that raises the version MUST say so in `CHANGELOG.md`.
 
