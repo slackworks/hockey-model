@@ -69,10 +69,14 @@ day="${day:-$(TZ=America/New_York date +%F)}"
 store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$store_dir"
 
+# shellcheck source=scripts/run-step.sh
+source "$(dirname "$0")/run-step.sh"
+RUN_STEP_COMMAND=daily-prepare
+
 # The cache restores a store that older code wrote. The upgrade keeps every row and writes a
 # backup, so the run continues on the same store instead of stopping at the version check. A
 # missing store file is skipped, because the first backfill below writes a current version.
-uv run hockey-model store upgrade --if-missing skip >&2
+run_step upgrade uv run hockey-model store upgrade --if-missing skip >&2
 
 # The marker is written only after a backfill finishes. A store file without it is partial.
 if ! command -v jq >/dev/null; then
@@ -85,7 +89,7 @@ if [[ ! -f "$marker" ]]; then
   echo "daily-prepare: the backfill reads one year per window, newest first." >&2
   report="$store_dir/refresh-report.json"
   refresh_rc=0
-  uv run hockey-model refresh --backfill-from 2014-10-01 \
+  run_step refresh uv run hockey-model refresh --backfill-from 2014-10-01 \
     --budget-seconds "${BACKFILL_BUDGET_S:-1800}" >"$report" || refresh_rc=$?
   cat "$report"
   if ((refresh_rc != 0)); then
@@ -108,7 +112,7 @@ if [[ ! -f "$marker" ]]; then
   esac
   touch "$marker"
 else
-  uv run hockey-model refresh
+  run_step refresh uv run hockey-model refresh
 fi
 
 # A day is complete when its marker and a backtest file with a live_features list of names
@@ -147,7 +151,7 @@ shopt -u nullglob
 
 # The backtest writes beside the final names. The final files and the marker change only after
 # the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
-uv run hockey-model backtest --games-out "$backtest_games.new" \
+run_step backtest uv run hockey-model backtest --games-out "$backtest_games.new" \
   --workers "$workers" >"$backtest_json.new"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.
@@ -158,7 +162,8 @@ fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
-uv run hockey-model fit --features "$live_features" --label live --workers "$workers"
+run_step fit uv run hockey-model fit --features "$live_features" --label live \
+  --workers "$workers"
 mv "$backtest_games.new" "$backtest_games"
 mv "$backtest_json.new" "$backtest_json"
 touch "$store_dir/prepared-$day"

@@ -603,13 +603,14 @@ def _slow_uv(fakes: Path, tmp_path: Path) -> Path:
     return slow
 
 
-def test_daily_run_logs_each_step_with_its_seconds(fakes: Path, tmp_path: Path) -> None:
+def test_daily_run_logs_the_start_and_end_of_each_step(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store_path(tmp_path)))
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 0, result.stderr
-    assert "daily-report: step refresh took " in result.stderr
-    assert "daily-report: step predict took " in result.stderr
+    for step in ("upgrade", "refresh", "predict"):
+        assert f"progress daily-report {step} start elapsed=0.0s" in result.stderr
+        assert f"progress daily-report {step} end elapsed=" in result.stderr
     assert "daily-report: total " in result.stderr
 
 
@@ -650,7 +651,8 @@ def test_a_failed_step_names_itself_and_stops_the_run(fakes: Path, tmp_path: Pat
     assert _run("daily-prepare.sh", env, "--date", DAY).returncode == 0
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 3
-    assert "step refresh failed with exit code 3" in result.stderr
+    assert "progress daily-report refresh stop elapsed=" in result.stderr
+    assert "reason=exit code 3" in result.stderr
     assert not (tmp_path / "out" / f"backtest-{DAY}.json").exists()
 
 
