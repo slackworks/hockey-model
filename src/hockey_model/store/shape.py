@@ -47,6 +47,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(6, "source_reads", "permanent", False),
     Requirement(7, "starter_reads", "nhl_id", False, present=False),
     Requirement(7, "injury_reads", "nhl_id", False, present=False),
+    Requirement(8, "mp_team_games", "unblocked_for", False, present=False),
+    Requirement(8, "mp_team_games", "unblocked_against", False, present=False),
 )
 # The shape before the first requirement, which is the first schema this package wrote. A store
 # with no schema_version row is refused before this module runs.

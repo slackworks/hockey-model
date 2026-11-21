@@ -66,6 +66,37 @@ CREATE TABLE model_fits_v5 (
     created_at TEXT NOT NULL
 )
 """
+# The 7->8 step rebuilds mp_team_games without the two unblocked counts, because a CHECK that
+# names a column blocks DROP COLUMN. A row keeps its counts and its attempts_known flag.
+_MP_TEAM_GAMES_V8 = """
+CREATE TABLE mp_team_games_v8 (
+    game_id INTEGER,
+    team TEXT,
+    game_date TEXT,
+    xg_for REAL,
+    xg_against REAL,
+    shot_attempts_for INTEGER,
+    shot_attempts_against INTEGER,
+    attempts_known INTEGER NOT NULL DEFAULT 1 CHECK (attempts_known IN (0, 1)),
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (game_id, team, fetched_at),
+    CHECK (
+        attempts_known = 0
+        OR (shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL)
+    )
+)
+"""
+# The archive of the unblocked counts that the 7->8 step found, keyed by the primary key of the
+# row they came from. A fresh store has none, so schema.sql does not create the table.
+_RETIRED_MP_UNBLOCKED = """
+CREATE TABLE IF NOT EXISTS retired_mp_unblocked (
+    game_id INTEGER,
+    team TEXT,
+    fetched_at TEXT NOT NULL,
+    unblocked_for INTEGER,
+    unblocked_against INTEGER
+)
+"""
 # The archive of the values that the 6->7 step found in the dropped columns. A fresh store
 # has no such value, so schema.sql does not create the table.
 _RETIRED_NHL_IDS = """
@@ -158,6 +189,22 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         " fetched_at, nhl_id FROM injury_reads WHERE nhl_id IS NOT NULL",
         "ALTER TABLE starter_reads DROP COLUMN nhl_id",
         "ALTER TABLE injury_reads DROP COLUMN nhl_id",
+    ),
+    # No feature read the unblocked counts (#92). The archive copies each stored value with the
+    # key of its row before the rebuild drops the columns.
+    7: (
+        _RETIRED_MP_UNBLOCKED,
+        "INSERT INTO retired_mp_unblocked (game_id, team, fetched_at, unblocked_for,"
+        " unblocked_against) SELECT game_id, team, fetched_at, unblocked_for, unblocked_against"
+        " FROM mp_team_games WHERE unblocked_for IS NOT NULL OR unblocked_against IS NOT NULL",
+        _MP_TEAM_GAMES_V8,
+        "INSERT INTO mp_team_games_v8 (game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, attempts_known, fetched_at)"
+        " SELECT game_id, team, game_date, xg_for, xg_against, shot_attempts_for,"
+        " shot_attempts_against, attempts_known, fetched_at FROM mp_team_games",
+        "DROP TABLE mp_team_games",
+        "ALTER TABLE mp_team_games_v8 RENAME TO mp_team_games",
+        "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
     ),
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a

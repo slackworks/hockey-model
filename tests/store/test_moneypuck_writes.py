@@ -27,7 +27,7 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def team_row(xg_for: float = 2.5, attempts_for: int = 50) -> TeamGameRow:
-    return TeamGameRow(2025020697, "BOS", "2026-01-10", xg_for, 1.5, attempts_for, 40, 30, 20)
+    return TeamGameRow(2025020697, "BOS", "2026-01-10", xg_for, 1.5, attempts_for, 40)
 
 
 def test_write_team_games_skips_unchanged_rows(conn: sqlite3.Connection) -> None:

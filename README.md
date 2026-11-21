@@ -132,7 +132,7 @@ It first writes a backup beside the store, named `<store>.v<version>.bak`, and i
 The daily workflows delete that backup before they save the store to the cache, so a later no-op report can name a backup that is no longer there.
 `--if-missing skip` reports `from_version: null` and a `note`.
 The change runs in one transaction, so a failure leaves the store as it was.
-The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote. No feature reads them.
+The two MoneyPuck shot-attempt columns are NULL for the rows that version 1 wrote. No feature reads them.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.
 Opening a store never migrates it, so a consumer on an old store fails and names this command.
 Opening a store also checks the shape of its tables against the stamp.

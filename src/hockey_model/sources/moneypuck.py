@@ -41,8 +41,6 @@ TEAM_COLUMNS = (
     "xGoalsAgainst",
     "shotAttemptsFor",
     "shotAttemptsAgainst",
-    "unblockedShotAttemptsFor",
-    "unblockedShotAttemptsAgainst",
 )
 GOALIE_COLUMNS = ("playerId", "season", "gameId", "playerTeam", "situation", "xGoals", "goals")
 _SEASON = re.compile(r"[0-9]{4}")
@@ -65,8 +63,6 @@ class TeamGameRow(NamedTuple):
     xg_against: float
     shot_attempts_for: int
     shot_attempts_against: int
-    unblocked_for: int
-    unblocked_against: int
 
 
 class GoalieGameRow(NamedTuple):
@@ -190,8 +186,6 @@ def parse_team_games(text: str) -> list[TeamGameRow]:
                 _number(row, "xGoalsAgainst", line),
                 _count(row, "shotAttemptsFor", line),
                 _count(row, "shotAttemptsAgainst", line),
-                _count(row, "unblockedShotAttemptsFor", line),
-                _count(row, "unblockedShotAttemptsAgainst", line),
             )
         )
     return rows

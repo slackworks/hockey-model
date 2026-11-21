@@ -1,5 +1,6 @@
 """Tests for the MoneyPuck parsers. They read fixtures and make no network request."""
 
+import csv
 import io
 import zipfile
 from pathlib import Path
@@ -95,8 +96,6 @@ def test_parse_team_games_keeps_the_attempt_counts() -> None:
     boston = next(r for r in rows if (r.game_id, r.team) == (2025020697, "BOS"))
     assert boston.shot_attempts_for > 0
     assert boston.shot_attempts_against > 0
-    assert 0 <= boston.unblocked_for <= boston.shot_attempts_for
-    assert 0 <= boston.unblocked_against <= boston.shot_attempts_against
 
 
 def test_parse_team_games_drops_seasons_before_2014() -> None:
@@ -322,3 +321,16 @@ def test_a_zip_header_that_understates_the_size_is_a_named_error() -> None:
 def test_a_csv_header_field_over_the_size_limit_is_a_named_error() -> None:
     with pytest.raises(SourceParseError, match="not valid CSV"):
         parse_team_games("x" * 200_000 + ",gameId\n")
+
+
+def test_a_file_without_the_unblocked_columns_parses_to_the_same_rows() -> None:
+    """The unblocked attempt counts are not stored, so the file need not hold them (#92)."""
+    reader = csv.DictReader(io.StringIO(team_text()))
+    dropped = {"unblockedShotAttemptsFor", "unblockedShotAttemptsAgainst"}
+    kept = [name for name in reader.fieldnames or () if name not in dropped]
+    assert len(kept) == len(reader.fieldnames or ()) - 2
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=kept, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(reader)
+    assert parse_team_games(out.getvalue()) == parse_team_games(team_text())

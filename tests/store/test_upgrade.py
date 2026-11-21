@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import add_retired_columns, stamp_old_version
+from seeding import add_nhl_id_columns, restore_unblocked_columns, stamp_old_version
 
 from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
@@ -54,6 +54,7 @@ def make_v2_store(path: Path) -> Path:
     connect(path).close()
     conn = sqlite3.connect(path)
     conn.execute("DROP TABLE fit_labels")
+    restore_unblocked_columns(conn)
     stamp_old_version(conn, 2)
     conn.execute(
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
@@ -103,6 +104,7 @@ def make_v3_store(path: Path) -> Path:
     """
     connect(path).close()
     conn = sqlite3.connect(path)
+    restore_unblocked_columns(conn)
     conn.execute(
         "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
         " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
@@ -154,10 +156,9 @@ def test_upgrade_keeps_every_row_and_leaves_attempt_counts_unknown(v1: Path) -> 
     assert after == before
     counts = rows(
         v1,
-        "SELECT shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
-        " attempts_known FROM mp_team_games",
+        "SELECT shot_attempts_for, shot_attempts_against, attempts_known FROM mp_team_games",
     )
-    assert counts == [(None, None, None, None, 0)] * len(V1_MP_ROWS)
+    assert counts == [(None, None, 0)] * len(V1_MP_ROWS)
     assert version_of(v1) == SCHEMA_VERSION
 
 
@@ -403,9 +404,9 @@ def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
     assert "attempts_known" in [row[1] for row in rows(v2, "PRAGMA table_info(mp_team_games)")]
     assert rows(
         v2,
-        "SELECT game_id, team, shot_attempts_for, unblocked_against, attempts_known"
+        "SELECT game_id, team, shot_attempts_for, shot_attempts_against, attempts_known"
         " FROM mp_team_games",
-    ) == [(2002, "BOS", 10, 13, 1)]
+    ) == [(2002, "BOS", 10, 11, 1)]
 
 
 def test_a_version_3_store_keeps_the_flag_it_has_and_derives_the_other(
@@ -665,7 +666,8 @@ def test_a_step_that_cannot_repair_the_table_shape_stops_the_upgrade(tmp_path: P
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
-    add_retired_columns(conn)
+    add_nhl_id_columns(conn)
+    restore_unblocked_columns(conn)
     conn.execute("DROP TABLE fit_labels")
     conn.execute("CREATE TABLE fit_labels (fit_id INTEGER NOT NULL, set_at TEXT NOT NULL)")
     conn.commit()
@@ -732,7 +734,8 @@ def test_a_stamp_ahead_by_one_reruns_only_the_change_it_lost(tmp_path: Path) -> 
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
-    add_retired_columns(conn)
+    add_nhl_id_columns(conn)
+    restore_unblocked_columns(conn)
     conn.execute("DROP TABLE source_reads")
     conn.execute(
         "CREATE TABLE source_reads (source TEXT, url TEXT, fetched_at TEXT, ok INTEGER, error TEXT)"
