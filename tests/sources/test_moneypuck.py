@@ -317,3 +317,8 @@ def test_a_zip_header_that_understates_the_size_is_a_named_error() -> None:
     assert patched != buf.getvalue()
     with pytest.raises(SourceParseError, match="cannot be read"):
         parse_goalie_games(patched)
+
+
+def test_a_csv_header_field_over_the_size_limit_is_a_named_error() -> None:
+    with pytest.raises(SourceParseError, match="not valid CSV"):
+        parse_team_games("x" * 200_000 + ",gameId\n")
