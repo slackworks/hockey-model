@@ -7,11 +7,11 @@ The JSON report and the per-game CSV MUST stay byte-identical for the same store
 
 ## Step 1: the golden check
 
-Build this before any speed change, in its own pull request. The script and the fixture do not exist yet; #287 builds them.
+Build this before any speed change, in its own pull request.
 
-1. `scripts/backtest_golden.py --db PATH --out DIR` runs `hockey-model backtest --games-out` and writes `report.json`, `games.csv`, and their SHA-256 hashes.
-2. A test runs the same backtest on the seeded store (`tests/seeding.py`) and compares the hashes with the values committed in `tests/fixtures/backtest_golden.json`. A change that moves a hash fails the test.
-3. A change that is meant to move a number is a model change. It updates the golden file in a separate commit, and the pull request says why.
+1. `scripts/backtest_golden.py --db PATH --out DIR` runs the backtest and writes `report.json`, `games.csv`, and `hashes.json`. `hashes.json` holds the exact SHA-256 of the two files, which two runs on one machine must match, and a canonical form with every float rounded to nine decimals, which also holds across machines.
+2. `tests/backtest/test_golden.py` runs the same backtest on the seeded store and compares the canonical hashes with the values committed in `tests/fixtures/backtest_golden.json`, for one worker and for two. A change that moves a hash fails the test.
+3. A change that is meant to move a number is a model change. It runs the test with `UPDATE_GOLDEN=1`, updates the golden file in a separate commit, and the pull request says why.
 
 Run the script on the real store (`~/.cache/hockey-model/real.db`) before and after each speed change too, and paste the two hashes in the pull request.
 The seeded store is small, so a real-store check catches an order or rounding change that the seed does not reach.
