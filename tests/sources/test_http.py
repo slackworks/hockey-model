@@ -465,3 +465,18 @@ def test_a_real_trickling_socket_is_cut_off_at_the_deadline() -> None:
 def test_a_source_error_keeps_its_parts() -> None:
     error = SourceError("nhl", NHL_URL, "HTTP 404")
     assert (error.source, error.url, error.reason) == ("nhl", NHL_URL, "HTTP 404")
+
+
+@pytest.mark.parametrize("code", [403, 404, 410])
+def test_the_source_error_keeps_the_status_of_a_refused_request(code: int) -> None:
+    opener = ScriptedOpener([_http_error(code)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.status == code
+
+
+def test_a_source_error_with_no_response_has_no_status() -> None:
+    opener = ScriptedOpener([_Refused("refused", permanent=True)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.status is None

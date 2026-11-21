@@ -13,9 +13,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hockey_model.backtest import eligibility, runner
+from hockey_model.backtest import eligibility, report_notes, runner
 from hockey_model.backtest.game_records import GameRecord, write_game_records
-from hockey_model.backtest.runner import MONEYPUCK_LEAK_NOTE, run_backtest
+from hockey_model.backtest.report_notes import MONEYPUCK_LEAK_NOTE
+from hockey_model.backtest.runner import run_backtest
 from hockey_model.game import MissingInput, MissingKind
 from hockey_model.game_model.features import FEATURES, FeatureRow, GoalieMode
 from hockey_model.game_model.seasons import SeasonPlan
@@ -212,8 +213,10 @@ def test_moneypuck_note_and_credit_when_a_moneypuck_feature_is_tested(feed) -> N
 
 
 def test_no_moneypuck_note_when_only_rest_is_tested(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert MONEYPUCK_LEAK_NOTE not in runner._notes(("rest",), (), success=True)
-    assert MONEYPUCK_LEAK_NOTE in runner._notes(("rest", "xg_form"), (), success=True)
+    assert MONEYPUCK_LEAK_NOTE not in report_notes.joint_test_notes(("rest",), (), success=True)
+    assert MONEYPUCK_LEAK_NOTE in report_notes.joint_test_notes(
+        ("rest", "xg_form"), (), success=True
+    )
 
 
 def test_the_notes_state_how_many_features_were_tested(feed) -> None:
@@ -278,7 +281,7 @@ def test_the_report_has_no_missing_counts_when_nothing_is_missing(feed) -> None:
 
 def test_the_notes_say_the_guess_run_has_no_injury_history(feed) -> None:
     report, _ = run(dataset(), feed)
-    assert runner.INJURY_HISTORY_NOTE in report.notes
+    assert report_notes.INJURY_HISTORY_NOTE in report.notes
 
 
 _RECORDS = st.builds(
@@ -320,13 +323,13 @@ def test_the_game_csv_reads_back_to_the_records(
 
 
 def test_the_notes_say_why_the_two_model_runs_are_equal_without_a_goalie_feature() -> None:
-    notes = runner._notes(("rest", "xg_form"), ("goalie_gsax",), success=True)
-    assert runner.GUESS_EQUALS_ACTUAL_NOTE in notes
+    notes = report_notes.joint_test_notes(("rest", "xg_form"), ("goalie_gsax",), success=True)
+    assert report_notes.GUESS_EQUALS_ACTUAL_NOTE in notes
 
 
 def test_the_notes_leave_out_that_remark_when_a_goalie_feature_is_tested() -> None:
-    notes = runner._notes(("goalie_gsax", "rest"), (), success=True)
-    assert runner.GUESS_EQUALS_ACTUAL_NOTE not in notes
+    notes = report_notes.joint_test_notes(("goalie_gsax", "rest"), (), success=True)
+    assert report_notes.GUESS_EQUALS_ACTUAL_NOTE not in notes
 
 
 def _thin(rows: dict[GoalieMode, list[TrainingRow]], per_season: int):

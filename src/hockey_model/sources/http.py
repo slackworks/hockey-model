@@ -168,7 +168,11 @@ class HttpClient:
                 exc.close()
                 if not _is_retryable_status(exc.code):
                     raise SourceError(
-                        source, url, f"HTTP {exc.code}", permanent=exc.code in PERMANENT_STATUSES
+                        source,
+                        url,
+                        f"HTTP {exc.code}",
+                        permanent=exc.code in PERMANENT_STATUSES,
+                        status=exc.code,
                     ) from exc
                 reason = f"HTTP {exc.code}"
                 delay = _backoff_s(attempt, exc.headers.get("Retry-After"))

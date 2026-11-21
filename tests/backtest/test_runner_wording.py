@@ -15,7 +15,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from test_runner_store import PLAN, seed
 
-from hockey_model.backtest import runner
+from hockey_model.backtest import report_notes, runner
 from hockey_model.backtest.eligibility import SeasonCount
 from hockey_model.game_model.features import FEATURES
 from hockey_model.store.db import connect
@@ -25,29 +25,29 @@ REFRESH = "run `hockey-model refresh --backfill-from 2014-10-01`"
 
 
 def test_the_notes_name_the_tested_count_the_vetoes_and_a_failed_test() -> None:
-    notes = runner._notes(("rest",), ("xg_form", "goalie_gsax"), success=False)
+    notes = report_notes.joint_test_notes(("rest",), ("xg_form", "goalie_gsax"), success=False)
     assert notes[0] == "3 candidate features were tested together as one joint test."
     assert "The guess run vetoed: xg_form, goalie_gsax." in notes
     assert "The joint test failed, so the Elo alone ships." in notes
 
 
 def test_a_successful_joint_test_adds_no_failure_note() -> None:
-    notes = runner._notes(("rest",), (), success=True)
+    notes = report_notes.joint_test_notes(("rest",), (), success=True)
     assert not any("joint test failed" in note for note in notes)
     assert not any(note.startswith("The guess run vetoed") for note in notes)
 
 
 def test_a_candidate_set_other_than_the_production_set_says_it_is_a_test() -> None:
-    assert runner._candidate_notes(("rest",)) == (
+    assert report_notes.candidate_notes(("rest",)) == (
         "This candidate set is a test. Nothing ships from it, and the live model reads only the "
         "production features.",
     )
-    assert runner._candidate_notes(FEATURES) == ()
+    assert report_notes.candidate_notes(FEATURES) == ()
 
 
 def test_an_unfinished_season_is_named_with_its_count() -> None:
     coverage = [SeasonCount(2, 2, 40, 82, 3), SeasonCount(3, 2, 40, 82, 0)]
-    assert runner._eligibility_notes(["too few games"], coverage) == (
+    assert report_notes.eligibility_notes(["too few games"], coverage) == (
         "Not eligible for success: too few games.",
         "Season 2 game type 2 holds 3 stored game(s) that are not final long after their start.",
     )
@@ -167,7 +167,7 @@ def test_a_run_with_no_moneypuck_feature_carries_no_moneypuck_credit(
     report, _ = runner.run_backtest(seeded, PLAN, candidates=("rest",))
     assert report.tested_features == ("rest",)
     assert report.credits == ()
-    assert runner.MONEYPUCK_LEAK_NOTE not in report.notes
+    assert report_notes.MONEYPUCK_LEAK_NOTE not in report.notes
 
 
 def test_a_run_with_a_moneypuck_feature_carries_the_credit_and_the_leak_note(
@@ -175,7 +175,7 @@ def test_a_run_with_a_moneypuck_feature_carries_the_credit_and_the_leak_note(
 ) -> None:
     report, _ = runner.run_backtest(seeded, PLAN, candidates=("xg_form", "rest"))
     assert report.credits == (runner.MONEYPUCK_CREDIT,)
-    assert runner.MONEYPUCK_LEAK_NOTE in report.notes
+    assert report_notes.MONEYPUCK_LEAK_NOTE in report.notes
 
 
 def test_the_report_holds_the_imputation_share_of_each_tested_feature(
@@ -306,3 +306,55 @@ def test_success_holds_exactly_when_the_upper_end_is_below_zero(
         report, _ = runner.run_backtest(shared_seeded, PLAN, candidates=FEATURES)
     assert report.success is (upper < 0.0)
     assert bool(report.live_features) is (upper < 0.0)
+
+
+def _games(*ids: int) -> Any:
+    """Return stand-in rows that carry only a game ID."""
+    return [SimpleNamespace(game=SimpleNamespace(game_id=i)) for i in ids]
+
+
+def test_the_same_games_in_both_runs_pass_the_check() -> None:
+    runner._check_same_games(_games(1, 2, 3), _games(3, 2, 1))
+
+
+@pytest.mark.parametrize(
+    ("actual", "guess", "text"),
+    [
+        ((1, 2, 3), (1, 2), "1 only in the actual run (first [3]), 0 only in the guess run"),
+        ((1, 2), (1, 2, 9), "0 only in the actual run (first []), 1 only in the guess run"),
+        ((1,), (2,), "1 only in the actual run (first [1]), 1 only in the guess run (first [2])"),
+    ],
+)
+def test_a_game_in_only_one_run_raises_and_names_the_game(
+    actual: tuple[int, ...], guess: tuple[int, ...], text: str
+) -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        runner._check_same_games(_games(*actual), _games(*guess))
+    assert text in str(caught.value)
+
+
+def test_scoring_refuses_a_guess_run_that_lacks_a_game(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, "in_cohort", lambda game, plan: True)
+    with pytest.raises(HockeyModelError, match="differ in the scored games"):
+        runner._score_seasons(_games(1, 2), _games(1), ("rest",), PLAN)
+
+
+_IDS = st.lists(st.integers(min_value=1, max_value=8), unique=True, max_size=8)
+
+
+@settings(max_examples=100, deadline=None)
+@given(actual=_IDS, guess=_IDS, order=st.randoms(use_true_random=False))
+def test_the_check_raises_exactly_when_the_game_sets_differ(
+    actual: list[int], guess: list[int], order: Any
+) -> None:
+    shuffled = list(guess)
+    order.shuffle(shuffled)
+    only_actual, only_guess = set(actual) - set(guess), set(guess) - set(actual)
+    if not only_actual and not only_guess:
+        runner._check_same_games(_games(*actual), _games(*shuffled))
+        return
+    with pytest.raises(HockeyModelError) as caught:
+        runner._check_same_games(_games(*actual), _games(*shuffled))
+    text = str(caught.value)
+    assert f"{len(only_actual)} only in the actual run" in text
+    assert f"{len(only_guess)} only in the guess run" in text

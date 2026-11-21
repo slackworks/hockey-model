@@ -124,8 +124,8 @@ def add_starter_read(
 ) -> None:
     """Store one goalie read."""
     conn.execute(
-        "INSERT INTO starter_reads (game_id, team, source, goalie_name, nhl_id, status, fetched_at)"
-        " VALUES (?,?,?,?,NULL,?,?)",
+        "INSERT INTO starter_reads (game_id, team, source, goalie_name, status, fetched_at)"
+        " VALUES (?,?,?,?,?,?)",
         (game_id, team, source, name, status, iso_utc(utc(fetched_at))),
     )
 
@@ -136,8 +136,8 @@ def add_injury(
     """Store one injury read, and the good read of the list that it came from."""
     stamp = utc(fetched_at)
     conn.execute(
-        "INSERT INTO injury_reads (team, player_name, nhl_id, status, return_date, fetched_at)"
-        " VALUES (?,?,NULL,?,NULL,?)",
+        "INSERT INTO injury_reads (team, player_name, status, return_date, fetched_at)"
+        " VALUES (?,?,?,NULL,?)",
         (team, name, status, iso_utc(stamp)),
     )
     record_injury_snapshot(conn, fetched_at)
@@ -146,3 +146,15 @@ def add_injury(
 def record_injury_snapshot(conn: sqlite3.Connection, fetched_at: str) -> None:
     """Record a good read of the injury list at ``fetched_at``, even when the list is empty."""
     record_read(conn, ESPN_INJURIES, "u", utc(fetched_at))
+
+
+def add_retired_columns(conn: sqlite3.Connection) -> None:
+    """Give a fresh store the two columns that the 6->7 step dropped."""
+    for table in ("starter_reads", "injury_reads"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN nhl_id INTEGER")
+
+
+def stamp_old_version(conn: sqlite3.Connection, version: int) -> None:
+    """Make a fresh store look like ``version``, which is below 7."""
+    add_retired_columns(conn)
+    conn.execute("UPDATE schema_version SET version = ?", (version,))

@@ -37,7 +37,6 @@ class StarterReadRow:
 
     source: StarterSource
     goalie_name: str
-    nhl_id: int | None
     status: StarterStatus
     fetched_at: datetime
 
@@ -169,15 +168,13 @@ def starter_reads_before(
 ) -> list[StarterReadRow]:
     """Return the goalie reads for one team of one game that were fetched before ``before``."""
     cursor = conn.execute(
-        "SELECT source, goalie_name, nhl_id, status, fetched_at FROM starter_reads"
+        "SELECT source, goalie_name, status, fetched_at FROM starter_reads"
         " WHERE game_id = ? AND team = ? AND fetched_at < ? ORDER BY fetched_at, rowid",
         (game_id, team, iso_utc(before)),
     )
     return [
-        StarterReadRow(
-            StarterSource(source), name, nhl_id, StarterStatus(status), parse_iso_utc(stamp)
-        )
-        for source, name, nhl_id, status, stamp in cursor
+        StarterReadRow(StarterSource(source), name, StarterStatus(status), parse_iso_utc(stamp))
+        for source, name, status, stamp in cursor
     ]
 
 

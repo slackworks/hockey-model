@@ -14,8 +14,8 @@ def write_injury_reads(
     """Append one injury read for each listed player. The ESPN list has no history."""
     stamp = iso_utc(fetched_at)
     conn.executemany(
-        "INSERT INTO injury_reads (team, player_name, nhl_id, status, return_date, fetched_at)"
-        " VALUES (?,?,NULL,?,?,?)",
+        "INSERT INTO injury_reads (team, player_name, status, return_date, fetched_at)"
+        " VALUES (?,?,?,?,?)",
         [
             (
                 read.team,

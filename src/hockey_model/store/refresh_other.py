@@ -4,8 +4,9 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
 from hockey_model.game_day import game_day_of
-from hockey_model.game_model.seasons import SEASON_START_MONTH, season_start_year
+from hockey_model.game_model.seasons import SEASON_START_MONTH, season_code, season_start_year
 from hockey_model.sources.daily_faceoff import STARTERS_URL, fetch_starters
+from hockey_model.sources.errors import SourceError
 from hockey_model.sources.espn import ESPN_BASE, fetch_injuries, fetch_scoreboard_starters
 from hockey_model.sources.moneypuck import (
     FIRST_SEASON,
@@ -99,6 +100,27 @@ def _note_gaps(run: RefreshRun) -> frozenset[str]:
     return gaps
 
 
+def _unpublished_goalie_file(
+    run: RefreshRun, season: int, current: int, failure: Exception
+) -> str | None:
+    """Return a note when a 404 for the new season's goalie file is expected, else ``None``.
+
+    MoneyPuck publishes the file after the season starts. A 404 before the store holds any final
+    game of that season is no failure, so it adds no error and no known gap (#70).
+    """
+    if season != current or not isinstance(failure, SourceError) or failure.status != 404:
+        return None
+    if run.conn.execute(
+        "SELECT 1 FROM latest_final_games WHERE season = ? AND game_type IN (2, 3) LIMIT 1",
+        (season_code(season),),
+    ).fetchone():
+        return None
+    return (
+        f"{MONEYPUCK}: the goalie file of season {season} is not published yet, and the store "
+        "holds no final game of that season; the next refresh reads it again"
+    )
+
+
 def moneypuck(run: RefreshRun) -> None:
     """Read the team file and each goalie file that is missing or, for the team file and the
     current season, older than a week. A finished season is read once."""
@@ -134,7 +156,12 @@ def moneypuck(run: RefreshRun) -> None:
             rows = fetch_goalie_games(run.client, season)
             return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
 
-        ok = run.attempt(MONEYPUCK, url, unit)
+        ok = run.attempt(
+            MONEYPUCK,
+            url,
+            unit,
+            lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
+        )
         tried += ok
         failures = 0 if ok else failures + 1
     _note_unmatched(run)

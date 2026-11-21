@@ -46,8 +46,10 @@
       "enum": [
         "goalie_unconfirmed",
         "goalie_unknown",
+        "goalie_conflict",
         "xg_form",
         "attempt_form",
+        "form_games_left_out",
         "goalie_form",
         "stale_source",
         "late_run",

@@ -12,9 +12,9 @@ from typing import cast
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import add_game, add_team_form
+from seeding import add_game, add_retired_columns, add_team_form, stamp_old_version
 
-from hockey_model.store import sql_text, upgrade
+from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.store.shape import Requirement, earned_version
@@ -55,7 +55,7 @@ def make_v2_store(path: Path) -> Path:
     connect(path).close()
     conn = sqlite3.connect(path)
     conn.execute("DROP TABLE fit_labels")
-    conn.execute("UPDATE schema_version SET version = 2")
+    stamp_old_version(conn, 2)
     conn.execute(
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
         " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
@@ -86,7 +86,7 @@ def make_v2_store_preflag(path: Path) -> Path:
         "INSERT INTO mp_team_games VALUES (2002, 'BOS', '2026-01-05', 3.1, 0.9,"
         " 10, 11, 12, 13, '2026-01-06T00:00:00Z')"
     )
-    conn.execute("UPDATE schema_version SET version = 2")
+    stamp_old_version(conn, 2)
     conn.execute(
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
         " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
@@ -115,7 +115,7 @@ def make_v3_store(path: Path) -> Path:
         " fetched_at, attempts_known) VALUES (3002, 'NYR', '2026-01-11', 1.0, 1.0,"
         " '2026-01-12T00:00:00Z', 0)"
     )
-    conn.execute("UPDATE schema_version SET version = 3")
+    stamp_old_version(conn, 3)
     conn.commit()
     conn.close()
     return path
@@ -550,7 +550,7 @@ def test_a_table_name_that_is_not_an_identifier_is_refused() -> None:
     """The DDL builder interpolates its argument, so a bad name must stop before any SQL."""
     for bad in ("mp; DROP TABLE games", "a b", "", "1t", 'x"'):
         with pytest.raises(StoreError, match="is not a table name"):
-            upgrade._mp_team_games_ddl(bad)
+            migrations.mp_team_games_ddl(bad)
 
 
 def test_a_damaged_ledger_is_named_instead_of_read_as_no_backup(v1: Path) -> None:
@@ -729,6 +729,7 @@ def test_a_step_that_cannot_repair_the_table_shape_stops_the_upgrade(tmp_path: P
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
+    add_retired_columns(conn)
     conn.execute("DROP TABLE fit_labels")
     conn.execute("CREATE TABLE fit_labels (fit_id INTEGER NOT NULL, set_at TEXT NOT NULL)")
     conn.commit()
@@ -795,6 +796,7 @@ def test_a_stamp_ahead_by_one_reruns_only_the_change_it_lost(tmp_path: Path) -> 
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
+    add_retired_columns(conn)
     conn.execute("DROP TABLE source_reads")
     conn.execute(
         "CREATE TABLE source_reads (source TEXT, url TEXT, fetched_at TEXT, ok INTEGER, error TEXT)"

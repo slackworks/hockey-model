@@ -9,12 +9,30 @@ from typing import NamedTuple
 
 
 class Requirement(NamedTuple):
-    """One column that a schema version added, and whether it must refuse NULL."""
+    """One column that a schema version added or removed, and whether it must refuse NULL.
+
+    ``present`` is False for a column that the version dropped. Such a store must not hold it.
+    """
 
     version: int
     table: str
     column: str
     not_null: bool
+    present: bool = True
+
+    @property
+    def shortfall(self) -> str:
+        """Return a phrase that states what the table lacks, or what it still holds."""
+        if self.present:
+            return f"{self.table} still lacks {self.column}"
+        return f"{self.table} still holds {self.column}"
+
+    @property
+    def need(self) -> str:
+        """Return the shape that the version needs of the table."""
+        if self.present:
+            return f"{self.table}.{self.column}"
+        return f"{self.table} without {self.column}"
 
 
 # The column that each version added, in version order. A store that lacks one of these does
@@ -27,6 +45,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(5, "source_reads", "fetched_at", True),
     Requirement(5, "model_fits", "created_at", True),
     Requirement(6, "source_reads", "permanent", False),
+    Requirement(7, "starter_reads", "nhl_id", False, present=False),
+    Requirement(7, "injury_reads", "nhl_id", False, present=False),
 )
 # The shape before the first requirement, which is the first schema this package wrote. A store
 # with no schema_version row is refused before this module runs.
@@ -41,6 +61,9 @@ def holds(conn: sqlite3.Connection, requirement: Requirement) -> bool:
     """
     pragma = "PRAGMA table_info(" + requirement.table + ")"
     found = {row[1]: row[3] for row in conn.execute(pragma)}
+    if not requirement.present:
+        # A table that does not exist has no column, and it does not hold the shape either.
+        return bool(found) and requirement.column not in found
     if requirement.column not in found:
         return False
     return not requirement.not_null or bool(found[requirement.column])

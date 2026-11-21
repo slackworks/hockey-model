@@ -84,6 +84,9 @@ def _event_reads(event: Mapping[str, object]) -> list[StarterRead]:
     for raw in as_list(SOURCE, field(SOURCE, competition, "competitors", where), where):
         competitor = as_mapping(SOURCE, raw, f"{where} competitor")
         team = _team_code(competitor, where)
+        # Every saved competitor has the key, and no saved page holds a game with no announced
+        # goalie. The key is therefore not shown to be required, so a missing key reads as no
+        # goalie (#70). A key that is present must be a list.
         for item in as_list(SOURCE, competitor.get("probables", []), f"{where} {team} probables"):
             probable = as_mapping(SOURCE, item, f"{where} {team} probable")
             if field(SOURCE, probable, "name", f"{where} {team} probable") != PROBABLE_GOALIE:

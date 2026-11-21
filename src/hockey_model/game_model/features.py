@@ -38,6 +38,8 @@ FORM_WINDOW = 10
 GOALIE_WINDOW = 20
 REST_CAP_DAYS = 4.0
 # The value of a form feature when either team has no form: no difference between the teams.
+# The rest differential follows the same rule: a team with no earlier game in the store gives
+# no difference, as a goalie with no rate does (#66, #144).
 NEUTRAL_FORM = 0.0
 _DAY = timedelta(days=1)
 
@@ -77,9 +79,14 @@ def _logit(probability: float) -> float:
     return math.log(probability / (1.0 - probability))
 
 
-def _share(rows: Sequence[tuple[float, float]]) -> float | None:
+def _share(rows: Sequence[tuple[float, float]]) -> tuple[float | None, int]:
+    """Return the mean share of the games with a total above zero, and the count left out.
+
+    A game with a zero total has no share. A team whose every game has a zero total gets no share.
+    """
     shares = [made / (made + allowed) for made, allowed in rows if made + allowed > 0]
-    return sum(shares) / len(shares) if shares else None
+    mean = sum(shares) / len(shares) if shares else None
+    return mean, len(rows) - len(shares)
 
 
 def _share_form(
@@ -88,20 +95,33 @@ def _share_form(
     cutoff: datetime,
     read: TeamFormReader,
     kind: MissingKind,
-) -> tuple[float, list[MissingInput]]:
-    """Return home minus away share of ``read``'s made-for over its total, and the gaps."""
+) -> tuple[float, list[MissingInput], list[MissingInput]]:
+    """Return home minus away share of ``read``'s made-for over its total.
+
+    The second list holds the teams with no share, which make the difference neutral. The third
+    list holds the teams that have a share although a game with a zero total was left out.
+    """
     shares: dict[str, float | None] = {}
+    gaps: list[MissingInput] = []
+    left_out: list[MissingInput] = []
     for team in (game.home, game.away):
-        shares[team] = _share(read(conn, team, cutoff, FORM_WINDOW))
-    missing = [
-        MissingInput(kind, team, "no MoneyPuck games before this game")
-        for team, share in shares.items()
-        if share is None
-    ]
+        rows = read(conn, team, cutoff, FORM_WINDOW)
+        share, skipped = _share(rows)
+        shares[team] = share
+        if share is None:
+            reason = (
+                f"every one of {skipped} MoneyPuck games before this game has a zero total"
+                if skipped
+                else "no MoneyPuck games before this game"
+            )
+            gaps.append(MissingInput(kind, team, reason))
+        elif skipped:
+            note = f"{skipped} of {len(rows)} MoneyPuck games have a zero total and are left out"
+            left_out.append(MissingInput(MissingKind.FORM_GAMES_LEFT_OUT, team, note))
     home, away = shares[game.home], shares[game.away]
     if home is None or away is None:
-        return NEUTRAL_FORM, missing
-    return home - away, missing
+        return NEUTRAL_FORM, gaps, left_out
+    return home - away, gaps, left_out
 
 
 def _starter(
@@ -184,16 +204,23 @@ def _days_rested(
 def _rest(
     conn: sqlite3.Connection, game: Game, cutoff: datetime
 ) -> tuple[float, list[MissingInput]]:
-    """Return home minus away rest. A team with no earlier game counts as fully rested."""
-    days: dict[str, float] = {}
+    """Return home minus away rest. A team with no earlier game makes the difference neutral.
+
+    The store has no information about the rest of that team, so the known side does not pass
+    through as a difference against a guessed rest (#144).
+    """
+    days: dict[str, float | None] = {}
     missing: list[MissingInput] = []
     for team in (game.home, game.away):
         found = _days_rested(conn, team, game.start, cutoff)
         if found is None:
-            note = f"no earlier game in the store; {REST_CAP_DAYS:g} days of rest is used"
+            note = "no earlier game in the store; the rest difference is neutral"
             missing.append(MissingInput(MissingKind.REST_UNKNOWN, team, note))
-        days[team] = REST_CAP_DAYS if found is None else found
-    return days[game.home] - days[game.away], missing
+        days[team] = found
+    home, away = days[game.home], days[game.away]
+    if home is None or away is None:
+        return NEUTRAL_FORM, missing
+    return home - away, missing
 
 
 def _degraded(name: str, kind: MissingKind, gaps: Sequence[MissingInput]) -> DegradedInput:
@@ -243,18 +270,23 @@ def build_features(
         goalie_used = False
     rest, rest_missing = _rest(conn, game, cutoff)
     # Two teams, so fewer than two gaps means the form was read for at least one team.
-    form_used = any(len(gaps) < 2 for _, gaps in forms.values())  # noqa: PLR2004
-    values = {name: value for name, (value, _) in forms.items()}
+    form_used = any(len(gaps) < 2 for _, gaps, _ in forms.values())  # noqa: PLR2004
+    values = {name: value for name, (value, _, _) in forms.items()}
     values.update({"goalie_gsax": gsax, "rest": rest})
-    missing = [m for _, gaps in forms.values() for m in gaps]
+    missing = [m for _, gaps, left_out in forms.values() for m in (*gaps, *left_out)]
     imputed = tuple(
-        _degraded(name, _FORM_READERS[name][1], gaps) for name, (_, gaps) in forms.items() if gaps
+        _degraded(name, _FORM_READERS[name][1], gaps)
+        for name, (_, gaps, _) in forms.items()
+        if gaps
     )
     # A goalie or a rest value that was not measured is set to a stand-in for that team.
     if GOALIE_FEATURE in names:
         imputed += _degraded_if(GOALIE_FEATURE, MissingKind.GOALIE_FORM, goalie_missing)
     if "rest" in names:
         imputed += _degraded_if("rest", MissingKind.REST_UNKNOWN, rest_missing)
+    else:
+        # A candidate set without rest does not report the gaps of that feature.
+        rest_missing = []
     return FeatureRow(
         game_id=game.game_id,
         elo_logit=_logit(elo.home_win_chance(game.home, game.away)),

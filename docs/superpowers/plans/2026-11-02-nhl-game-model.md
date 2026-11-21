@@ -1,5 +1,9 @@
 # NHL Game Win Model Implementation Plan
 
+> **Snapshot:** This plan records the design of 2026-11-02, and the code has moved on.
+> The current tables are in `src/hockey_model/store/schema.sql`.
+> Schema version 7 dropped `starter_reads.nhl_id` and `injury_reads.nhl_id`, and `StarterReadRow` has no `nhl_id` (#73).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task, inline in the current session.
 > The owner's rules override superpowers:subagent-driven-development for this repo.
 > Execute through `dev-sprint` and `nbl-dev:ship-issue` for issue #7.

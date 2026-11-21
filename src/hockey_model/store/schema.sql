@@ -100,7 +100,6 @@ CREATE TABLE starter_reads (
     team TEXT,
     source TEXT,
     goalie_name TEXT,
-    nhl_id INTEGER,
     status TEXT,
     fetched_at TEXT NOT NULL
 );
@@ -108,7 +107,6 @@ CREATE TABLE starter_reads (
 CREATE TABLE injury_reads (
     team TEXT,
     player_name TEXT,
-    nhl_id INTEGER,
     status TEXT,
     return_date TEXT,
     fetched_at TEXT NOT NULL

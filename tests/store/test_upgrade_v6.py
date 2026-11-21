@@ -29,6 +29,9 @@ def v5(tmp_path: Path) -> Path:
         READS,
     )
     conn.execute("ALTER TABLE source_reads DROP COLUMN permanent")
+    # Version 6 still held these two columns, which the 6->7 step drops.
+    conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
+    conn.execute("ALTER TABLE injury_reads ADD COLUMN nhl_id INTEGER")
     conn.execute("UPDATE schema_version SET version = 5")
     conn.commit()
     conn.close()
@@ -51,7 +54,7 @@ def test_a_store_without_the_column_earns_version_5(v5: Path) -> None:
 def test_the_step_adds_the_column_and_keeps_every_row(v5: Path) -> None:
     report = upgrade_store(v5)
     assert (report.from_version, report.to_version, report.changed) == (5, SCHEMA_VERSION, True)
-    assert version_of(v5) == SCHEMA_VERSION == 6
+    assert version_of(v5) == SCHEMA_VERSION
     assert _columns(v5)[-1] == "permanent"
     assert rows(v5, f"SELECT {_COLUMNS} FROM source_reads ORDER BY rowid") == READS
     # An old row has no stored cause, so the reader counts it as transient.
