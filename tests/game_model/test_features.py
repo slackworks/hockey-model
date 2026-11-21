@@ -413,3 +413,14 @@ def test_a_measured_zero_share_is_valid_and_has_no_note(store: sqlite3.Connectio
     row = features(store)
     assert row.values["xg_form"] == pytest.approx(0.0 - 0.25)
     assert [m for m in row.missing if m.kind is MissingKind.XG_FORM] == []
+
+
+def test_a_set_without_rest_reports_no_rest_gap(store: sqlite3.Connection) -> None:
+    row = features(store, names=("xg_form",))
+    assert MissingKind.REST_UNKNOWN not in kinds(row)
+    assert "rest" not in [d.feature for d in row.imputed]
+
+
+def test_a_set_with_rest_reports_the_rest_gap_of_each_new_team(store: sqlite3.Connection) -> None:
+    row = features(store, names=("rest",))
+    assert kinds(row).count(MissingKind.REST_UNKNOWN) == 2

@@ -284,6 +284,9 @@ def build_features(
         imputed += _degraded_if(GOALIE_FEATURE, MissingKind.GOALIE_FORM, goalie_missing)
     if "rest" in names:
         imputed += _degraded_if("rest", MissingKind.REST_UNKNOWN, rest_missing)
+    else:
+        # A candidate set without rest does not report the gaps of that feature.
+        rest_missing = []
     return FeatureRow(
         game_id=game.game_id,
         elo_logit=_logit(elo.home_win_chance(game.home, game.away)),
