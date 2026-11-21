@@ -20,7 +20,7 @@ def _percent(value: float) -> str:
 
 
 def _range_text(game: Mapping[str, Any], side: str, features: list[str] | None) -> str:
-    interval = game["win_interval"]
+    interval = game.get("win_interval")
     if interval is not None:
         return f"({_percent(interval[f'{side}_low'])}–{_percent(interval[f'{side}_high'])}%)"
     if features == []:

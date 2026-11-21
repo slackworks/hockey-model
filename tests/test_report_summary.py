@@ -119,3 +119,11 @@ def test_the_command_refuses_a_report_that_fails_the_schema(
 def test_a_malformed_report_raises_with_the_fix() -> None:
     with pytest.raises(HockeyModelError, match="report-summary"):
         release_summary({"games": [{"home": "MTL"}]})
+
+
+def test_a_game_without_the_optional_win_interval_key_says_there_is_no_interval() -> None:
+    """The schema does not require the key, so a report from before the range has none."""
+    game = report_game()
+    del game["win_interval"]
+    lines = release_summary(_report(game, features=["xg_form"]))
+    assert lines[1] == "TOR at MTL: TOR 58% (no interval: run `hockey-model fit` again)"
