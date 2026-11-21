@@ -2,6 +2,7 @@
 
 import errno
 import sqlite3
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -50,6 +51,11 @@ def connect(path: Path) -> sqlite3.Connection:
     except StoreError, OSError:
         conn.close()
         raise
+
+
+def read_only_uri(path: Path) -> str:
+    """Return the SQLite URI that opens ``path`` for reading only and never creates the file."""
+    return f"file:{urllib.parse.quote(str(path))}?mode=ro"
 
 
 def _open_failure_fix(path: Path, exc: sqlite3.Error) -> str:

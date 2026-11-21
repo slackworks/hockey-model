@@ -78,6 +78,17 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_workers(parser: argparse.ArgumentParser) -> None:
+    """Add the worker count of a backtest run."""
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="build the feature rows in up to N processes; the output does not change",
+    )
+
+
 def _add_backtest(parser: argparse.ArgumentParser) -> None:
     """Add the backtest options that pick the candidate set and the game records."""
     parser.add_argument(
@@ -89,13 +100,7 @@ def _add_backtest(parser: argparse.ArgumentParser) -> None:
         default="xg",
         help="xg: the production candidates; attempt: xg_form replaced by attempt_form (#77)",
     )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        metavar="N",
-        help="run the independent fits and builds in up to N processes; the output does not change",
-    )
+    _add_workers(parser)
 
 
 def _add_daily(parser: argparse.ArgumentParser) -> None:
@@ -123,6 +128,7 @@ def _add_experiments(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="write one CSV row per predicted game, in addition to the record's result CSV",
     )
+    _add_workers(run)
 
 
 def _add_report_due(parser: argparse.ArgumentParser) -> None:

@@ -331,7 +331,7 @@ def _experiments(args: argparse.Namespace) -> tuple[object, int]:
         try:
             from hockey_model.experiments.check import run_experiment
 
-            result, _ = run_experiment(args.record_id, conn, args.games_out)
+            result, _ = run_experiment(args.record_id, conn, args.games_out, workers=args.workers)
             return result, 0
         finally:
             conn.close()

@@ -1,6 +1,7 @@
 """The backtest with worker processes gives the same bytes as the serial backtest."""
 
 import json
+import math
 import random
 import sqlite3
 from dataclasses import asdict
@@ -81,19 +82,62 @@ def _scored(game_id: int, season: int, minute: int) -> runner._Scored:
     return runner._Scored(row, {})
 
 
-@given(st.randoms(use_true_random=False))
+_KEYS = st.lists(st.tuples(st.integers(1, 4), st.integers(0, 5)), min_size=0, max_size=30)
+
+
+@given(_KEYS, st.randoms(use_true_random=False))
 def test_the_merge_order_does_not_depend_on_the_order_the_units_finished(
-    shuffler: random.Random,
+    keys: list[tuple[int, int]], shuffler: random.Random
 ) -> None:
-    games = [_scored(i, 1 + i // 5, i * 3 % 7) for i in range(20)]
+    """Games share seasons and starts, so ties exist. The game ID is unique and breaks them."""
+    games = [_scored(game_id, season, minute) for game_id, (season, minute) in enumerate(keys)]
     expected = merge_scored(games)
     shuffled = list(games)
     shuffler.shuffle(shuffled)
     assert merge_scored(shuffled) == expected
-    keys = [(g.row.game.season, g.row.game.start, g.row.game.game_id) for g in expected]
-    assert keys == sorted(keys)
+    assert merge_scored(expected) == expected
+    order = [(g.row.game.season, g.row.game.start, g.row.game.game_id) for g in expected]
+    assert order == sorted(order)
 
 
 def test_a_tie_on_season_and_start_is_broken_by_the_game_id() -> None:
     first, second = _scored(5, 1, 0), _scored(4, 1, 0)
     assert [g.row.game.game_id for g in merge_scored([first, second])] == [4, 5]
+
+
+_PROBS = st.floats(min_value=0.01, max_value=0.99, allow_nan=False)
+
+
+@st.composite
+def _run_inputs(draw: st.DrawFn) -> tuple[list[float], list[bool], list[float]]:
+    size = draw(st.integers(1, 12))
+    probs = draw(st.lists(_PROBS, min_size=size, max_size=size))
+    wins = draw(st.lists(st.booleans(), min_size=size, max_size=size))
+    elo = draw(st.lists(st.floats(0.0, 3.0, allow_nan=False), min_size=size, max_size=size))
+    return probs, wins, elo
+
+
+@given(_run_inputs())
+def test_the_elo_run_has_no_interval_and_no_difference(
+    inputs: tuple[list[float], list[bool], list[float]],
+) -> None:
+    probs, wins, elo_losses = inputs
+    scored = runner._scored_run(runner.ELO, probs, wins, elo_losses, 0.05)
+    assert scored.diff_vs_elo_ci is None
+    assert scored.mean_diff_vs_elo is None
+    assert scored.games == len(probs)
+
+
+@given(_run_inputs())
+def test_a_model_run_reports_the_mean_difference_from_the_elo(
+    inputs: tuple[list[float], list[bool], list[float]],
+) -> None:
+    probs, wins, elo_losses = inputs
+    scored = runner._scored_run(runner.MODEL_ACTUAL, probs, wins, elo_losses, 0.05)
+    # Too few games for blocks leave the interval unavailable, and the mean difference stays.
+    expected = sum(
+        -math.log(p if won else 1.0 - p) - e
+        for p, won, e in zip(probs, wins, elo_losses, strict=True)
+    ) / len(probs)
+    assert scored.mean_diff_vs_elo == pytest.approx(expected)
+    assert scored.games == len(probs)

@@ -134,6 +134,7 @@ def run_experiment(
     conn: sqlite3.Connection,
     games_out: Path | None = None,
     repo_root: Path | None = None,
+    workers: int = 1,
 ) -> tuple[RunPayload, list[GameExport]]:
     """Run one backtest for one experiment record.
 
@@ -160,7 +161,9 @@ def run_experiment(
     else:
         plan = exploration_plan()
 
-    report, game_records = run_backtest(conn, plan, candidates=record.candidate_features)
+    report, game_records = run_backtest(
+        conn, plan, candidates=record.candidate_features, workers=workers
+    )
     # The checks come before any write, so a refused run leaves no file behind.
     if record.cohort == CONFIRMATION:
         require_scored_cohort(record, _require_interval(record, report).games, cohort_games)

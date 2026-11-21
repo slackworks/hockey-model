@@ -7,7 +7,7 @@ The JSON report and the per-game CSV MUST stay byte-identical for the same store
 
 ## Step 1: the golden check
 
-Build this before any speed change, in its own pull request.
+Build this before any speed change, in its own pull request. The script and the fixture do not exist yet; #287 builds them.
 
 1. `scripts/backtest_golden.py --db PATH --out DIR` runs `hockey-model backtest --games-out` and writes `report.json`, `games.csv`, and their SHA-256 hashes.
 2. A test runs the same backtest on the seeded store (`tests/seeding.py`) and compares the hashes with the values committed in `tests/fixtures/backtest_golden.json`. A change that moves a hash fails the test.
@@ -65,8 +65,12 @@ That replacement is a model change and needs its own issue.
 
 The backtest is a set of named units.
 Each unit logs `backtest: unit NAME took Ns` on stderr, and the run ends with `backtest: total Ns`.
-`backtest --workers N` runs the two feature builds in up to N worker processes.
+`backtest --workers N` and `experiments run --workers N` run the two feature builds in up to N worker processes.
 Each worker opens its own read-only connection to the store file, so no worker writes.
+Each worker reads the committed rows of its own snapshot, so no writer may change the store during a backtest.
+`daily-prepare.sh` runs the backtest after the refresh, inside the one concurrency group that serializes writers, and `run_backtest` refuses `workers` above 1 for a connection with uncommitted changes.
+A failed unit stops the running workers at once, so a bad row in one build does not wait for the other build to finish.
+An error of this package keeps its type and gets the unit name in its message.
 The merge of the results has one fixed order: season, then game start, then game ID (`merge_scored`), because the block bootstrap depends on the order of its input.
 
 ### Measured units
