@@ -42,11 +42,17 @@ A report with another version fails the check, so a raise needs a new schema fil
 ## The index
 
 An entry holds `file`, `generated_at`, `code_sha`, `fit_sha256`, `inputs_sha256`, and `schema_version`.
+`report_schema.version_file` names a build from its `generated_at` time, and it is the one place that does so.
+The publish script reads the name from the output of `report-index`.
 The script downloads the index that is already on the release, and adds the new build.
+The script reads the release first, builds the index, and checks both version names before it uploads any file, so a name collision leaves no half-published build.
+The `publish` job runs one at a time for each day (`hockey-model-publish-DAY`), because the index is a read-modify-write of one release asset.
+A publish that waits behind two others is replaced, and the next hourly run builds and publishes it again.
+Only the script step holds the release token, and `uv` does not sync there.
 A build that is listed under the same file name is replaced by its new entry, so a retry of one build is safe.
 No other entry is dropped.
 A release that was published before the index existed gets an index with the first build that follows.
-Its older builds have no entry, because their files carry no `inputs_sha256`.
+Its older builds have no entry, because their files have no `schema_version` and fail the report schema.
 
 A consumer picks the newest build before a cutoff with the `generated_at` field, and does not parse file names.
 

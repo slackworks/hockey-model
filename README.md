@@ -260,7 +260,7 @@ The index of one day:
 }
 ```
 
-`report-index --report PATH --name FILE [--existing PATH] --out PATH` checks a report against its schema and writes the index with that build added.
+`report-index --report PATH --date YYYY-MM-DD [--existing PATH] --out PATH` checks a report against its schema and writes the index with that build added. It refuses a report of another day. It prints `out`, `builds` (the count), and `file` (the name of the added build, `report-DATE-HHMMSSZ.json`, from `generated_at`).
 A day published before the index existed has no entry for its older builds.
 
 ### Data sources
