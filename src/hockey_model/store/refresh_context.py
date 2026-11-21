@@ -72,11 +72,21 @@ class RefreshRun:
         """Return the URLs of ``source`` that this refresh skips as known gaps."""
         return frozenset() if self.retry_skipped else abandoned_urls(self.conn, source)
 
-    def attempt(self, source: str, url: str, unit: Callable[[datetime], int]) -> bool:
+    def attempt(
+        self,
+        source: str,
+        url: str,
+        unit: Callable[[datetime], int],
+        expected_absence: Callable[[Exception], str | None] | None = None,
+    ) -> bool:
         """Run one unit of work in one transaction. Return False when it failed.
 
         A failed unit writes nothing, adds its error to the report, and leaves a
         ``source_reads`` row with ``ok = 0``. The unit returns the rows it wrote.
+
+        ``expected_absence`` takes the failure and returns a note when the failure is a resource
+        that does not exist yet. The note replaces the error, and no failed read is stored, so the
+        absence never becomes a known gap. The next refresh tries the unit again.
         """
         stamp = self.stamp()
         try:
@@ -84,6 +94,10 @@ class RefreshRun:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
         except SOURCE_FAILURES as exc:
+            absent = expected_absence(exc) if expected_absence else None
+            if absent is not None:
+                self.notes.append(absent)
+                return False
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
             self.errors.append(exc)
