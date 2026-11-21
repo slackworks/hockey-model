@@ -152,9 +152,9 @@ else
     args+=(--execution "$EXECUTION")
   fi
   for reason in "${REASONS[@]}"; do args+=("--reason" "$reason"); done
-  # The merge job writes the list of timed-out mutants beside the stats. An older run has none.
-  timeouts="$(dirname "$STATS")/mutmut-timeouts.json"
-  if [[ -f "$timeouts" ]]; then args+=(--timeouts "$timeouts"); fi
+  # The merge job writes the list of timed-out mutants beside the stats. The report names a
+  # missing list when the stats count a timed-out mutant.
+  args+=(--timeouts "$(dirname "$STATS")/mutmut-timeouts.json")
   status="$(uv run python3 "$HELPER" "${args[@]}")"
 fi
 

@@ -18,6 +18,8 @@ Subcommands:
 
 - ``status``: read the stats and the job results, print one status word. With ``--out``,
     also write the issue body to that file.
+    With ``--timeouts FILE``, the body also lists the timed-out mutants that
+    ``scripts/mutation_timeouts.py`` wrote, with the CPU limit of each (#274).
 - ``find --cap N``: read ``gh issue list --json number,body,author`` JSON on stdin. Print the
     number of the open report, or nothing when none exists. Only a bot-authored issue counts,
     so a user cannot hide a report by copying the marker. Raise when the list reaches N.
@@ -32,6 +34,8 @@ Usage: uv run python3 scripts/mutation_report.py status --stats mutants/mutmut-c
 
 import argparse
 import json
+import math
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -200,8 +204,30 @@ def build_body(
     return "\n".join(lines) + "\n"
 
 
+# A mutant name is a dotted path. mutmut writes a method name with a class mark that is a letter
+# for \w. The name goes into an issue body, so nothing else may pass: not a backtick, not a
+# line break, not an @.
+_MUTANT_NAME = re.compile(r"[\w.]{1,300}")
+
+
+def _timeout_entry(item: object) -> tuple[str, float, int]:
+    """Return one validated entry of the list. Raise ValueError that names the bad part."""
+    if not isinstance(item, dict):
+        raise ValueError("an entry is not an object")
+    name, seconds, limit = item.get("mutant"), item.get("estimated_s"), item.get("limit_s")
+    if not isinstance(name, str) or not _MUTANT_NAME.fullmatch(name):
+        raise ValueError(f"the mutant name {name!r} is not a dotted name")
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        raise ValueError(f"the estimate of {name} is not a number")
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(f"the estimate of {name} is not a finite number of 0 or more")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError(f"the limit of {name} is not a whole number of 0 or more")
+    return name, float(seconds), limit
+
+
 def _read_timeouts(path: Path) -> list[tuple[str, float, int]]:
-    """Read the list of timed-out mutants. Raise ValueError that names the bad part."""
+    """Read the list of timed-out mutants. Raise ValueError that names the file and the part."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -209,17 +235,10 @@ def _read_timeouts(path: Path) -> list[tuple[str, float, int]]:
     items = data.get("timeouts") if isinstance(data, dict) else None
     if not isinstance(items, list):
         raise ValueError(f"{path}: the file has no timeouts list")
-    found: list[tuple[str, float, int]] = []
-    for item in items:
-        name = item.get("mutant") if isinstance(item, dict) else None
-        estimated = item.get("estimated_s") if isinstance(item, dict) else None
-        limit = item.get("limit_s") if isinstance(item, dict) else None
-        if not isinstance(name, str) or isinstance(estimated, bool) or isinstance(limit, bool):
-            raise ValueError(f"{path}: a timeout entry needs mutant, estimated_s, and limit_s")
-        if not isinstance(estimated, int | float) or not isinstance(limit, int):
-            raise ValueError(f"{path}: a timeout entry needs mutant, estimated_s, and limit_s")
-        found.append((name, float(estimated), limit))
-    return found
+    try:
+        return [_timeout_entry(item) for item in items]
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
 
 
 def timeouts_section(path: Path) -> str:
@@ -352,7 +371,10 @@ def _status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             args.run_url,
             causes(stats, status, given, given_results or {k: "success" for k in RESULT_KEYS}),
         )
-        if args.timeouts is not None:
+        # A run that counts timed-out mutants and has no list says so, so a missing file is not
+        # taken for a run without a timeout.
+        timed_out = stats is not None and stats.counts["timeout"] > 0
+        if args.timeouts is not None and (args.timeouts.exists() or timed_out):
             body += timeouts_section(args.timeouts)
         args.out.write_text(body, encoding="utf-8")
     print(status)
