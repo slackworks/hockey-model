@@ -114,6 +114,21 @@ The games that have not started still need the report, so a late first report is
 A late report predicts the games that are finished as known at their puck drop, so it is full.
 A separate scheduled check alerts when a game day has no release, or when its only report has every row made after the start (#112).
 
+## Live feeds that stay down
+
+A refresh reads a live feed on every run and records no error when the feed is already a known gap (#276).
+So a feed that stays down does not fail the prepare, and the report publishes with the feed in `missing`.
+The same scheduled check turns a gap that is older than `LIVE_FEED_MAX_AGE` into a red job (#278).
+`hockey-model store gaps --live` lists each gap of the three live feeds as JSON, with the time of its first failure, its age, and `over_limit`.
+`scripts/check-live-feeds.sh` prints one `::error::` line for each gap that is over the limit, and the line names the source, the URL, and the age.
+A gap of a dated source does not raise this alert, because a newer score day or MoneyPuck file covers it.
+A good read clears the gap with nobody involved, so the alert needs no operator step except a check of the host.
+
+A feed that returns a permanent HTTP status, such as 403, becomes a gap on the second failed read, with no wait for `ABANDON_MIN_SPAN_DAYS` (#279).
+The prepare of that day then skips the feed at once, so the slate is not lost.
+To recover, check why the host refuses the runner.
+The next good read clears the gap by itself.
+
 ## Actions cost
 
 The repository is public, and GitHub-hosted runners on public repositories have no minute charge.

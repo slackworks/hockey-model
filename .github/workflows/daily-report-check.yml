@@ -2,7 +2,9 @@
 #
 # The schedule runs after the last trigger of the previous Eastern game day, so every trigger of
 # that day has run. The check job fails when the day has games and no report, or when every game
-# row was made after its start. See scripts/check-daily-report.sh.
+# row was made after its start. See scripts/check-daily-report.sh. The job also fails when a
+# live feed has stayed a known gap for longer than LIVE_FEED_MAX_AGE. See
+# scripts/check-live-feeds.sh.
 name: daily-report-check
 
 on:
@@ -38,3 +40,26 @@ jobs:
             day="$(TZ=America/New_York date -d yesterday +%F)"
           fi
           bash scripts/check-daily-report.sh --date "$day"
+      # The live feed check reads a copy of the store that the prepare run saved. It changes only
+      # this copy, which no later run restores, so it needs no concurrency group. It runs when the
+      # game day check fails, so each alert shows in one run.
+      - id: restore
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/hockey-model
+          key: hockey-model-store-${{ github.run_id }}
+          restore-keys: |
+            hockey-model-store-
+      - name: Check the live feeds
+        if: ${{ !cancelled() && steps.restore.outputs.cache-matched-key != '' }}
+        env:
+          HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
+        run: |
+          uv run hockey-model store upgrade
+          bash scripts/check-live-feeds.sh
+      - name: Name a missing store cache
+        if: ${{ !cancelled() && steps.restore.outputs.cache-matched-key == '' }}
+        run: |
+          echo "::error::No store cache found for this branch, so the live feeds were not checked. Run daily-prepare on main first." >&2
+          exit 1

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The live feeds that are known gaps",
+  "description": "The output of `hockey-model store gaps --live`. Each gap is a live feed URL whose reads failed in a row. over_limit is true when the gap is older than limit_hours.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["limit_hours", "gaps"],
+  "properties": {
+    "limit_hours": {"type": "number", "exclusiveMinimum": 0},
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "url", "gap_since", "age_hours", "last_ok", "over_limit"],
+        "properties": {
+          "source": {"enum": ["espn_starters", "espn_injuries", "daily_faceoff"]},
+          "url": {"type": "string", "minLength": 1},
+          "gap_since": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}\\+00:00$"
+          },
+          "age_hours": {"type": "number"},
+          "last_ok": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}\\+00:00$"
+          },
+          "over_limit": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}
