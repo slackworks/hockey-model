@@ -242,9 +242,9 @@ def _write_build(report_dir: Path, generated: str) -> None:
     (report_dir / f"backtest-games-{DAY}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
 
 
-# The shared fixtures are the fake gh and the report directory. Every example writes its own
-# report into that directory, and the test reads only the newest call, so no example sees
-# the state of another.
+# The shared fixture is the fake gh, which holds scripts and no state. Each example gets its own
+# working directory, which holds the report and the call log, so no example sees the state of
+# another.
 @settings(
     max_examples=20,
     deadline=None,
@@ -256,13 +256,14 @@ def _write_build(report_dir: Path, generated: str) -> None:
     )
 )
 def test_publish_names_each_version_by_the_hhmmss_of_its_generated_time(
-    fakes: Path, tmp_path: Path, moment: datetime
+    fakes: Path, tmp_path_factory: pytest.TempPathFactory, moment: datetime
 ) -> None:
     # Every time iso_utc can write must give a version name with its own HHMMSS.
-    _write_build(tmp_path / "report", iso_utc(moment))
-    result = _publish(fakes, tmp_path)
+    work = tmp_path_factory.mktemp("example")
+    _write_build(work / "report", iso_utc(moment))
+    result = _publish(fakes, work)
     assert result.returncode == 0, result.stderr
-    created = [line for line in _calls(tmp_path) if line.startswith("gh release create")][-1]
+    created = _calls_with(work, "gh release create", "")[-1]
     assert f"report-{DAY}-{moment:%H%M%S}Z.json" in created
 
 
