@@ -66,6 +66,7 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
             'report; "" fits the Elo alone, which is the result of a failed joint test'
         ),
     )
+    _add_workers(parser)
     parser.add_argument(
         "--label",
         default=None,
@@ -78,11 +79,18 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, got {value}")
+    return value
+
+
 def _add_workers(parser: argparse.ArgumentParser) -> None:
     """Add the worker count of a backtest run."""
     parser.add_argument(
         "--workers",
-        type=int,
+        type=_positive_int,
         default=1,
         metavar="N",
         help="build the feature rows in up to N processes; the output does not change",

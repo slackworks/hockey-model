@@ -11,7 +11,6 @@ import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 from hockey_model.backtest.eligibility import SeasonCount, ineligibility_reasons, season_counts
 from hockey_model.backtest.game_records import GameRecord
@@ -24,7 +23,8 @@ from hockey_model.backtest.metrics import (
     log_loss,
     per_game_log_loss,
 )
-from hockey_model.backtest.units import Unit, database_path, open_read_only, run_units
+from hockey_model.backtest.shards import build_sharded
+from hockey_model.backtest.units import Unit, check_workers, run_units
 from hockey_model.game_model.features import FEATURES, GOALIE_FEATURE, GoalieMode
 from hockey_model.game_model.imputation import (
     ImputationLimitError,
@@ -59,9 +59,11 @@ MODEL_GUESS = "model_guess"
 RECORDED_RUNS = (ELO, MODEL_ACTUAL, MODEL_GUESS)
 # A feature is vetoed only when it is worse by more than rounding error.
 VETO_TOLERANCE = 1e-9
-# The wall time to meet with 2 or more workers on the real store: the longest unit, the guess
-# feature build (3251 s measured), plus the merge and a margin. Table: docs/design/backtest-speed.md
-PARALLEL_TARGET_S = 3400
+# The wall time to meet with PARALLEL_TARGET_WORKERS workers on the real store: the season
+# shards, 20 units of up to 350 s each (1262 s measured), plus a margin. Table:
+# docs/design/backtest-speed.md
+PARALLEL_TARGET_WORKERS = 4
+PARALLEL_TARGET_S = 1500
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,21 +417,14 @@ def _build_report(
 
 
 def _build_rows(
-    source: sqlite3.Connection | Path,
+    conn: sqlite3.Connection,
     first: int,
     last: int,
     mode: GoalieMode,
     burn_in: int,
     names: Sequence[str],
 ) -> list[TrainingRow]:
-    """Build the feature rows. A worker passes the store path and reads its own connection."""
-    if isinstance(source, sqlite3.Connection):
-        return training_rows(source, first, last, mode, burn_in, names=names)
-    conn = open_read_only(source)
-    try:
-        return training_rows(conn, first, last, mode, burn_in, names=names)
-    finally:
-        conn.close()
+    return training_rows(conn, first, last, mode, burn_in, names=names)
 
 
 def run_backtest(
@@ -446,23 +441,26 @@ def run_backtest(
     is below zero. The guess run never changes success. Success also needs a covered
     cohort and enough independent blocks; see ``BacktestReport.eligible``.
 
-    The two feature builds, the fits, and the bootstrap runs are named units, and each logs
-    its wall time. ``workers`` above 1 runs the two builds in worker processes, each with its
-    own read-only store connection, because they take more than 99.9% of the time. The report
-    and the records are the same for every worker count.
+    The feature builds, the fits, and the bootstrap runs are named units, and each logs its
+    wall time. ``workers`` above 1 builds the rows one season at a time in worker processes,
+    each with its own read-only store connection, because the builds take more than 99.9% of
+    the time. The report and the records are the same for every worker count.
     """
+    check_workers(workers)
     started = time.monotonic()
     first, last = plan.fit_first, plan.scored[1]
-    source = database_path(conn) if workers > 1 else conn
-    builds = [
-        Unit(
-            f"build {mode.value} rows",
-            _build_rows,
-            (source, first, last, mode, plan.burn_in, candidates),
-        )
-        for mode in (GoalieMode.ACTUAL, GoalieMode.GUESS)
-    ]
-    actual, guess = run_units(builds, workers)
+    if workers > 1:
+        actual, guess = build_sharded(conn, plan, candidates, workers)
+    else:
+        builds = [
+            Unit(
+                f"build {mode.value} rows",
+                _build_rows,
+                (conn, first, last, mode, plan.burn_in, candidates),
+            )
+            for mode in (GoalieMode.ACTUAL, GoalieMode.GUESS)
+        ]
+        actual, guess = run_units(builds, 1)
     scoring = _validate(actual, guess, plan, candidates)
     tested = tuple(f for f in candidates if f not in scoring[1])
     games = _score_seasons(actual, guess, tested, plan)
@@ -473,9 +471,10 @@ def run_backtest(
         )
     report = _build_report(conn, plan, candidates, scoring, tested, games)
     elapsed = time.monotonic() - started
-    print(
-        f"backtest: total {elapsed:.1f}s with {workers} worker(s); the target with 2 or more "
-        f"workers is {PARALLEL_TARGET_S}s on the real store",
-        file=sys.stderr,
+    target = (
+        f"; the target on the real store is {PARALLEL_TARGET_S}s"
+        if workers == PARALLEL_TARGET_WORKERS
+        else ""
     )
+    print(f"backtest: total {elapsed:.1f}s with {workers} worker(s){target}", file=sys.stderr)
     return report, _records(games)

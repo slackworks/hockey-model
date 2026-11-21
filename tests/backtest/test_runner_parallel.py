@@ -15,7 +15,12 @@ from test_runner_store import PLAN, seed
 
 from hockey_model.backtest import runner
 from hockey_model.backtest.game_records import write_game_records
-from hockey_model.backtest.runner import PARALLEL_TARGET_S, merge_scored, run_backtest
+from hockey_model.backtest.runner import (
+    PARALLEL_TARGET_S,
+    PARALLEL_TARGET_WORKERS,
+    merge_scored,
+    run_backtest,
+)
 from hockey_model.game_model.features import FEATURES, FeatureRow
 from hockey_model.game_model.training import TrainingRow
 from hockey_model.sources.nhl import GameRow
@@ -40,11 +45,11 @@ def test_workers_give_a_byte_identical_report_and_csv(
     )
     assert parallel == serial
     log = capfd.readouterr().err
-    for unit in ("build actual rows", "build guess rows", "validate elo", "score model_actual"):
+    for unit in ("build actual rows 2", "build guess rows 7", "validate elo", "score model_actual"):
         assert f"backtest: unit {unit} took " in log
     assert "backtest: total " in log
     assert "with 3 worker(s)" in log
-    assert f"{PARALLEL_TARGET_S}s on the real store" in log
+    assert "target" not in log
 
 
 def test_a_run_for_one_worker_logs_the_same_units(
@@ -141,3 +146,22 @@ def test_a_model_run_reports_the_mean_difference_from_the_elo(
     ) / len(probs)
     assert scored.mean_diff_vs_elo == pytest.approx(expected)
     assert scored.games == len(probs)
+
+
+@pytest.mark.parametrize("workers", [0, -1])
+def test_a_worker_count_below_one_is_an_error_for_the_library_too(
+    store: sqlite3.Connection, workers: int
+) -> None:
+    with pytest.raises(HockeyModelError, match="workers must be at least 1"):
+        run_backtest(store, PLAN, candidates=FEATURES, workers=workers)
+
+
+def test_the_log_states_the_target_for_the_worker_count_it_was_set_for(
+    store: sqlite3.Connection, capfd: pytest.CaptureFixture[str]
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    run_backtest(store, PLAN, candidates=FEATURES, workers=PARALLEL_TARGET_WORKERS)
+    log = capfd.readouterr().err
+    assert f"with {PARALLEL_TARGET_WORKERS} worker(s); the target on the real store is " in log
+    assert f"{PARALLEL_TARGET_S}s" in log

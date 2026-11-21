@@ -167,3 +167,15 @@ def test_a_backtest_that_will_not_parse_names_the_parse_error(fakes: Path, tmp_p
     assert result.returncode == 0, result.stderr
     assert "has no live_features list of names (" in result.stderr
     assert "parse error" in result.stderr.lower()
+
+
+@pytest.mark.parametrize(("extra", "expected"), [({}, "4"), ({"BACKTEST_WORKERS": "3"}, "3")])
+def test_the_backtest_and_the_fit_get_the_worker_count(
+    fakes: Path, tmp_path: Path, extra: dict[str, str], expected: str
+) -> None:
+    env = _prepare_env(fakes, tmp_path) | extra
+    result = _run("daily-prepare.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    calls = [c for c in _calls(tmp_path) if "hockey-model backtest" in c or "hockey-model fit" in c]
+    assert len(calls) == 2
+    assert all(call.endswith(f"--workers {expected}") for call in calls)

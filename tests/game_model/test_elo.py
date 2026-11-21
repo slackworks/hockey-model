@@ -1,7 +1,7 @@
 """Tests for the Elo."""
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from hypothesis import assume, given
@@ -14,6 +14,7 @@ from hockey_model.game_model.elo import (
     EloBook,
     elo_expected,
     replay,
+    season_boundaries,
 )
 from hockey_model.sources.nhl import GameRow
 
@@ -133,3 +134,34 @@ def test_an_away_win_lowers_the_home_rating_by_the_margin() -> None:
     book = replay([final(1, "TOR", "BOS", 1, 4)])
     expected = 1 / (1 + 10 ** (-28 / 400))
     assert book.rating("TOR") == pytest.approx(1500 - 8 * expected * math.log(4))
+
+
+def _decisive(game_id: int, season: int, home: str, away: str, margin: int) -> GameRow:
+    start = datetime(2015, 10, 1, tzinfo=UTC) + timedelta(hours=game_id)
+    return GameRow(game_id, season, 2, start, home, away, "OFF", 3 + margin, 3, "REG")
+
+
+def test_the_first_boundary_is_empty_and_a_later_one_is_the_replay_before_its_season() -> None:
+    games = [_decisive(1, 1, "TOR", "BOS", 2), _decisive(2, 1, "BOS", "TOR", 1)]
+    games += [_decisive(3, 2, "TOR", "BOS", 1), _decisive(4, 3, "MTL", "TOR", 3)]
+    boundaries = season_boundaries(games)
+    assert boundaries[1] == {}
+    assert boundaries[2] == replay(games[:2]).ratings()
+    assert boundaries[3] == replay(games[:3]).ratings()
+    assert list(boundaries) == [1, 2, 3]
+
+
+def test_a_season_that_starts_after_a_later_season_is_refused() -> None:
+    games = [_decisive(1, 2024, "TOR", "BOS", 1), _decisive(2, 2023, "TOR", "BOS", 1)]
+    with pytest.raises(
+        ValueError, match="game 2 of season 2023 starts after a game of season 2024"
+    ):
+        season_boundaries(games)
+
+
+def test_a_book_started_from_ratings_keeps_its_own_copy() -> None:
+    start = {"TOR": 1510.0}
+    book = EloBook(start)
+    book.update(_decisive(1, 1, "TOR", "BOS", 1))
+    assert start == {"TOR": 1510.0}
+    assert book.ratings() != start
