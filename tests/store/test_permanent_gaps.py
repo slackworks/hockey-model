@@ -155,30 +155,33 @@ def test_two_outage_runs_a_few_minutes_apart_leave_no_gap(conn: sqlite3.Connecti
     assert RefreshRun(conn, HttpClient(), START + MINUTES).skipped(SOURCE) == frozenset()
 
 
-@settings(max_examples=40, deadline=None)
+@settings(max_examples=60, deadline=None)
 @given(
     causes=st.lists(st.sampled_from(["permanent", "transient", "good"]), min_size=1, max_size=8),
-    gap_minutes=st.integers(1, 30),
+    gap_minutes=st.integers(1, 600),
 )
 def test_a_gap_needs_two_failures_in_a_row_and_a_span_or_only_permanent_ones(
     tmp_path_factory: pytest.TempPathFactory, causes: list[str], gap_minutes: int
 ) -> None:
     connection = connect(tmp_path_factory.mktemp("store") / "store.db")
     try:
-        for step, cause in enumerate(causes):
-            moment = START + step * timedelta(minutes=gap_minutes)
+        step = timedelta(minutes=gap_minutes)
+        for number, cause in enumerate(causes):
+            moment = START + number * step
             if cause == "good":
                 record_read(connection, SOURCE, URL, moment)
             else:
                 failure = _blocked() if cause == "permanent" else _outage()
                 record_failed_read(connection, SOURCE, URL, moment, failure)
-        streak: list[str] = []
-        for cause in reversed(causes):
-            if cause == "good":
-                break
-            streak.append(cause)
-        # No generated span reaches half a day, so only a streak of permanent failures is a gap.
-        expected = len(streak) >= 2 and set(streak) == {"permanent"}
-        assert (URL in abandoned_urls(connection, SOURCE)) is expected
+        first = len(causes)
+        while first > 0 and causes[first - 1] != "good":
+            first -= 1
+        streak = causes[first:]
+        spans = (len(streak) - 1) * step >= timedelta(days=ABANDON_MIN_SPAN_DAYS)
+        expected = len(streak) >= 2 and (spans or set(streak) == {"permanent"})
+        gaps = known_gaps(connection, SOURCE)
+        assert (URL in gaps) is expected
+        if expected:
+            assert gaps[URL] == START + first * step
     finally:
         connection.close()
