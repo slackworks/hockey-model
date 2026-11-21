@@ -374,4 +374,7 @@ def run_store_command(args: argparse.Namespace) -> tuple[object, int]:
     if args.command not in _LONG_COMMANDS:
         return handler(args)
     with progress.step(args.command, "run"):
-        return handler(args)
+        payload, code = handler(args)
+        if code != 0:
+            progress.stopped(f"exit code {code}")
+        return payload, code

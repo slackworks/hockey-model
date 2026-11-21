@@ -66,3 +66,19 @@ def test_main_removes_its_handler_when_it_returns(monkeypatch: pytest.MonkeyPatc
     assert progress.LOGGER.handlers == []
     assert progress.LOGGER.propagate is True
     assert progress.LOGGER.level in (logging.NOTSET, logging.INFO)
+
+
+def test_a_command_that_returns_a_failure_code_ends_with_a_stop_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setitem(store_cli._HANDLERS, "refresh", _fake({"errors": ["x"]}, code=1))
+    assert main(["refresh"]) == 1
+    last = capsys.readouterr().err.splitlines()[-1]
+    assert " refresh run stop elapsed=" in last
+    assert last.endswith(" reason=exit code 1")
+
+
+def test_the_long_commands_are_commands_and_the_quiet_ones_are_named() -> None:
+    assert store_cli._LONG_COMMANDS <= set(store_cli._HANDLERS)
+    quiet = set(store_cli._HANDLERS) - store_cli._LONG_COMMANDS
+    assert quiet == {"game", "report-decide", "report-compare", "report-index", "report-summary"}
