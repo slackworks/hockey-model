@@ -27,6 +27,8 @@ class FitDiagnostics:
 
     ``condition`` is the largest over the smallest pivot of the Hessian at the solution.
     ``means`` and ``scales`` map each column name (``elo_logit`` first) to its scaling.
+    ``covariance`` is the inverse of that Hessian, with the intercept first and then the columns
+    in the order of ``means``. A fit saved before the covariance existed has ``None``.
     """
 
     iterations: int
@@ -37,6 +39,7 @@ class FitDiagnostics:
     means: Mapping[str, float]
     scales: Mapping[str, float]
     stop_reason: str
+    covariance: tuple[tuple[float, ...], ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +56,8 @@ class LogisticFit:
 ELO_ONLY = LogisticFit(features=(), intercept=0.0, elo_weight=1.0, weights={})
 
 
-def _sigmoid(z: float) -> float:
+def sigmoid(z: float) -> float:
+    """Return the logistic function of ``z`` without overflow."""
     if z >= 0:
         return 1.0 / (1.0 + math.exp(-z))
     exp = math.exp(z)
@@ -119,7 +123,7 @@ def _system(
     for row, win in zip(data, wins, strict=True):
         x = [1.0, *row]
         z = sum(b * v for b, v in zip(beta, x, strict=True))
-        p = _sigmoid(z)
+        p = sigmoid(z)
         weight = p * (1.0 - p)
         objective += _softplus(z) - (z if win else 0.0)
         for i in range(size):
@@ -136,6 +140,16 @@ class _Solution:
     objective: float
     gradient_norm: float
     condition: float
+    covariance: tuple[tuple[float, ...], ...]
+
+
+def _inverse(matrix: list[list[float]]) -> tuple[tuple[float, ...], ...]:
+    """Return the inverse of a symmetric matrix, one unit vector at a time."""
+    size = len(matrix)
+    columns = [
+        solve_linear(matrix, [1.0 if r == c else 0.0 for r in range(size)])[0] for c in range(size)
+    ]
+    return tuple(tuple(columns[c][r] for c in range(size)) for r in range(size))
 
 
 def _newton(data: list[list[float]], wins: Sequence[bool]) -> _Solution:
@@ -147,7 +161,7 @@ def _newton(data: list[list[float]], wins: Sequence[bool]) -> _Solution:
         norm = max(abs(g) for g in gradient)
         step, condition = solve_linear(hessian, gradient)
         if norm < GRADIENT_TOLERANCE:
-            return _Solution(beta, iteration, objective, norm, condition)
+            return _Solution(beta, iteration, objective, norm, condition, _inverse(hessian))
         if iteration == MAX_ITERATIONS:
             raise ValueError(
                 f"fit logistic: no convergence in {MAX_ITERATIONS} iterations; the largest "
@@ -186,14 +200,19 @@ def fit_logistic(
         means=dict(zip(names, means, strict=True)),
         scales=dict(zip(names, scales, strict=True)),
         stop_reason=STOP_REASON,
+        covariance=solved.covariance,
     )
     return LogisticFit(
         tuple(features), intercept, raw[0], dict(zip(features, raw[1:], strict=True)), diagnostics
     )
 
 
+def linear_score(fit: LogisticFit, row: FeatureRow) -> float:
+    """Return the log odds of a home win for one feature row."""
+    z = fit.intercept + fit.elo_weight * row.elo_logit
+    return z + sum(fit.weights[f] * row.values[f] for f in fit.features)
+
+
 def predict_logistic(fit: LogisticFit, row: FeatureRow) -> float:
     """Return the home win chance for one feature row."""
-    z = fit.intercept + fit.elo_weight * row.elo_logit
-    z += sum(fit.weights[f] * row.values[f] for f in fit.features)
-    return _sigmoid(z)
+    return sigmoid(linear_score(fit, row))

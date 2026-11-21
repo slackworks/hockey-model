@@ -86,6 +86,7 @@ DIAGNOSTICS = FitDiagnostics(
     means={"elo_logit": 0.1, "rest": 0.0},
     scales={"elo_logit": 0.4, "rest": 1.0},
     stop_reason="converged: largest gradient entry below 1e-06",
+    covariance=((0.5, 0.0, 0.1), (0.0, 0.25, 0.0), (0.1, 0.0, 0.3)),
 )
 
 _NO_DIAGNOSTICS = '{"intercept": 0, "elo_weight": 1, "features": {}}'
@@ -111,6 +112,37 @@ def test_a_fit_saved_without_diagnostics_loads_with_none(store: sqlite3.Connecti
 
 def test_malformed_diagnostics_say_to_fit_again(store: sqlite3.Connection) -> None:
     store.execute(_INSERT, (_BAD_DIAGNOSTICS,))
+    with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
+        load_fit(store, FitRef(fit_id=1))
+
+
+def test_a_fit_saved_before_the_covariance_existed_loads_with_none(
+    store: sqlite3.Connection,
+) -> None:
+    stored = (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0, "means": {},'
+        ' "scales": {}, "stop_reason": "converged"}}'
+    )
+    store.execute(_INSERT, (stored,))
+    loaded = _loaded(store, 1)
+    assert loaded.diagnostics is not None and loaded.diagnostics.covariance is None
+
+
+@pytest.mark.parametrize(
+    "covariance",
+    ["[[1.0]]", "[[1.0, 0.0], [0.0]]", "[[1.0, NaN], [0.0, 1.0]]", '"x"', "[1.0, 2.0]"],
+)
+def test_a_saved_covariance_of_the_wrong_shape_says_to_fit_again(
+    store: sqlite3.Connection, covariance: str
+) -> None:
+    stored = (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0, "means":'
+        ' {"elo_logit": 0.0}, "scales": {"elo_logit": 1.0}, "stop_reason": "converged",'
+        f' "covariance": {covariance}}}}}'
+    )
+    store.execute(_INSERT, (stored,))
     with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
         load_fit(store, FitRef(fit_id=1))
 

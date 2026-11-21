@@ -275,6 +275,17 @@ def _check_fit(fit: LogisticFit) -> None:
     numbers = [fit.intercept, fit.elo_weight, *fit.weights.values()]
     if not all(math.isfinite(number) for number in numbers):
         raise ValueError("a weight is not a finite number")
+    covariance = None if fit.diagnostics is None else fit.diagnostics.covariance
+    if covariance is not None:
+        _check_covariance(covariance, len(fit.features) + 2)
+
+
+def _check_covariance(covariance: tuple[tuple[float, ...], ...], size: int) -> None:
+    """Raise ``ValueError`` unless the covariance is a finite square matrix of ``size`` rows."""
+    if len(covariance) != size or any(len(line) != size for line in covariance):
+        raise ValueError(f"the covariance is not a {size} by {size} matrix")
+    if not all(math.isfinite(value) for line in covariance for value in line):
+        raise ValueError("the covariance holds a value that is not a finite number")
 
 
 def _diagnostics(stored: dict[str, Any] | None) -> FitDiagnostics | None:
@@ -290,4 +301,14 @@ def _diagnostics(stored: dict[str, Any] | None) -> FitDiagnostics | None:
         means={str(k): float(v) for k, v in stored["means"].items()},
         scales={str(k): float(v) for k, v in stored["scales"].items()},
         stop_reason=str(stored["stop_reason"]),
+        covariance=_covariance(stored.get("covariance")),
     )
+
+
+def _covariance(stored: object) -> tuple[tuple[float, ...], ...] | None:
+    """Rebuild the saved covariance. A fit saved before it existed has none."""
+    if stored is None:
+        return None
+    if not isinstance(stored, list) or not all(isinstance(line, list) for line in stored):
+        raise TypeError("the covariance is not a list of lists")
+    return tuple(tuple(float(value) for value in line) for line in stored)
