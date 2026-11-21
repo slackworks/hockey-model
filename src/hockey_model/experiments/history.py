@@ -2,6 +2,7 @@
 
 Two registry rules are enforced against commits, not against the file alone:
 a record is frozen at registration, and a confirmation run is one-shot.
+The withdrawn rules read the same history in withdrawn.py.
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ def check_one_shot(record: ExperimentRecord, repo_root: Path) -> None:
     # A stored blob holds lists where the record holds tuples, so compare as JSON.
     current = json.loads(json.dumps(record.to_dict().get("result")))
     for commit, relative in _history(record.id, repo_root):
-        prior = _result_at(commit, relative, repo_root)
+        prior = _field_at(commit, relative, "result", repo_root)
         if prior is None:
             continue
         if prior != current:
@@ -88,13 +89,28 @@ def check_one_shot(record: ExperimentRecord, repo_root: Path) -> None:
             )
 
 
+def field_history(record_id: str, field: str, repo_root: Path) -> list[tuple[str, object]]:
+    """Return ``(commit, value)`` of one field at each commit that touched the record."""
+    return [
+        (commit, _field_at(commit, relative, field, repo_root))
+        for commit, relative in _history(record_id, repo_root)
+    ]
+
+
+def path_in_history(relative: str, repo_root: Path) -> bool:
+    """Return True when any commit touched the path. Outside a repository it is False."""
+    if not _is_work_tree(repo_root) or not _has_head(repo_root):
+        return False
+    return bool(_git(["log", "--format=%H", "--", relative], repo_root).strip())
+
+
 def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
     """Return the IDs of deleted records whose history holds a result.
 
     A deleted record that spent its look could hide a negative result, so a record
-    with a committed result stays. A record that never had a result is no loss. A
-    rename is not a deletion: git follows it, and the changed ``id`` fails the
-    immutability check.
+    with a committed result stays. A record that never had a result is no loss here
+    (#291 tracks the number it frees). A rename is not a deletion: git follows it, and
+    the changed ``id`` fails the immutability check.
     """
     if not _is_work_tree(repo_root) or not _has_head(repo_root):
         return []
@@ -111,35 +127,14 @@ def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
 def _ever_had_result(record_id: str, repo_root: Path) -> bool:
     """Return True when any commit stored a result for the record.
 
-    A version that is not valid JSON cannot hold a trustworthy result, so it is skipped.
+    A commit that deleted the file has no copy of it, so it is skipped. Any git failure, and a
+    stored version that is not valid JSON, raises: a skipped version could hide a result.
     """
     relative = record_relative_path(record_id)
     for commit in _git(["log", "--format=%H", "--", relative], repo_root).split():
-        # A commit that deletes the file has no copy of it. Any other failure is an error.
-        present = subprocess.run(
-            ["git", "cat-file", "-e", f"{commit}:{relative}"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
-        if present.returncode != 0:
+        if not _git(["ls-tree", "--name-only", commit, "--", relative], repo_root).strip():
             continue
-        shown = subprocess.run(
-            ["git", "show", f"{commit}:{relative}"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
-        if shown.returncode != 0:
-            raise HockeyModelError(
-                f"read record {record_id} at {commit}: {shown.stderr.strip()}; "
-                "check the repository, then run the check again"
-            )
-        try:
-            data = json.loads(shown.stdout)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and data.get("result") is not None:
+        if _field_at(commit, relative, "result", repo_root) is not None:
             return True
     return False
 
@@ -155,12 +150,15 @@ def _has_head(repo_root: Path) -> bool:
 def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
     """Return ``(commit, path)`` pairs for the record, newest first.
 
+    A commit that deleted the file is left out, because it holds no copy to read.
+
     Git follows a rename, so ``path`` is the file name the record had at that commit.
     """
     out = _git(
         [
             "log",
             "--follow",
+            "--diff-filter=d",
             "--name-only",
             "--format=commit:%H",
             "--",
@@ -178,8 +176,8 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
     return pairs
 
 
-def _result_at(commit: str, relative: str, repo_root: Path) -> object:
-    """Return the ``result`` field of a record as one commit stored it."""
+def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object:
+    """Return one field of a record as one commit stored it."""
     text = _git(["show", f"{commit}:{relative}"], repo_root)
     try:
         data = json.loads(text)
@@ -190,7 +188,7 @@ def _result_at(commit: str, relative: str, repo_root: Path) -> object:
             f"read {relative} at commit {commit}: a record must be a JSON object, "
             f"got a {type(data).__name__}"
         )
-    return data.get("result")
+    return data.get(field)
 
 
 def _is_work_tree(repo_root: Path) -> bool:

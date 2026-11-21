@@ -47,6 +47,22 @@ def list_records(repo_root: Path) -> list[str]:
     return sorted(ids)
 
 
+def misnamed_record_files(repo_root: Path) -> list[str]:
+    """Return the JSON files of the registry whose names are not record IDs.
+
+    ``list_records`` skips such a file, so a confirmation record renamed to one would leave the
+    look count and the deletion check.
+    """
+    registry = registry_dir(repo_root)
+    if not registry.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in registry.iterdir()
+        if path.suffix == ".json" and not RECORD_STEM.fullmatch(path.stem)
+    )
+
+
 def get_record(record_id: str, repo_root: Path) -> ExperimentRecord:
     """Load a record by ID. Raises when the ID is malformed or the record is absent."""
     check_record_id(record_id)

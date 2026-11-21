@@ -310,6 +310,9 @@ season and later, and it runs once.
 The run refuses when the cohort holds fewer games than the record requires.
 A run whose interval is wider than the effect the record expected is
 inconclusive, not rejected.
+The promotion bar of a confirmation record follows its look number `k`: the interval cuts the tail `BASE_TAIL / (k * (k + 1))`, so the tails of all looks sum to less than `BASE_TAIL`.
+A record that will not run is set to the status `withdrawn`. It spends no look, holds no result, and cannot return to another status.
+See [docs/design/promotion-bar.md](docs/design/promotion-bar.md).
 
 Run the registry commands from the repository root.
 The records live in `experiments/`, relative to the working directory. The schema
@@ -317,7 +320,7 @@ that validates them is `src/hockey_model/experiments/schemas.py`.
 
 ```text
 hockey-model experiments check
-hockey-model experiments run 0001-v1-forward-test --games-out games.csv
+hockey-model experiments run 0002-v1-forward-test --games-out games.csv
 ```
 
 The per-game CSV of a confirmation run is committed under

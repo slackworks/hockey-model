@@ -14,26 +14,58 @@ A confirmation record MUST set `look_number` to one more than the count of confi
 An exploration record does not count as a look, and the checker does not read its `look_number`.
 The checker and `hockey-model experiments run` refuse a record that breaks this rule.
 
-The promotion bar for look `k` is the interval from the `BASE_TAIL / k` percentile to the `1 - BASE_TAIL / k` percentile of the block bootstrap.
+The promotion bar for look `k` is the interval from the `BASE_TAIL / (k * (k + 1))` percentile to the `1 - BASE_TAIL / (k * (k + 1))` percentile of the block bootstrap.
 A record promotes only when the upper end of that interval lies below zero.
-The names `BASE_TAIL` and `MAX_LOOKS` are in `src/hockey_model/experiments/looks.py`.
+The names `BASE_TAIL`, `MIN_TAIL_RESAMPLES`, and `MAX_LOOKS` are in `src/hockey_model/experiments/looks.py`.
 
-This schedule is harmonic, not a Bonferroni correction.
-A Bonferroni correction needs a total look count that is fixed before the first look.
-The harmonic schedule does not need that count.
-Its limit is weaker: by the union bound, the chance that any of `n` looks promotes a feature with no effect is at most `BASE_TAIL` times the `n`-th harmonic number.
-That is about one and a half times `BASE_TAIL` at two looks, and about three times `BASE_TAIL` at `MAX_LOOKS`.
+## The schedule
+
+The tail of look `k` is `BASE_TAIL / (k * (k + 1))`.
+The tails of the first `n` looks sum to `BASE_TAIL * n / (n + 1)`, which is below `BASE_TAIL` for every `n`.
+By the union bound, the chance that any look promotes a feature with no effect is therefore below `BASE_TAIL`.
+The schedule needs no look count fixed before the first look, as a Bonferroni correction does.
 The bound is loose, because the looks score overlapping games.
-A schedule whose terms sum to `BASE_TAIL` would hold the limit, at the cost of a stricter first look than the registered record 0001 uses.
-That choice is open (#200).
+A test sums `promotion_tail_exact(k)` for every supported look with `fractions.Fraction` and asserts the limit, so float rounding cannot hide a total that is over.
+The first look uses half of `BASE_TAIL`, which is stricter than the harmonic schedule (`BASE_TAIL / k`) that it replaced.
+The harmonic schedule summed to `BASE_TAIL` times the `n`-th harmonic number, which is above the limit for two looks and more (#200).
 
 A registered record counts as a look when it exists, whether or not it has run.
 This counts more looks than the runs that happened, so it errs on the strict side.
-Deleting a registered record that never ran is not detected, and the later records then fail the look check.
+Deleting a registered record that never ran is not detected, and a new record can then take its number (#291).
+Withdraw such a record instead (see Withdrawn records).
 
 `MAX_LOOKS` caps the look number.
-The bootstrap holds `BOOTSTRAP_RESAMPLES` means, so a tail smaller than `BASE_TAIL / MAX_LOOKS` would rest on too few resamples.
-A hypothesis that needs more looks MUST be a new record with a new cohort, not a further look.
+It is the last look whose tail leaves at least `MIN_TAIL_RESAMPLES` bootstrap means outside each end, at the current `BOOTSTRAP_RESAMPLES`.
+A smaller tail would rest on too few resamples, and the bootstrap refuses a tail that cuts no resample.
+More resamples raise the cap.
+The registry has no further confirmation look past the cap: raise `BOOTSTRAP_RESAMPLES`, or run an exploration record, which cannot promote.
+
+## Withdrawn records
+
+A record with the status `withdrawn` never ran and never will.
+It keeps its file and its place in the history, so the registry shows that the plan changed.
+It spends no look, holds no result, and cannot return to another status.
+The checker enforces these rules:
+
+- A withdrawn record holds no result.
+- A commit that stored the status `withdrawn` fixes it for every later commit.
+- Only a registered record can be withdrawn. A record that was `inconclusive` ran and saw the games, even when it wrote no result, so its look is spent.
+- A withdrawn record has no `experiments/results/<id>-games.csv`, in the working tree or in any commit, because a run writes that file.
+- `hockey-model experiments run` refuses a withdrawn record of either cohort.
+
+Withdraw a record before any later confirmation record counts it.
+A later record sets its `look_number` from the records before it, and `look_number` is frozen.
+Withdrawing an earlier record afterwards fails the look check of the later record, and the withdrawal cannot be undone.
+The look message names the withdrawn records, so the cause is visible.
+Run `hockey-model experiments check` before the commit that withdraws a record.
+
+The checker cannot tell a record withdrawn before it ran from a run that was reverted before the commit and left no file.
+That limit is the cost of a manual commit after a run.
+
+Record 0001 was withdrawn when the schedule changed from harmonic to summable, and record 0002 replaces it as look 1 with the summable bar.
+Only `status` changed in 0001, so its frozen fields still match its registration commit.
+
+A JSON file in the registry whose name is not a record id (`NNNN-slug.json`) is an error, because the look count would skip it.
 
 ## Options not taken
 
@@ -58,7 +90,6 @@ A run is inconclusive when the half-width of its interval is above the absolute 
 A later look uses a smaller tail, so its interval is wider.
 A later look is therefore held to a stricter power bar than the first look.
 This follows from the rule and is not a separate choice.
-The open decision in #200 can change it.
 
 ## Interval ends
 

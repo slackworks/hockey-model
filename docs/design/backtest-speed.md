@@ -21,7 +21,7 @@ The seeded store is small, so a real-store check catches an order or rounding ch
 Run `uv run python3 -m cProfile -o .tmp/backtest.prof -m hockey_model.cli backtest` on the real store.
 Print the 30 most expensive functions by cumulative time with `pstats`.
 Write the table in the issue, in these groups: feature rows (SQL and Python), Elo replay, the logistic fits, the validation fits, the bootstrap, and the CSV write.
-Also time one `experiments run 0001-v1-forward-test` on the same store.
+Also time one `experiments run 0002-v1-forward-test` on the same store.
 
 ## Step 3: candidates
 

@@ -102,7 +102,7 @@ class TestCheckAll:
         assert result["ok"] is False
         assert result["errors"][0] == (
             "0001-valid: $.status in EXPERIMENT_SCHEMA: 'invalid_status' is not one of "
-            "['registered', 'rejected', 'inconclusive', 'promoted'] (rule 'enum'); "
+            "['registered', 'rejected', 'inconclusive', 'promoted', 'withdrawn'] (rule 'enum'); "
             "change the value to match the schema"
         )
 
@@ -405,7 +405,7 @@ class TestRegistryRules:
         assert any("0002-other: tracked" in error for error in result["errors"])
 
     def test_a_deleted_record_without_a_result_is_no_loss(self, tmp_path: Path, registry_dir: Path):
-        """A record that never ran can be removed before it matters."""
+        """A record that never ran can be removed. The number it frees is tracked in #291."""
         _init_repo(tmp_path)
         register(registry_dir, {"id": "0001-valid"})
         register(registry_dir, {"id": "0002-draft"})
