@@ -40,7 +40,18 @@ _ANNOTATIONS = frozenset(
 )
 # Keywords that hold a subschema, a map of subschemas, or a list of subschemas.
 _SUBSCHEMA = frozenset(
-    {"items", "additionalProperties", "contains", "not", "if", "then", "else", "propertyNames"}
+    {
+        "items",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+        "propertyNames",
+    }
 )
 _SUBSCHEMA_MAPS = frozenset({"properties", "patternProperties", "$defs", "dependentSchemas"})
 _SUBSCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
@@ -57,6 +68,16 @@ def _subschemas(key: str, value: Any) -> list[tuple[str, Any]]:
     return []
 
 
+def _has_effect(schema: dict[str, Any], key: str) -> bool:
+    """Say whether jsonschema reads the keyword ``key`` of ``schema`` or ignores it.
+
+    ``then`` and ``else`` have no validator of their own. The ``if`` validator runs them.
+    """
+    if key in _ANNOTATIONS or key in _Validator.VALIDATORS:
+        return True
+    return key in ("then", "else") and "if" in schema
+
+
 def _unsupported(schema: Any, path: str = "$") -> list[str]:
     """List each keyword or format that the validator would skip without a word."""
     if not isinstance(schema, dict):
@@ -66,7 +87,7 @@ def _unsupported(schema: Any, path: str = "$") -> list[str]:
         nested = _subschemas(key, value)
         for label, sub in nested:
             problems += _unsupported(sub, f"{path}.{label}")
-        if key not in _ANNOTATIONS and key not in _Validator.VALIDATORS:
+        if not _has_effect(schema, key):
             problems.append(f"{path}: the keyword {key!r} has no effect")
         elif key == "format" and value not in _FORMAT_CHECKER.checkers:
             problems.append(f"{path}: the format {value!r} has no checker here")
