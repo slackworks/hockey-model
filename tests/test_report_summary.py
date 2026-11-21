@@ -128,3 +128,20 @@ def test_a_game_without_the_optional_win_interval_key_says_there_is_no_interval(
     del game["win_interval"]
     lines = release_summary(_report(game, features=["xg_form"]))
     assert lines[1] == "TOR at MTL: TOR 58% (no interval: run `hockey-model fit` again)"
+
+
+def test_the_command_names_a_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["report-summary", "--report", str(tmp_path / "none.json")]) != 0
+    assert "cannot read the report" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text", ["not json", "[1, 2]", '"x"'])
+def test_the_command_refuses_a_file_that_is_not_a_json_object(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    path = tmp_path / "report.json"
+    path.write_text(text, encoding="utf-8")
+    assert main(["report-summary", "--report", str(path)]) != 0
+    assert "report-summary:" in capsys.readouterr().err

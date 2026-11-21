@@ -32,7 +32,7 @@ The Markdown footer and the summary header say so beside every range.
 
 - `game_model/logistic.py` keeps the covariance in `FitDiagnostics`. A fit saved before this change has none.
 - `game_model/win_interval.py` computes the range for one feature row.
-- `store/fits.py` saves the covariance and checks its shape on save and load.
+- `store/fits.py` saves the covariance, and checks its shape, symmetry, and scaling on save and load.
 - `game.py` carries `GamePrediction.home_win_interval`, and `matchup.check_win_interval` refuses a range that does not hold the point.
 - `report_interval.py` writes the JSON object, the table cell, and the footer notes.
 - `report_summary.py` writes the lines that open the release notes.
