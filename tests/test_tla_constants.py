@@ -8,7 +8,7 @@ import pytest
 from mutation_copy import require_path
 
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES
-from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
+from hockey_model.store.refresh_nhl import BACKLOG_BEFORE, RETRY_FAILED_AFTER
 from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, ABANDON_MIN_SPAN_DAYS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +16,7 @@ CFGS = (
     ROOT / "specs" / "daily_prepare.cfg",
     ROOT / "specs" / "daily_prepare_stall.cfg",
     ROOT / "specs" / "daily_prepare_blocked.cfg",
+    ROOT / "specs" / "daily_prepare_false_stall.cfg",
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")
@@ -90,6 +91,16 @@ def test_retry_ticks_match_retry_window(cfg: Path) -> None:
     assert span == RETRY_FAILED_AFTER, (
         f"RetryTicks * ABANDON_MIN_SPAN_DAYS is {span}, but RETRY_FAILED_AFTER is "
         f"{RETRY_FAILED_AFTER}; update RetryTicks in {source}"
+    )
+
+
+@cfgs
+def test_cutoff_ticks_match_backlog_cutoff(cfg: Path) -> None:
+    values, source = _load(cfg)
+    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, "CutoffTicks", source)
+    assert span == BACKLOG_BEFORE, (
+        f"CutoffTicks * ABANDON_MIN_SPAN_DAYS is {span}, but BACKLOG_BEFORE is "
+        f"{BACKLOG_BEFORE}; update CutoffTicks in {source}"
     )
 
 
