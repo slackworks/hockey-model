@@ -14,6 +14,8 @@ CONSTANTS
     OpenDays,       \* days that are not closed at the start; a tick closes them one by one
     BrokenScore,    \* score days whose every read fails
     BrokenBox,      \* days whose boxscore read always fails
+    BlockedScore,   \* broken score days whose failure is permanent, such as HTTP 403
+    BlockedBox,     \* broken boxscore days whose failure is permanent
     OtherBroken,    \* TRUE when a source after the NHL steps always fails
     ArrivalsCount,  \* TRUE: a day that closed since the last run counts as progress (old rule)
     BacklogFirst    \* TRUE: read the oldest window first, so the backlog comes before the open days
@@ -27,6 +29,7 @@ Box(d) == [kind |-> "box", day |-> d]
 ASSUME /\ NWindows >= 1 /\ DaysPerWindow >= 1 /\ Budget >= 1 /\ MaxFails >= 1
        /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1
        /\ OpenDays \subseteq Days /\ BrokenScore \subseteq Days /\ BrokenBox \subseteq Days
+       /\ BlockedScore \subseteq BrokenScore /\ BlockedBox \subseteq BrokenBox
        /\ OtherBroken \in BOOLEAN /\ ArrivalsCount \in BOOLEAN /\ BacklogFirst \in BOOLEAN
 
 \* TRUE when a run can read every day that is open at the start and still have budget for one
@@ -67,8 +70,11 @@ store == <<okRead, streak, span, firstAge, lastAge, marker, open, arrived>>
 run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
+Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
-Abandoned(u) == streak[u] >= AbandonReads /\ span[u]
+\* A permanent failure needs no span. A URL in Blocked fails only with a permanent status,
+\* and any other URL fails only with a transient one, so no streak mixes the two kinds.
+Abandoned(u) == streak[u] >= AbandonReads /\ (span[u] \/ Blocked(u))
 \* _day_complete(): a good read after the day closed.
 Complete(d) == okRead[Score(d)] /\ d \notin open
 \* games_missing_boxscore(): the score read found a final game with no boxscore.
