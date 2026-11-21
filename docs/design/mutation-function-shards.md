@@ -63,12 +63,14 @@ A serial run and a shard run therefore set different limits for one mutant, and 
 
 The merge job runs `scripts/mutation_timeouts.py` after the export.
 It reads the `.meta` file of each source file, takes every mutant with a timeout exit code, and writes its estimate and its limit to `mutants/mutmut-timeouts.json` beside the stats.
+A shard sets the estimate only for the mutants it ran, so the shard merge joins `estimated_durations_by_key` per mutant.
+The step has its own `continue-on-error`, so a failed list is not an export failure.
+The report checks each name against a dotted-name pattern, because the list comes from a downloaded artifact.
 The report lists those mutants, up to a cap, so a reader can tell a hang from a moved limit.
 The gate does not read the list, and a list that cannot be read changes no status.
 
-A shared stats file would give every shard the same durations and remove the variation.
-That option is not taken here.
-It needs a live run of the workflow to confirm that every shard loads the file and skips its own stats phase, and a wrong guess would break the weekly run.
+A shared stats file would give every shard the same durations and remove the variation (#301).
+That option needs a live run of the workflow to confirm that every shard loads the file and skips its own stats phase.
 
 ## Done when
 
