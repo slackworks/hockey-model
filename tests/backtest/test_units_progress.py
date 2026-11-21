@@ -29,3 +29,9 @@ def test_a_failed_unit_logs_a_stop_line_with_the_error(progress_lines: list[str]
         run_units([Unit("ok", square, (2,)), Unit("bad", boom, ("x",))], 1)
     assert progress_lines[-1].startswith("progress backtest units stop elapsed=")
     assert progress_lines[-1].endswith("done=1/2 reason=HockeyModelError")
+
+
+def test_the_caller_names_the_step(progress_lines: list[str]) -> None:
+    run_units([Unit("a", square, (1,))], 1, "build-rows")
+    assert progress_lines[0] == "progress backtest build-rows start elapsed=0.0s done=0/1"
+    assert progress_lines[-1].endswith("done=1/1")

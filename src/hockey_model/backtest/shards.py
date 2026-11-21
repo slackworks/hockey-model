@@ -93,7 +93,7 @@ def _build(
         )
         for mode, season in keys
     ]
-    parts = dict(zip(keys, run_units(units, workers), strict=True))
+    parts = dict(zip(keys, run_units(units, workers, "build-rows"), strict=True))
     return {mode: [row for season in seasons for row in parts[(mode, season)]] for mode in modes}
 
 

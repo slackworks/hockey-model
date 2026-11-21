@@ -352,6 +352,6 @@ def test_a_worker_result_count_that_differs_from_the_shard_count_is_refused(
 ) -> None:
     seed(store, range(1, 8))
     store.commit()
-    monkeypatch.setattr(shards, "run_units", lambda units, workers: [])
+    monkeypatch.setattr(shards, "run_units", lambda units, workers, label: [])
     with pytest.raises(ValueError, match="shorter"):
         shards._build(store, (2, 7), PLAN.burn_in, FEATURES, (GoalieMode.ACTUAL,), 1)

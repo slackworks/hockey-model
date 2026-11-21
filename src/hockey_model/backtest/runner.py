@@ -172,7 +172,7 @@ def _validate(
     # A candidate above the imputation limit is vetoed, so one such feature does not stop the
     # run.
     refused: set[str] = set()
-    for (name, features), result in zip(jobs, run_units(units, 1), strict=True):
+    for (name, features), result in zip(jobs, run_units(units, 1, "validate"), strict=True):
         if result is None:
             refused.update(features)
         else:
@@ -268,7 +268,7 @@ def _score_seasons(
         Unit(f"walk-forward fit before season {season}", _season_fit, (season, rows, tested))
         for season, rows in windows
     ]
-    for season, fit, home_rate in run_units(units, 1):
+    for season, fit, home_rate in run_units(units, 1, "walk-forward"):
         for row in [r for r in cohort if r.game.season == season]:
             scored.append(
                 _Scored(
@@ -354,7 +354,7 @@ def _build_report(
         )
         for name in names
     ]
-    runs = tuple(run_units(units, 1))
+    runs = tuple(run_units(units, 1, "score"))
     coverage = season_counts(conn, ((g.row.game.season, g.row.game.game_type) for g in games), plan)
     reasons = ineligibility_reasons(coverage, len(games))
     model = next(r for r in runs if r.name == MODEL_ACTUAL)
@@ -425,7 +425,7 @@ def run_backtest(
             )
             for mode in (GoalieMode.ACTUAL, GoalieMode.GUESS)
         ]
-        actual, guess = run_units(builds, 1)
+        actual, guess = run_units(builds, 1, "build-rows")
     scoring = _validate(actual, guess, plan, candidates)
     tested = tuple(f for f in candidates if f not in scoring[1])
     games = _score_seasons(actual, guess, tested, plan)
