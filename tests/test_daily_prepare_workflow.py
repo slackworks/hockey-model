@@ -42,7 +42,12 @@ def _job(text: str, name: str) -> str:
     """Return the text of one job: from its heading to the next job heading or the end."""
     match = re.search(rf"^  {name}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", text, re.DOTALL | re.MULTILINE)
     assert match is not None, f"the workflow has no job named {name}"
-    return match.group(1)
+    # A key in a comment is not a setting, so comment lines do not count.
+    return "".join(
+        line
+        for line in match.group(1).splitlines(keepends=True)
+        if not line.lstrip().startswith("#")
+    )
 
 
 def test_the_store_group_is_on_the_prepare_job_and_not_on_the_workflow() -> None:
@@ -76,3 +81,15 @@ def test_the_prepare_timeout_stays_on_the_prepare_job() -> None:
     text = PREPARE.read_text(encoding="utf-8")
     assert "timeout-minutes: 180" in _job(text, "prepare")
     assert "timeout-minutes: 180" not in _job(text, "gate")
+
+
+def test_a_failed_lookup_stops_the_gate_and_never_lets_the_run_go() -> None:
+    gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
+    assert "|| true" not in gate
+    assert 'pending="$(bash scripts/manual-prepare-pending.sh)" || {' in gate
+    assert "exit 1" in gate
+
+
+def test_a_run_that_stands_aside_says_so_as_a_warning() -> None:
+    gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
+    assert "::warning::A manual daily-prepare run waits or runs" in gate

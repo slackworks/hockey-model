@@ -93,7 +93,7 @@ On a scheduled run the gate calls `scripts/manual-prepare-pending.sh`, and the r
 A manual dispatch never stands aside.
 A failed lookup fails the gate, so the hourly run turns red and the next hour retries.
 Two cases remain.
-The `build` job of `daily-report.yml` can still take the waiting slot of a manual prepare, because the report must not wait for an operator's rebuild.
+The `build` job of `daily-report.yml` can still take the waiting slot of a manual prepare, because the report must not wait for an operator's rebuild (#295).
 A scheduled gate and a manual dispatch that start in the same few seconds can also race.
 
 Both workflows share one concurrency group, because both write the cached store.

@@ -13,7 +13,9 @@
 # later than the run start. GitHub counts the timeout from the job start, so the job start
 # is the one that answers the question. When no job of the run has started, the script
 # prints the current time. Only the job named `prepare` counts: the `gate` job of the same
-# run starts at once, and the prepare job then waits for the group (#285).
+# run starts at once, and the prepare job then waits for the group (#285). A job that waits
+# carries a `started_at` of its creation time, so the script reads that value only from a job
+# that is `in_progress` or `completed`. A prepare job that the gate skipped holds no group.
 #
 # A run that the group holds has not started. GitHub calls that state `pending`, and `queued`
 # means it waits for a runner. This script prints the current time for both, because that is
@@ -83,7 +85,10 @@ job_start() {
     return 1
   fi
   if ! answer="$(jq -rs --arg now "$now" '
-    [.[].jobs[] | select(.name == "prepare") | .started_at | select(. != null)] | min // $now
+    [.[].jobs[]
+      | select(.name == "prepare" and .conclusion != "skipped"
+        and (.status == "in_progress" or .status == "completed"))
+      | .started_at | select(. != null)] | min // $now
   ' <<<"$answer" 2>&1)"; then
     echo "prep-running: cannot read the job list of run ${run_id}: $answer" >&2
     return 1

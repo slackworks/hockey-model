@@ -37,20 +37,23 @@ if ! command -v gh >/dev/null; then
   exit 2
 fi
 
-# One status per call, because the run list filters by one status.
+# One status per call, because the run list filters by one status. The standard error of gh
+# goes to a file, so a warning from gh does not enter the JSON that jq reads.
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
 for status in in_progress pending queued waiting requested; do
   if ! runs="$(gh api --paginate \
     "repos/{owner}/{repo}/actions/runs?status=${status}&event=workflow_dispatch&per_page=100" \
-    2>&1)"; then
-    echo "manual-prepare-pending: cannot read the ${status} workflow runs: $runs" >&2
+    2>"$err")"; then
+    echo "manual-prepare-pending: cannot read the ${status} workflow runs: $(cat "$err")" >&2
     exit 2
   fi
   if ! found="$(jq -rs '
     [.[].workflow_runs[]
       | select((.path // "") | endswith("/daily-prepare.yml"))
       | select(.event == "workflow_dispatch")] | length
-  ' <<<"$runs" 2>&1)"; then
-    echo "manual-prepare-pending: cannot read the ${status} workflow run list: $found" >&2
+  ' <<<"$runs" 2>"$err")"; then
+    echo "manual-prepare-pending: cannot read the ${status} workflow run list: $(cat "$err")" >&2
     exit 2
   fi
   if [[ "$found" != "0" ]]; then
