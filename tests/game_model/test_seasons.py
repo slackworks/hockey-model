@@ -20,6 +20,7 @@ from hockey_model.game_model.seasons import (
     confirmation_plan,
     exploration_plan,
     in_cohort,
+    previous_season,
     scored_label,
     season_code,
     season_of,
@@ -174,3 +175,12 @@ def test_season_start_year_and_code_share_one_boundary(day: date, start_year: in
 
 def test_season_code_writes_both_years() -> None:
     assert season_code(2026) == 20262027
+
+
+def test_the_previous_season_of_20252026_is_20242025() -> None:
+    assert previous_season(20252026) == 20242025
+
+
+@given(start=st.integers(1917, 2100))
+def test_the_previous_season_is_the_season_one_year_earlier(start: int) -> None:
+    assert previous_season(season_code(start)) == season_code(start - 1)

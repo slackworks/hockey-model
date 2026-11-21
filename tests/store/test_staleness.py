@@ -310,7 +310,8 @@ def test_an_abandoned_training_day_is_listed_once_in_the_footer(store: sqlite3.C
     _abandon(store, url, utc("2026-11-01T12:00"))
     gaps = training_gaps(store, utc("2026-11-13T12:00"))
     assert gaps == [
-        f"nhl_scores: {url} failed in every read; its day is outside the scored and current seasons"
+        f"nhl_scores: {url} failed in every read; "
+        "its day is outside the scored, current, and previous seasons"
     ]
 
 
@@ -347,7 +348,8 @@ def test_a_day_before_the_season_starts_does_not_report_at_the_boundary(
     _abandon(store, url, utc("2026-08-31T12:00"))
     assert [r for r in stale_sources(store, utc("2026-09-01T02:00")) if r[0] == "nhl_scores"] == []
     assert training_gaps(store, utc("2026-09-01T02:00")) == [
-        f"nhl_scores: {url} failed in every read; its day is outside the scored and current seasons"
+        f"nhl_scores: {url} failed in every read; "
+        "its day is outside the scored, current, and previous seasons"
     ]
 
 
@@ -377,3 +379,33 @@ def test_an_abandoned_training_day_with_a_recent_failure_is_not_on_any_game_row(
     _fresh_score_read(store)
     _abandon(store, url, utc("2026-11-12T12:00"))
     assert [r for r in stale_sources(store, utc("2026-11-13T12:00")) if r[0] == "nhl_scores"] == []
+
+
+def test_a_gap_in_the_previous_season_is_on_a_game_row(store: sqlite3.Connection) -> None:
+    # In November 2027 the current season is 2027-28. The season before it, 2026-27, is not in
+    # SCORED, and a gap there can still move a win chance by a few points (#220).
+    url = score_day_url(date(2026, 10, 20))
+    record_read(store, "nhl_scores", "https://x/score/fresh", utc("2027-11-13T11:00"))
+    _abandon(store, url, utc("2027-11-01T12:00"))
+    reasons = stale_sources(store, utc("2027-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {url} failed") in reasons
+    assert training_gaps(store, utc("2027-11-13T12:00")) == []
+
+
+def test_a_gap_two_seasons_before_the_current_one_goes_to_the_footer(
+    store: sqlite3.Connection,
+) -> None:
+    # In November 2028 the current season is 2028-29. A gap in 2026-27 is two seasons back, and
+    # it is outside SCORED, so it leaves the game rows. A gap in 2027-28 stays on them.
+    old = score_day_url(date(2026, 10, 20))
+    previous = score_day_url(date(2027, 10, 20))
+    record_read(store, "nhl_scores", "https://x/score/fresh", utc("2028-11-13T11:00"))
+    _abandon(store, old, utc("2028-11-01T12:00"))
+    _abandon(store, previous, utc("2028-11-01T12:00"))
+    reasons = stale_sources(store, utc("2028-11-13T12:00"))
+    assert ("nhl_scores", f"the newest read of {previous} failed") in reasons
+    assert [r for r in reasons if old in r[1]] == []
+    assert training_gaps(store, utc("2028-11-13T12:00")) == [
+        f"nhl_scores: {old} failed in every read; "
+        "its day is outside the scored, current, and previous seasons"
+    ]
