@@ -3,6 +3,8 @@
 import importlib.util
 import json
 import math
+import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
@@ -42,7 +44,7 @@ def _load_shards() -> ModuleType:
 shards = _load_shards()
 
 
-def _meta(path: Path, codes: dict[str, int | None], estimated: dict[str, float]) -> None:
+def _meta(path: Path, codes: Mapping[str, object], estimated: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"exit_code_by_key": codes, "estimated_durations_by_key": estimated}),
@@ -134,7 +136,7 @@ def test_the_command_writes_the_list_and_names_the_count(
     argv = ["--mutants", str(tmp_path / "m"), "--pyproject", str(pyproject), "--out", str(out)]
     assert timeouts.main(argv) == 0
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert data["timeout_multiplier"] == 3.0 and data["timeout_constant"] == 1.0
+    assert list(data) == ["timeouts"]
     assert data["timeouts"] == [{"mutant": "m.x_f__mutmut_1", "estimated_s": 3.2, "limit_s": 26}]
     assert "1 timed-out mutant" in capsys.readouterr().err
 
@@ -181,3 +183,121 @@ def test_the_list_reads_the_meta_file_that_mutmut_writes(
     assert timeouts.collect(tmp_path / "mutants", 3.0, 1.0) == [
         {"mutant": "m.x_f__mutmut_1", "estimated_s": 4.0, "limit_s": 30}
     ]
+
+
+def test_the_defaults_are_the_ones_mutmut_uses_when_the_table_names_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mutmut import configuration
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mutants").mkdir()
+    (tmp_path / "pyproject.toml").write_text('[tool.mutmut]\nsource_paths = ["src"]\n', "utf-8")
+    loaded = configuration._load_config()
+    assert (timeouts.DEFAULT_MULTIPLIER, timeouts.DEFAULT_CONSTANT) == (
+        loaded.timeout_multiplier,
+        loaded.timeout_constant,
+    )
+
+
+@given(
+    estimated=st.floats(min_value=0.0, max_value=5000.0),
+    constant=st.floats(min_value=0.0, max_value=100.0),
+    multiplier=st.floats(min_value=0.0, max_value=20.0),
+    more=st.floats(min_value=0.0, max_value=100.0),
+)
+def test_the_limit_follows_the_mutmut_formula_for_any_constant(
+    estimated: float, constant: float, multiplier: float, more: float
+) -> None:
+    limit = timeouts.cpu_limit(estimated, multiplier, constant)
+    assert limit == math.ceil((estimated + constant) * multiplier * 2)
+    assert timeouts.cpu_limit(estimated, multiplier, constant + more) >= limit
+    assert timeouts.cpu_limit(estimated, multiplier + more, constant) >= limit
+
+
+_NUMBER = st.one_of(
+    st.integers(min_value=-5, max_value=50),
+    st.floats(allow_nan=True, allow_infinity=True),
+    st.just(True),
+    st.text(max_size=3),
+    st.lists(st.integers(), max_size=2),
+)
+
+
+def _toml(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and math.isnan(value):
+        return "nan"
+    if isinstance(value, float) and math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    return json.dumps(value)
+
+
+@given(multiplier=_NUMBER, constant=_NUMBER)
+def test_the_limits_are_finite_numbers_of_zero_or_more_or_an_error(
+    multiplier: object, constant: object
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "p.toml"
+        path.write_text(
+            f"[tool.mutmut]\ntimeout_multiplier = {_toml(multiplier)}\n"
+            f"timeout_constant = {_toml(constant)}\n",
+            encoding="utf-8",
+        )
+        try:
+            got = timeouts.read_limits(path)
+        except timeouts.InputError:
+            return
+    for value, number in zip((multiplier, constant), got, strict=True):
+        assert isinstance(value, int | float) and not isinstance(value, bool)
+        assert math.isfinite(number) and number >= 0 and number == float(value)
+
+
+_CODES = st.one_of(st.none(), st.sampled_from([0, 1, 3, 5, 36, 24, -24, 152, 255]), st.just([1]))
+_ESTIMATE = st.one_of(
+    st.floats(min_value=0.0, max_value=900.0),
+    st.just(float("nan")),
+    st.just(float("inf")),
+    st.just(-1.0),
+    st.just(None),
+)
+
+
+@given(
+    files=st.lists(
+        st.dictionaries(
+            st.text("abcdef_.", min_size=1, max_size=8), st.tuples(_CODES, _ESTIMATE), max_size=5
+        ),
+        max_size=3,
+    )
+)
+def test_the_list_holds_exactly_the_timed_out_mutants_or_names_a_bad_estimate(
+    files: list[dict[str, tuple[int | list[int] | None, float | None]]],
+) -> None:
+    expected = []
+    broken = False
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        for index, entries in enumerate(files):
+            codes = {f"{index}.{name}": code for name, (code, _) in entries.items()}
+            estimates = {
+                f"{index}.{name}": estimate
+                for name, (_, estimate) in entries.items()
+                if estimate is not None
+            }
+            _meta(root / f"f{index}.py.meta", codes, estimates)
+            for name, (code, estimate) in entries.items():
+                if not isinstance(code, int) or code not in timeouts.TIMEOUT_EXIT_CODES:
+                    continue
+                if estimate is None or not math.isfinite(estimate) or estimate < 0:
+                    broken = True
+                else:
+                    expected.append(f"{index}.{name}")
+        if broken:
+            with pytest.raises(timeouts.InputError):
+                timeouts.collect(root, 3.0, 1.0)
+            return
+        found = timeouts.collect(root, 3.0, 1.0)
+    assert [item["mutant"] for item in found] == sorted(expected)
+    assert all(item["limit_s"] >= 6 for item in found)

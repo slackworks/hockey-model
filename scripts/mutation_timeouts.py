@@ -8,14 +8,14 @@ mutmut stops a mutant at a CPU limit of ``ceil((estimated + timeout_constant) *
 timeout_multiplier * 2)`` seconds, where ``estimated`` is the sum of the per-test durations of
 the tests that reach the mutant. Each run measures those durations again, so the limit moves
 from run to run. The list lets a reader tell a mutant that hangs from a mutant that sits near
-a limit that moved. Each mutant has its own ``.meta`` file entry with its exit code and its
-estimated time.
+a limit that moved. The ``.meta`` files that mutmut writes hold the exit code and the
+estimated time of each mutant.
 
 Usage: uv run python3 scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json \
     [--mutants mutants] [--pyproject pyproject.toml]
 
-The output file is JSON: ``timeout_multiplier``, ``timeout_constant``, and ``timeouts``, a
-list of ``{"mutant", "estimated_s", "limit_s"}`` sorted by mutant name. Diagnostics go to
+The output file is JSON with one key, ``timeouts``: a list of ``{"mutant", "estimated_s",
+"limit_s"}`` sorted by mutant name. Diagnostics go to
 stderr. Exit 0 on success, 1 for input that cannot be read, 2 for a bad argument.
 """
 
@@ -50,8 +50,11 @@ def read_limits(pyproject: Path) -> tuple[float, float]:
         ("timeout_constant", DEFAULT_CONSTANT),
     ):
         value = table.get(key, default)
-        if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
-            raise InputError(f"{pyproject}: [tool.mutmut] {key} must be a number of 0 or more")
+        number = isinstance(value, int | float) and not isinstance(value, bool)
+        if not number or not math.isfinite(value) or value < 0:
+            raise InputError(
+                f"{pyproject}: [tool.mutmut] {key} must be a finite number of 0 or more"
+            )
         values.append(float(value))
     return values[0], values[1]
 
@@ -81,10 +84,11 @@ def collect(mutants: Path, multiplier: float, constant: float) -> list[dict[str,
     for path in sorted(mutants.rglob("*.meta")):
         codes, estimated = _read_meta(path)
         for name, code in codes.items():
-            if code not in TIMEOUT_EXIT_CODES:
+            if not isinstance(code, int) or code not in TIMEOUT_EXIT_CODES:
                 continue
             seconds = estimated.get(name)
-            if isinstance(seconds, bool) or not isinstance(seconds, int | float) or seconds < 0:
+            valid = isinstance(seconds, int | float) and not isinstance(seconds, bool)
+            if not valid or not math.isfinite(seconds) or seconds < 0:
                 raise InputError(
                     f"{path}: the timed-out mutant {name} has no estimated time; "
                     "run mutmut again so the stats are written"
@@ -116,8 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     except InputError as error:
         print(f"mutation-timeouts: {error}", file=sys.stderr)
         return 1
-    payload = {"timeout_multiplier": multiplier, "timeout_constant": constant, "timeouts": timeouts}
-    args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    args.out.write_text(json.dumps({"timeouts": timeouts}, indent=2) + "\n", encoding="utf-8")
     print(f"mutation-timeouts: {len(timeouts)} timed-out mutant(s)", file=sys.stderr)
     return 0
 
