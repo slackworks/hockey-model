@@ -6,9 +6,12 @@ home win rate, and the results-only Elo.
 
 import math
 import sqlite3
+import sys
+import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from hockey_model.backtest.eligibility import SeasonCount, ineligibility_reasons, season_counts
 from hockey_model.backtest.game_records import GameRecord
@@ -21,6 +24,7 @@ from hockey_model.backtest.metrics import (
     log_loss,
     per_game_log_loss,
 )
+from hockey_model.backtest.units import Unit, database_path, open_read_only, run_units
 from hockey_model.game_model.features import FEATURES, GOALIE_FEATURE, GoalieMode
 from hockey_model.game_model.imputation import (
     ImputationLimitError,
@@ -55,6 +59,9 @@ MODEL_GUESS = "model_guess"
 RECORDED_RUNS = (ELO, MODEL_ACTUAL, MODEL_GUESS)
 # A feature is vetoed only when it is worse by more than rounding error.
 VETO_TOLERANCE = 1e-9
+# The wall time to meet with 2 or more workers on the real store: the longest unit, the guess
+# feature build (3251 s measured), plus the merge and a margin. Table: docs/design/backtest-speed.md
+PARALLEL_TARGET_S = 3400
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +131,23 @@ def _loss(fit: LogisticFit, rows: Sequence[TrainingRow]) -> float:
     return log_loss([predict_logistic(fit, r.features) for r in rows], _wins(rows))
 
 
+def _validation_unit(
+    train: Sequence[TrainingRow],
+    validate_actual: Sequence[TrainingRow],
+    validate_guess: Sequence[TrainingRow],
+    features: Sequence[str],
+) -> dict[str, float] | None:
+    """Fit on the training seasons and score the validation seasons. None means refused."""
+    try:
+        fit = _fit(train, features)
+    except ImputationLimitError:
+        # The Elo alone is never refused: it has no feature to impute.
+        if not features:
+            raise
+        return None
+    return {"actual": _loss(fit, validate_actual), "guess": _loss(fit, validate_guess)}
+
+
 def _validate(
     actual: Sequence[TrainingRow],
     guess: Sequence[TrainingRow],
@@ -134,7 +158,8 @@ def _validate(
 
     Each fit uses the training seasons with the goalie who started. It is scored with that
     goalie ("actual") and with the guessed goalie ("guess"). A feature is vetoed when its
-    guess score is worse than the Elo alone.
+    guess score is worse than the Elo alone. Each fit is a named unit. Each takes a fraction of a
+    second on the real store, so they run in this process (docs/design/backtest-speed.md).
     """
     train = _in(actual, *plan.select_train)
     validate_actual = _in(actual, *plan.select_validate)
@@ -144,22 +169,20 @@ def _validate(
             f"backtest: no games in the selection seasons {plan.select_train} and "
             f"{plan.select_validate}; run `hockey-model refresh --backfill-from 2014-10-01`"
         )
+    jobs = [(ELO, ()), *[(f"{ELO}+{f}", (f,)) for f in candidates]]
+    units = [
+        Unit(f"validate {name}", _validation_unit, (train, validate_actual, validate_guess, fs))
+        for name, fs in jobs
+    ]
     validation: dict[str, dict[str, float]] = {}
     # A candidate above the imputation limit is vetoed, so one such feature does not stop the
-    # run. The Elo alone is never refused: it has no feature to impute.
+    # run.
     refused: set[str] = set()
-    for name, features in [(ELO, ()), *[(f"{ELO}+{f}", (f,)) for f in candidates]]:
-        try:
-            fit = _fit(train, features)
-        except ImputationLimitError:
-            if not features:
-                raise
+    for (name, features), result in zip(jobs, run_units(units, 1), strict=True):
+        if result is None:
             refused.update(features)
-            continue
-        validation[name] = {
-            "actual": _loss(fit, validate_actual),
-            "guess": _loss(fit, validate_guess),
-        }
+        else:
+            validation[name] = result
     refused |= _refused_in_windows(actual, plan, [f for f in candidates if f not in refused])
     baseline = validation[ELO]["guess"]
     vetoed = tuple(
@@ -206,6 +229,22 @@ def _refused_in_windows(
     return refused
 
 
+def _season_fit(
+    season: int, fit_rows: Sequence[TrainingRow], tested: Sequence[str]
+) -> tuple[int, LogisticFit, float]:
+    """Fit on the rows before ``season``. Return the fit and the home win rate of those rows."""
+    return season, _fit(fit_rows, tested), sum(_wins(fit_rows)) / len(fit_rows)
+
+
+def merge_scored(parts: Sequence[_Scored]) -> list[_Scored]:
+    """Order scored games by season, then start, then game ID.
+
+    The block bootstrap depends on the order of its input, so every merge of units uses this
+    order, whatever order the units finished in.
+    """
+    return sorted(parts, key=lambda g: (g.row.game.season, g.row.game.start, g.row.game.game_id))
+
+
 def _score_seasons(
     actual: Sequence[TrainingRow],
     guess: Sequence[TrainingRow],
@@ -216,9 +255,12 @@ def _score_seasons(
     by_game = {r.game.game_id: r for r in guess}
     scored: list[_Scored] = []
     cohort = [r for r in actual if in_cohort(r.game, plan)]
-    for season, fit_rows in _fit_windows(actual, plan):
-        fit = _fit(fit_rows, tested)
-        home_rate = sum(_wins(fit_rows)) / len(fit_rows)
+    windows = _fit_windows(actual, plan)
+    units = [
+        Unit(f"walk-forward fit before season {season}", _season_fit, (season, rows, tested))
+        for season, rows in windows
+    ]
+    for season, fit, home_rate in run_units(units, 1):
         for row in [r for r in cohort if r.game.season == season]:
             scored.append(
                 _Scored(
@@ -231,14 +273,16 @@ def _score_seasons(
                     },
                 )
             )
-    return scored
+    return merge_scored(scored)
 
 
 def _scored_run(
-    name: str, games: Sequence[_Scored], elo_losses: Sequence[float], tail: float
+    name: str,
+    probs: Sequence[float],
+    wins: Sequence[bool],
+    elo_losses: Sequence[float],
+    tail: float,
 ) -> ScoredRun:
-    probs = [g.by_run[name] for g in games]
-    wins = [g.row.home_won for g in games]
     ci = None
     mean_diff = None
     if name != ELO:
@@ -249,7 +293,7 @@ def _scored_run(
         mean_diff = sum(diffs) / len(diffs)
     return ScoredRun(
         name,
-        len(games),
+        len(probs),
         log_loss(probs, wins),
         brier(probs, wins),
         calibration(probs, wins),
@@ -334,10 +378,16 @@ def _build_report(
     validation, vetoed = scoring
     wins = [g.row.home_won for g in games]
     elo_losses = per_game_log_loss([g.by_run[ELO] for g in games], wins)
-    runs = tuple(
-        _scored_run(name, games, elo_losses, plan.interval_tail)
-        for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
-    )
+    names = (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
+    units = [
+        Unit(
+            f"score {name}",
+            _scored_run,
+            (name, [g.by_run[name] for g in games], wins, elo_losses, plan.interval_tail),
+        )
+        for name in names
+    ]
+    runs = tuple(run_units(units, 1))
     coverage = season_counts(conn, ((g.row.game.season, g.row.game.game_type) for g in games), plan)
     reasons = ineligibility_reasons(coverage, len(games))
     model = next(r for r in runs if r.name == MODEL_ACTUAL)
@@ -364,11 +414,30 @@ def _build_report(
     )
 
 
+def _build_rows(
+    source: sqlite3.Connection | Path,
+    first: int,
+    last: int,
+    mode: GoalieMode,
+    burn_in: int,
+    names: Sequence[str],
+) -> list[TrainingRow]:
+    """Build the feature rows. A worker passes the store path and reads its own connection."""
+    if isinstance(source, sqlite3.Connection):
+        return training_rows(source, first, last, mode, burn_in, names=names)
+    conn = open_read_only(source)
+    try:
+        return training_rows(conn, first, last, mode, burn_in, names=names)
+    finally:
+        conn.close()
+
+
 def run_backtest(
     conn: sqlite3.Connection,
     plan: SeasonPlan = DEFAULT_PLAN,
     *,
     candidates: Sequence[str],
+    workers: int = 1,
 ) -> tuple[BacktestReport, list[GameRecord]]:
     """Run the walk-forward backtest on the stored games.
 
@@ -376,10 +445,24 @@ def run_backtest(
     per-game log loss of the model minus that of the Elo, with the goalie who started,
     is below zero. The guess run never changes success. Success also needs a covered
     cohort and enough independent blocks; see ``BacktestReport.eligible``.
+
+    The two feature builds, the fits, and the bootstrap runs are named units, and each logs
+    its wall time. ``workers`` above 1 runs the two builds in worker processes, each with its
+    own read-only store connection, because they take more than 99.9% of the time. The report
+    and the records are the same for every worker count.
     """
+    started = time.monotonic()
     first, last = plan.fit_first, plan.scored[1]
-    actual = training_rows(conn, first, last, GoalieMode.ACTUAL, plan.burn_in, names=candidates)
-    guess = training_rows(conn, first, last, GoalieMode.GUESS, plan.burn_in, names=candidates)
+    source = database_path(conn) if workers > 1 else conn
+    builds = [
+        Unit(
+            f"build {mode.value} rows",
+            _build_rows,
+            (source, first, last, mode, plan.burn_in, candidates),
+        )
+        for mode in (GoalieMode.ACTUAL, GoalieMode.GUESS)
+    ]
+    actual, guess = run_units(builds, workers)
     scoring = _validate(actual, guess, plan, candidates)
     tested = tuple(f for f in candidates if f not in scoring[1])
     games = _score_seasons(actual, guess, tested, plan)
@@ -388,4 +471,11 @@ def run_backtest(
             f"backtest: no games in the scored {scored_label(plan)}; "
             "run `hockey-model refresh --backfill-from 2014-10-01`"
         )
-    return _build_report(conn, plan, candidates, scoring, tested, games), _records(games)
+    report = _build_report(conn, plan, candidates, scoring, tested, games)
+    elapsed = time.monotonic() - started
+    print(
+        f"backtest: total {elapsed:.1f}s with {workers} worker(s); the target with 2 or more "
+        f"workers is {PARALLEL_TARGET_S}s on the real store",
+        file=sys.stderr,
+    )
+    return report, _records(games)

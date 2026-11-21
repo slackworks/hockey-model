@@ -89,6 +89,13 @@ def _add_backtest(parser: argparse.ArgumentParser) -> None:
         default="xg",
         help="xg: the production candidates; attempt: xg_form replaced by attempt_form (#77)",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run the independent fits and builds in up to N processes; the output does not change",
+    )
 
 
 def _add_daily(parser: argparse.ArgumentParser) -> None:

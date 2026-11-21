@@ -15,7 +15,9 @@
 # skips what it already read. A budget that stops the backfill before it reads one older
 # day or game, not counting the last two days, exits with code 1, and the message names
 # --budget-seconds: raise BACKFILL_BUDGET_S. The backtest files and a prepared-DATE
-# marker go next to the store, where daily-report.sh finds them. Any failed step stops
+# marker go next to the store, where daily-report.sh finds them. The backtest runs its
+# independent fits and builds in BACKTEST_WORKERS processes (default 4, the cores of a
+# GitHub runner), and the output does not change with the count. Any failed step stops
 # the script with its exit code, so a failed run writes no marker.
 set -euo pipefail
 
@@ -144,7 +146,8 @@ shopt -u nullglob
 
 # The backtest writes beside the final names. The final files and the marker change only after
 # the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
-uv run hockey-model backtest --games-out "$backtest_games.new" >"$backtest_json.new"
+uv run hockey-model backtest --games-out "$backtest_games.new" \
+  --workers "${BACKTEST_WORKERS:-4}" >"$backtest_json.new"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.
 if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json.new")"; then
