@@ -150,7 +150,11 @@ def fakes(tmp_path: Path) -> Path:
         '  exec "$FAKE_REAL_UV" "$@"\n'
         "fi\n"
         'if [[ "$*" == "run hockey-model backtest --games-out "* ]]; then\n'
+        '  if [[ -n "${FAKE_BACKTEST_FAIL:-}" ]]; then echo "backtest boom" >&2; exit 4; fi\n'
         '  echo "game_id,elo" > "$5"; printf "%s\\n" "$FAKE_BACKTEST_JSON"\n'
+        "fi\n"
+        'if [[ "$*" == "run hockey-model fit "* && -n "${FAKE_FIT_FAIL:-}" ]]; then\n'
+        '  echo "fit boom" >&2; exit 5\n'
         "fi\n"
         "exit 0\n",
         encoding="utf-8",

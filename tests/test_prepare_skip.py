@@ -7,6 +7,7 @@ import pytest
 from report_script_support import DAY, LIVE, _calls, _env, _run, store_path
 
 OTHER_DAY = "2026-11-05"
+EARLIER_DAY = "2026-11-01"
 SKIP_WORDS = f"{DAY} is already prepared"
 
 
@@ -112,3 +113,57 @@ def test_prepare_help_names_force(fakes: Path, tmp_path: Path) -> None:
     result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--help")
     assert result.returncode == 0
     assert "--force" in result.stdout
+
+
+def test_a_run_for_a_past_day_keeps_the_files_of_today(fakes: Path, tmp_path: Path) -> None:
+    """A manual run for an earlier day must not remove the marker of a later day."""
+    _prepare_day(tmp_path, day=OTHER_DAY)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    store_dir = _store_dir(tmp_path)
+    assert (store_dir / f"prepared-{OTHER_DAY}").exists()
+    assert (store_dir / f"backtest-{OTHER_DAY}.json").exists()
+
+
+def test_a_run_removes_the_files_of_earlier_days(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path, day=EARLIER_DAY)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    store_dir = _store_dir(tmp_path)
+    assert not (store_dir / f"prepared-{EARLIER_DAY}").exists()
+    assert not (store_dir / f"backtest-{EARLIER_DAY}.json").exists()
+
+
+@pytest.mark.parametrize("failing", ["FAKE_BACKTEST_FAIL", "FAKE_FIT_FAIL"])
+def test_a_failed_forced_rebuild_keeps_the_prepared_day(
+    fakes: Path, tmp_path: Path, failing: str
+) -> None:
+    _prepare_day(tmp_path)
+    env = _prepare_env(fakes, tmp_path) | {failing: "1"}
+    result = _run("daily-prepare.sh", env, "--date", DAY, "--force")
+    assert result.returncode != 0
+    store_dir = _store_dir(tmp_path)
+    assert (store_dir / f"prepared-{DAY}").exists()
+    assert json.loads((store_dir / f"backtest-{DAY}.json").read_text(encoding="utf-8")) == {
+        "live_features": LIVE
+    }
+
+
+def test_a_rebuild_replaces_the_backtest_files(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path, backtest=json.dumps({"live_features": ["old"]}))
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--force")
+    assert result.returncode == 0, result.stderr
+    store_dir = _store_dir(tmp_path)
+    assert json.loads((store_dir / f"backtest-{DAY}.json").read_text(encoding="utf-8")) == {
+        "live_features": LIVE
+    }
+    assert (store_dir / f"backtest-games-{DAY}.csv").exists()
+    assert not list(store_dir.glob("*.new"))
+
+
+def test_a_backtest_that_will_not_parse_names_the_parse_error(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path, backtest="{not json")
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert "has no live_features list of names (" in result.stderr
+    assert "parse error" in result.stderr.lower()
