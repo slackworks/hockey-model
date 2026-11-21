@@ -28,6 +28,11 @@ case "${1:-}" in
   ;;
 esac
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "check-live-feeds: jq is not on PATH; install jq" >&2
+  exit 1
+fi
+
 report="$(uv run hockey-model store gaps --live)" || {
   echo "check-live-feeds: 'store gaps --live' failed; its error is above" >&2
   exit 1

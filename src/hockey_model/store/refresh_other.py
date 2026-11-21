@@ -171,11 +171,11 @@ def _attempt_live(run: RefreshRun, source: str, url: str, unit: Callable[[dateti
     ``stale_sources`` still names the feed, because it counts a failed single feed at any age.
     """
     was_gap = url in run.skipped(source)
+    errors_before = len(run.errors)
     if run.attempt(source, url, unit) or not was_gap:
         return
-    # ``attempt`` appends exactly one error on a failure and leaves ``run`` untouched after that,
-    # so the last error is the one of this read.
-    run.errors.pop()
+    # Drop the errors that this read added, and keep every earlier one.
+    del run.errors[errors_before:]
     run.notes.append(f"{source}: still failing after repeated failed reads; not an error")
 
 

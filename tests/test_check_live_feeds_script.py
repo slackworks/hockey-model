@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -143,3 +144,18 @@ def test_an_unknown_argument_is_refused(fake_uv: Path, tmp_path: Path) -> None:
     result = _run(tmp_path, fake_uv, "", "--now")
     assert result.returncode == 2
     assert "unknown argument '--now'" in result.stderr
+
+
+def test_a_missing_jq_is_named_before_the_command_runs(fake_uv: Path, tmp_path: Path) -> None:
+    # Only the fake bin directory is on PATH, so jq is not found.
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", str(SCRIPT)],
+        cwd=tmp_path,
+        env={"PATH": str(fake_uv), "FAKE_CALLS": str(tmp_path / "calls.log")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "jq is not on PATH" in result.stderr
+    assert not (tmp_path / "calls.log").exists()
