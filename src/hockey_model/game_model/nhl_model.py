@@ -39,7 +39,8 @@ _MIN_RATE = 0.1
 # 3 goals, so the bound is far above any real rate, and well inside the stable range.
 MAX_RATE = 100.0
 # The most steps that the walk to a quantile may take. At MAX_RATE the 1e-12 tail needs fewer
-# than half of them, so a walk that uses all of them is a bug, not a wide interval.
+# than half of them. A walk that uses all of them has a level so close to 1 that the float
+# sum stops below the target.
 MAX_QUANTILE_STEPS = 1000
 
 
@@ -57,7 +58,8 @@ def _poisson_quantile(rate: float, probability: float) -> int:
         if count == MAX_QUANTILE_STEPS:
             raise ProjectionError(
                 f"goal interval: no count up to {MAX_QUANTILE_STEPS} reaches the chance "
-                f"{probability!r} at {rate!r} expected goals; use a lower level or a lower rate"
+                f"{probability!r} at {rate!r} expected goals; the level is too close to 1, "
+                "so use a lower level"
             )
         count += 1
         term *= rate / count
@@ -67,12 +69,13 @@ def _poisson_quantile(rate: float, probability: float) -> int:
 
 def _check_projection_inputs(rate: float, level: float) -> None:
     """Raise ``ProjectionError`` unless the rate and the level are in the supported domain."""
-    if not math.isfinite(rate) or not 0.0 <= rate <= MAX_RATE:
+    # NaN fails every comparison, so the range tests below refuse it as well as an infinity.
+    if not 0.0 <= rate <= MAX_RATE:
         raise ProjectionError(
             f"goal interval: the expected goals {rate!r} are not a finite number from 0 to "
             f"{MAX_RATE:g}; check the goal rates of the team"
         )
-    if not math.isfinite(level) or not 0.0 < level < 1.0:
+    if not 0.0 < level < 1.0:
         raise ProjectionError(
             f"goal interval: the level {level!r} is not inside the open interval (0, 1); "
             "pass a level such as 0.8"
