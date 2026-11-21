@@ -196,6 +196,7 @@ Abstractions, and the reason for each:
    The code uses a date cutoff: the game day of the clock minus `BACKLOG_BEFORE`, which is 2 days.
    The model uses a tick count: a day is recent while `age < CutoffTicks`, and `CutoffTicks` is 4.
    `tests/test_tla_constants.py` ties `CutoffTicks` to `BACKLOG_BEFORE` and `ABANDON_MIN_SPAN_DAYS`.
+   The main config sets one tick, as a reduction of its state space (see the counts under Constants).
    The model counts whole ticks, and the code compares game days, so the two cutoffs agree on the rule and not on every boundary.
    A second run in the same tick, such as a retry after exit 75, sees the same ages as the first run, as it does in the code.
 7. `progress` is what the code counts, and it follows `ArrivalsCount`.
@@ -222,26 +223,37 @@ Abstractions, and the reason for each:
 
 ## Constants
 
-`specs/daily_prepare.cfg` uses: `NWindows = 2`, `DaysPerWindow = 2`, `Budget = 2`, `MaxFails = 1`, `AbandonReads = 2`, `AbandonTicks = 1`, `RetryTicks = 2`, `CutoffTicks = 4`, `OpenDays = {4}`, `BrokenScore = {1}`, `BrokenBox = {3}`, `BlockedScore = {}`, `BlockedBox = {}`, `OtherBroken = FALSE`, `ArrivalsCount = FALSE`, `BacklogFirst = FALSE`.
+`specs/daily_prepare.cfg` uses: `NWindows = 2`, `DaysPerWindow = 2`, `Budget = 2`, `MaxFails = 1`, `AbandonReads = 2`, `AbandonTicks = 1`, `RetryTicks = 2`, `CutoffTicks = 1`, `OpenDays = {4}`, `BrokenScore = {1}`, `BrokenBox = {3}`, `BlockedScore = {}`, `BlockedBox = {}`, `OtherBroken = FALSE`, `ArrivalsCount = FALSE`, `BacklogFirst = FALSE`.
 Day 1 is the oldest day, so window 1 holds days 3 and 4, and day 4 is open.
+The main config cuts the cutoff to one tick, so a day is recent only in the tick that it closes.
+The code cutoff, `CutoffTicks = 4`, gives 62,897,214 distinct states in this config, which is 2.3 times as many (see the counts below).
+The other configs use the code cutoff.
 
-`specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, and the other constants as above.
+`specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
 
-`specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, and the other constants as above.
-TLC finds 11,338 distinct states in it, and every property of the main config holds.
+`specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, `CutoffTicks = 4`, and the other constants as above.
+TLC finds 31,586 distinct states in it, and every property of the main config holds.
 
-With these values, TLC finds 27,181,712 distinct states in the first model, and 295,722 in the stall model.
-Before the arrival step, the counts were 4,000,218 and 16,050.
-The arrival step, the `arrived` set, and the `backlog` flag multiply the state space.
-The first model took 29 minutes 21 seconds with `-workers auto` on the development machine in the #186 run.
-After #189 removed `noted` and #279 added `Blocked`, TLC found the same 27,181,712 distinct states in the first model, and it passed every property in 19 minutes 59 seconds.
-The stall model passed in 12 seconds, and the blocked model passed in 1 second.
-Other checks ran on the same machine during that run, so the figure is an upper bound.
+`specs/daily_prepare_false_stall.cfg` is the stall config with the property list changed.
+It names `StallOnlyForBacklog` and not the properties of the main config, and it has `CutoffTicks = 4`.
+TLC violates the property in it (finding 8), so `scripts/tlc.sh` runs it last and expects the violation.
+
+With these values, TLC finds 27,285,528 distinct states in the first model, and 692,896 in the stall model.
+Before the age model (#191), the counts were 27,181,712 and 295,722.
+Before the arrival step, they were 4,000,218 and 16,050.
+The arrival step, the `backlog` flag, and then the age of each day multiply the state space.
+The first model passed every property in 20 minutes 21 seconds with `-workers auto` on an idle development machine: the search took 11 minutes 25 seconds, and the liveness check took the rest.
+The stall model passed in 24 seconds, and the blocked model passed in 1 second.
+With `CutoffTicks = 4` in the first model, TLC found 62,897,214 distinct states and passed every property in 53 minutes 6 seconds, while other work ran on the same machine.
+That is more than the 60 minute limit of the `tla` job allows on a runner, so the first model keeps the one-tick cutoff.
+The stall model, the blocked model, and the known-failure model check the code cutoff.
+The cut is a reduction of the state space and not a proof that a longer cutoff changes no result: #188 owns the preservation argument.
+After #189 removed `noted` and #279 added `Blocked`, the first model took 19 minutes 59 seconds for 27,181,712 states.
+Other checks ran on the same machine during some of these runs, so a figure is an upper bound.
 The `tla` CI job time for the same spec is the cleaner figure.
 The earlier figure, 3 minutes 14 seconds, was on a 10-core Mac, so the two times are not a controlled comparison.
 The `tla` CI job ran 30 minutes and was cancelled by its timeout during the liveness check: the search took 29 minutes on the runner.
 The job limit is now 60 minutes as a stopgap, and #188 tracks the reduction.
-#188 tracks the reduction.
 The liveness check of the full graph runs on one thread, so more workers speed up only the search.
 
 `tests/test_tla_constants.py` keeps the values of every `.cfg` file in step with the code:
@@ -250,7 +262,8 @@ The liveness check of the full graph runs on one thread, so more workers speed u
 2. `AbandonTicks == 1`.
 3. `timedelta(days=ABANDON_MIN_SPAN_DAYS) * RetryTicks == RETRY_FAILED_AFTER`. If this is not exact, the test fails and names both constants.
 4. `1 <= MaxFails <= MAX_UNIT_FAILURES`.
-5. `timedelta(days=ABANDON_MIN_SPAN_DAYS) * CutoffTicks == BACKLOG_BEFORE`.
+5. `timedelta(days=ABANDON_MIN_SPAN_DAYS) * CutoffTicks == BACKLOG_BEFORE`, for every config but the main config.
+   The main config needs `1 <= CutoffTicks` and a span that does not pass `BACKLOG_BEFORE`.
 
 The test reads the `CONSTANTS` block of the `.cfg` file with one shape regex for each line, `^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$`.
 It then checks in code that each needed value is an integer, as `rules/regex-validation.md` says.
@@ -259,13 +272,15 @@ A missing or non-integer constant fails the test with a message that names the c
 ### Smaller configs (#185, partial)
 
 Sweep with `ArrivalsCount = FALSE`, all properties on, and 4 workers for each run.
+The two middle rows are from before the age model (#191) and were not run again.
 
 | Config | Distinct states | Time |
 | --- | --- | --- |
-| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`) | 295,722 | 12 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`, with the age model) | 692,896 | 24 s |
 | `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 10,982 | 1 s |
 | `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,504,428 | 1 min 35 s |
-| Full `.cfg` | 27,181,712 | 29 min 21 s (upper bound) |
+| Full `.cfg` (`CutoffTicks = 1`) | 27,285,528 | 20 min 21 s |
+| Full `.cfg` with `CutoffTicks = 4` | 62,897,214 | 53 min 6 s (upper bound) |
 
 Every config in the sweep passes.
 The full config is not yet replaced in CI.
@@ -350,6 +365,8 @@ The first one was a limit of the code. Issue #178 fixed it.
    #302 tracks the code fix.
    The config stays as a known failure.
    `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 cannot leave the config behind.
+The script checks the name of the property and not the trace, so any counterexample of that property counts.
+A pinned trace length would break at every edit of the spec.
 
 ## Files to add or change
 
@@ -468,7 +485,7 @@ Run `actionlint` and `zizmor` on the file.
 
 ## Verification
 
-1. `bash scripts/tlc.sh` passes locally, with 4,000,218 distinct states in the first model and 16,050 in the stall model.
+1. `bash scripts/tlc.sh` passes locally. The counts of each config are under Constants.
 2. Run each break test in "Properties" on a scratch copy of the spec, outside the repository.
    Confirm that TLC fails with the listed result.
    Do not commit the broken copies.
@@ -873,7 +890,7 @@ CONSTANTS
     AbandonReads = 2
     AbandonTicks = 1
     RetryTicks = 2
-    CutoffTicks = 4
+    CutoffTicks = 1
     OpenDays = {4}
     BrokenScore = {1}
     BrokenBox = {3}
