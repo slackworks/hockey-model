@@ -59,7 +59,7 @@ RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_ke
 # duration does not hold. Shards 2 and 3 below have the same shape, at 1.8s and 1.3s per
 # mutant, so read their minutes as a floor and keep the margin at the step limit.
 SHARDS: tuple[tuple[str, ...], ...] = (
-    ("experiments.models",),
+    ("experiments.models", "json_schema"),
     ("backtest.metrics",),
     ("sources.nhl", "sources.http", "sources.payload"),
     (

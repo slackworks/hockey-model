@@ -8,7 +8,7 @@ The owner decision and the work plan are in the issue body. This design adds wha
 ## Before the first commit
 
 1. Run `trash mutants` when the directory exists, then `uv run mutmut run`, then `uv run mutmut results`. Write the count of each module in the issue. The counts in the issue body are out of date.
-2. The modules are now: `backtest/metrics.py`, `experiments/models.py`, `game_model/elo.py`, `game_model/logistic.py`, and `sources/*.py`. Read `pyproject.toml` again, because the list can change.
+2. The modules are now: `backtest/metrics.py`, `experiments/models.py`, `game_model/elo.py`, `game_model/logistic.py`, `json_schema.py`, and `sources/*.py`. Read `pyproject.toml` again, because the list can change.
 3. Prove the pragma form on a scratch copy: add `# pragma: no mutate` to one line of a copy of a small module in `.tmp/`, point a scratch `[tool.mutmut]` at it, and check that `mutmut` makes no mutant of that line. Write the form that worked in the first commit message.
 4. Run `uv run mutmut run "hockey_model.<module>.*"` for one module at a time. The pattern form is the one `scripts/mutation_shards.py` prints.
 
