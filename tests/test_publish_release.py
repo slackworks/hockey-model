@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from mutation_copy import require_path
 from report_script_support import _calls, _env, _run
 
@@ -304,3 +306,47 @@ def test_an_existing_release_keeps_its_notes_and_the_run_says_so(
     assert result.returncode == 0, result.stderr
     assert "its notes and pre-release flag stay as they are" in result.stderr
     assert not any(c.startswith("gh release edit") for c in _calls(tmp_path))
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    on_release=st.fixed_dictionaries({WHEEL: st.booleans(), SDIST: st.booleans()}),
+    same=st.fixed_dictionaries({WHEEL: st.booleans(), SDIST: st.booleans()}),
+)
+def test_the_publish_rule_holds_for_any_set_of_files_already_on_the_release(
+    fakes: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    on_release: dict[str, bool],
+    same: dict[str, bool],
+) -> None:
+    work = tmp_path_factory.mktemp("rule")
+    build(work)
+    remote_dir = work / "remote"
+    remote_dir.mkdir()
+    for name, body in ((WHEEL, b"wheel bytes"), (SDIST, b"sdist bytes")):
+        (remote_dir / name).write_bytes(body if same[name] else b"other")
+    names = [name for name, there in on_release.items() if there]
+    result = publish(
+        fakes,
+        work,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS="\n".join(names),
+        FAKE_REMOTE_DIR=str(remote_dir),
+    )
+    calls = _calls(work)
+    uploads = [c for c in calls if c.startswith("gh release upload")]
+    collision = any(same[name] is False for name in names)
+    assert (result.returncode == 1) == collision
+    if collision:
+        assert uploads == []
+        return
+    missing = [name for name in (WHEEL, SDIST) if name not in names]
+    assert (len(uploads) == 1) == bool(missing)
+    for name in missing:
+        assert name in uploads[0]
+    for name in names:
+        assert not uploads or name not in uploads[0]
