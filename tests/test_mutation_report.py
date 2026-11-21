@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import tempfile
 from pathlib import Path
 from types import ModuleType
 
@@ -489,3 +490,187 @@ def test_a_real_export_with_a_suspicious_mutant_fails_the_run(tmp_path: Path) ->
     path.write_text(json.dumps(export), encoding="utf-8")
     stats = report.read_stats(path)
     assert report.decide(stats, "success", 524) == report.STATUS_FAILED
+
+
+def _write_timeouts(path: Path, count: int) -> Path:
+    items = [
+        {"mutant": f"m.x_f__mutmut_{n}", "estimated_s": 3.2, "limit_s": 26} for n in range(count)
+    ]
+    path.write_text(
+        json.dumps({"timeout_multiplier": 3.0, "timeout_constant": 1.0, "timeouts": items}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_timeout_section_lists_each_mutant_with_its_estimate_and_limit(tmp_path: Path) -> None:
+    section = report.timeouts_section(_write_timeouts(tmp_path / "t.json", 2))
+    assert "- `m.x_f__mutmut_0`: estimated 3.2 s, limit 26 s" in section
+    assert "- `m.x_f__mutmut_1`: estimated 3.2 s, limit 26 s" in section
+    assert "moves from run to run" in section
+
+
+def test_a_run_without_a_timeout_has_no_timeout_section(tmp_path: Path) -> None:
+    assert report.timeouts_section(_write_timeouts(tmp_path / "t.json", 0)) == ""
+
+
+@given(count=st.integers(min_value=0, max_value=60))
+def test_the_section_shows_at_most_the_cap_and_counts_the_rest(count: int) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        section = report.timeouts_section(_write_timeouts(Path(directory) / "t.json", count))
+    shown = section.count("\n- `")
+    assert shown == min(count, report.TIMEOUT_LIST_CAP)
+    more = count - report.TIMEOUT_LIST_CAP
+    assert (f"and {more} more" in section) == (more > 0)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["not json", "[]", '{"timeouts": 3}', '{"timeouts": [{"mutant": "m"}]}'],
+)
+def test_a_timeout_file_that_cannot_be_read_is_named_in_the_section(
+    tmp_path: Path, text: str
+) -> None:
+    path = tmp_path / "t.json"
+    path.write_text(text, encoding="utf-8")
+    section = report.timeouts_section(path)
+    assert "The list of timed-out mutants could not be read" in section
+
+
+def test_a_missing_timeout_file_is_named_in_the_section(tmp_path: Path) -> None:
+    section = report.timeouts_section(tmp_path / "none.json")
+    assert "The list of timed-out mutants could not be read" in section
+
+
+def test_the_status_command_adds_the_section_and_keeps_the_status(tmp_path: Path) -> None:
+    stats = _write_stats(tmp_path / "stats.json")
+    out = tmp_path / "body.md"
+    plain = report.main(
+        ["status", "--stats", str(stats), "--execution", "success", "--out", str(out)]
+        + ["--run-url", "https://example.test/run"]
+    )
+    assert plain == 0 and "Timed-out mutants" not in out.read_text(encoding="utf-8")
+    listed = tmp_path / "timeouts.json"
+    _write_timeouts(listed, 1)
+    code = report.main(
+        ["status", "--stats", str(stats), "--execution", "success", "--out", str(out)]
+        + ["--run-url", "https://example.test/run", "--timeouts", str(listed)]
+    )
+    assert code == 0
+    assert "- `m.x_f__mutmut_0`" in out.read_text(encoding="utf-8")
+
+
+def test_a_bad_timeout_file_does_not_change_the_status(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stats = _write_stats(tmp_path / "stats.json")
+    base = ["status", "--stats", str(stats), "--execution", "success"]
+    report.main(base)
+    clean = capsys.readouterr().out
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json", encoding="utf-8")
+    out = tmp_path / "body.md"
+    report.main([*base, "--out", str(out), "--run-url", "u", "--timeouts", str(bad)])
+    assert capsys.readouterr().out == clean
+
+
+@pytest.mark.parametrize("name", ["a`b", "a\nb", "@someone", "a b", "", "x" * 301, "[x](y)"])
+def test_a_mutant_name_that_is_not_a_dotted_name_is_refused(tmp_path: Path, name: str) -> None:
+    path = tmp_path / "t.json"
+    item = {"mutant": name, "estimated_s": 1.0, "limit_s": 9}
+    path.write_text(json.dumps({"timeouts": [item]}), encoding="utf-8")
+    assert "could not be read" in report.timeouts_section(path)
+
+
+def test_the_class_mark_of_a_method_name_passes(tmp_path: Path) -> None:
+    name = "hockey_model.mod.x\u01c1Klass\u01c1method__mutmut_3"
+    path = tmp_path / "t.json"
+    item = {"mutant": name, "estimated_s": 1.5, "limit_s": 9}
+    path.write_text(json.dumps({"timeouts": [item]}), encoding="utf-8")
+    assert f"- `{name}`: estimated 1.5 s, limit 9 s" in report.timeouts_section(path)
+
+
+@pytest.mark.parametrize("seconds", ["NaN", "Infinity", "-1", "true", '"3"'])
+def test_an_estimate_that_is_not_a_finite_number_is_refused(tmp_path: Path, seconds: str) -> None:
+    path = tmp_path / "t.json"
+    text = f'{{"timeouts": [{{"mutant": "m.x", "estimated_s": {seconds}, "limit_s": 9}}]}}'
+    path.write_text(text, encoding="utf-8")
+    assert "could not be read" in report.timeouts_section(path)
+
+
+_JSON = st.recursive(
+    st.one_of(st.none(), st.booleans(), st.integers(), st.floats(), st.text(max_size=8)),
+    lambda children: st.one_of(
+        st.lists(children, max_size=3), st.dictionaries(st.text(max_size=8), children, max_size=3)
+    ),
+    max_leaves=12,
+)
+
+
+@given(value=_JSON)
+def test_any_json_gives_text_and_never_a_crash(value: object) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "t.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        assert isinstance(report.timeouts_section(path), str)
+        try:
+            found = report._read_timeouts(path)
+        except ValueError:
+            return
+    assert all(isinstance(name, str) and limit >= 0 for name, _, limit in found)
+
+
+@given(
+    entries=st.lists(
+        st.tuples(
+            st.from_regex(r"[a-z][a-z0-9_.]{0,30}", fullmatch=True),
+            st.floats(min_value=0.0, max_value=900.0),
+        ),
+        max_size=25,
+        unique_by=lambda entry: entry[0],
+    )
+)
+def test_what_the_script_writes_is_what_the_report_reads(entries: list[tuple[str, float]]) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "mutation_timeouts", ROOT / "scripts" / "mutation_timeouts.py"
+    )
+    assert spec is not None and spec.loader is not None
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        codes = {name: 36 for name, _ in entries}
+        estimates = {name: seconds for name, seconds in entries}
+        (root / "m").mkdir()
+        (root / "m" / "a.py.meta").write_text(
+            json.dumps({"exit_code_by_key": codes, "estimated_durations_by_key": estimates}),
+            encoding="utf-8",
+        )
+        pyproject = root / "p.toml"
+        pyproject.write_text("[tool.mutmut]\ntimeout_multiplier = 3.0\n", encoding="utf-8")
+        out = root / "out.json"
+        argv = ["--mutants", str(root / "m"), "--pyproject", str(pyproject), "--out", str(out)]
+        assert writer.main(argv) == 0
+        read = report._read_timeouts(out)
+        section = report.timeouts_section(out)
+    assert [name for name, _, _ in read] == sorted(name for name, _ in entries)
+    shown = sorted(name for name, _ in entries)[: report.TIMEOUT_LIST_CAP]
+    assert all(f"- `{name}`:" in section for name in shown)
+
+
+def test_a_run_with_timed_out_mutants_and_no_list_says_the_list_is_missing(
+    tmp_path: Path,
+) -> None:
+    stats = _write_stats(tmp_path / "stats.json")
+    out = tmp_path / "body.md"
+    args = ["--stats", str(stats), "--execution", "success", "--out", str(out), "--run-url", "u"]
+    report.main(["status", *args, "--timeouts", str(tmp_path / "none.json")])
+    assert "The list of timed-out mutants could not be read" in out.read_text(encoding="utf-8")
+
+
+def test_a_run_with_no_timed_out_mutant_and_no_list_says_nothing(tmp_path: Path) -> None:
+    stats = _write_stats(tmp_path / "stats.json", timeout=0)
+    out = tmp_path / "body.md"
+    args = ["--stats", str(stats), "--execution", "success", "--out", str(out), "--run-url", "u"]
+    report.main(["status", *args, "--timeouts", str(tmp_path / "none.json")])
+    assert "timed-out mutants" not in out.read_text(encoding="utf-8")

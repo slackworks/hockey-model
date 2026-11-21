@@ -85,3 +85,26 @@ def test_the_report_job_publishes_its_status_and_its_body() -> None:
     report = _job("report")
     assert "status: ${{ steps.decide.outputs.status }}" in report
     assert "mutation-report.md" in report
+
+
+def test_the_timeout_list_has_its_own_step_that_cannot_fail_the_export() -> None:
+    """The list is advisory, so its failure must not reach EXPORT_RESULT (#274)."""
+    merge = _job("merge")
+    export = merge[
+        merge.index("- name: Export results") : merge.index("- name: List the timed-out")
+    ]
+    assert "mutation_timeouts.py" not in export
+    step = merge[
+        merge.index("- name: List the timed-out") : merge.index("- name: Note a failed list")
+    ]
+    assert "scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json" in step
+    assert "continue-on-error: true" in step
+    assert "if: always()" in step
+    assert "id: timeouts" in step
+
+
+def test_the_merge_job_uploads_the_timeout_list_beside_the_stats() -> None:
+    upload = _job("merge")
+    upload = upload[upload.index("actions/upload-artifact") :]
+    assert "mutants/mutmut-timeouts.json" in upload
+    assert "mutants/mutmut-cicd-stats.json" in upload
