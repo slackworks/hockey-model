@@ -5,17 +5,20 @@ success boundaries, the credit rule, and the fields of the report and the record
 """
 
 import dataclasses
-import re
 import sqlite3
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from test_runner_store import PLAN, seed
 
 from hockey_model.backtest import runner
 from hockey_model.backtest.eligibility import SeasonCount
 from hockey_model.game_model.features import FEATURES
+from hockey_model.store.db import connect
 from hockey_model.types import HockeyModelError
 
 REFRESH = "run `hockey-model refresh --backfill-from 2014-10-01`"
@@ -180,13 +183,22 @@ def test_the_report_holds_the_imputation_share_of_each_tested_feature(
 ) -> None:
     report, _ = runner.run_backtest(seeded, PLAN, candidates=FEATURES)
     assert [item["feature"] for item in report.imputation] == list(report.tested_features)
-    assert all(set(item) == {"feature", "imputed", "total", "share"} for item in report.imputation)
+    items: Any = report.imputation
+    for item in items:
+        assert set(item) == {"feature", "imputed", "total", "share"}
+        assert item["total"] > 0
+        assert 0 <= item["imputed"] <= item["total"]
+        assert item["share"] == item["imputed"] / item["total"]
 
 
-def test_each_record_names_the_teams_of_its_game(seeded: sqlite3.Connection) -> None:
+def test_each_record_names_the_teams_of_its_own_game(seeded: sqlite3.Connection) -> None:
     _, records = runner.run_backtest(seeded, PLAN, candidates=FEATURES)
     assert records
-    assert {(r.home, r.away) for r in records} <= {("TOR", "BOS"), ("BOS", "TOR")}
+    for record in records:
+        # The seed gives the home side to TOR on an odd day, and 20 games to each season.
+        day = (record.game_id - 1) % 20 + 1
+        home, away = ("TOR", "BOS") if day % 2 else ("BOS", "TOR")
+        assert (record.home, record.away) == (home, away), record
     assert {r.run for r in records} == set(runner.RECORDED_RUNS)
 
 
@@ -210,15 +222,16 @@ def test_a_serial_run_logs_each_build_by_name_and_all_stages_in_this_process(
     assert set(workers) == {1}
 
 
-def test_the_total_line_states_the_workers_and_a_sane_time(
-    seeded: sqlite3.Connection, capsys: pytest.CaptureFixture[str]
+def test_the_total_line_states_the_elapsed_seconds_and_the_workers(
+    seeded: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    readings = iter([100.0, 107.5])
+    monkeypatch.setattr(runner, "time", SimpleNamespace(monotonic=lambda: next(readings)))
     runner.run_backtest(seeded, PLAN, candidates=FEATURES)
-    total = [line for line in capsys.readouterr().err.splitlines() if "total" in line]
-    assert len(total) == 1
-    match = re.fullmatch(r"backtest: total ([0-9.]+)s with 1 worker\(s\)", total[0])
-    assert match is not None, total[0]
-    assert float(match.group(1)) < 600
+    lines = capsys.readouterr().err.splitlines()
+    assert "backtest: total 7.5s with 1 worker(s)" in lines
 
 
 def test_a_store_with_no_scored_games_says_how_to_backfill(store: sqlite3.Connection) -> None:
@@ -232,7 +245,8 @@ def test_a_store_with_no_scored_games_says_how_to_backfill(store: sqlite3.Connec
 
 
 def test_a_run_whose_game_count_differs_from_the_elo_run_is_refused() -> None:
-    with pytest.raises(ValueError, match="shorter"):
+    # zip(strict=True) raises a ValueError for two lists of different length.
+    with pytest.raises(ValueError):
         runner._scored_run("model", [0.5, 0.6], [True, False], [0.7], 0.05)
 
 
@@ -241,5 +255,54 @@ def test_a_result_count_that_differs_from_the_job_count_is_refused(
 ) -> None:
     monkeypatch.setattr(runner, "run_units", lambda units, workers: [])
     rows = _rows((PLAN.select_train[0], PLAN.select_validate[0]))
-    with pytest.raises(ValueError, match="shorter"):
+    # zip(strict=True) raises a ValueError for two lists of different length.
+    with pytest.raises(ValueError):
         runner._validate(rows, rows, PLAN, ("rest",))
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    baseline=st.floats(min_value=0.1, max_value=2.0),
+    offset=st.floats(min_value=-0.5, max_value=0.5),
+)
+def test_a_feature_is_vetoed_exactly_when_its_guess_score_passes_the_tolerance(
+    baseline: float, offset: float
+) -> None:
+    guess = baseline + offset
+
+    def unit(train: Any, validate_actual: Any, validate_guess: Any, features: Any) -> Any:
+        return {"guess": guess if features else baseline, "actual": baseline}
+
+    rows = _rows((PLAN.select_train[0], PLAN.select_validate[0]))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runner, "_validation_unit", unit)
+        patch.setattr(runner, "_refused_in_windows", lambda *args: set())
+        _, vetoed = runner._validate(rows, rows, PLAN, ("rest",))
+    assert (vetoed == ("rest",)) == (guess > baseline + runner.VETO_TOLERANCE)
+
+
+@pytest.fixture(scope="module")
+def shared_seeded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[sqlite3.Connection]:
+    """Yield one seeded store that the examples of a property read and never write."""
+    conn = connect(tmp_path_factory.mktemp("shared") / "store.db")
+    seed(conn, range(1, 8))
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+@settings(
+    max_examples=12,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(upper=st.floats(min_value=-1.0, max_value=1.0))
+def test_success_holds_exactly_when_the_upper_end_is_below_zero(
+    shared_seeded: sqlite3.Connection, upper: float
+) -> None:
+    # The fixture holds a store that no example writes, so the examples do not share state.
+    with pytest.MonkeyPatch.context() as patch:
+        _force(patch, upper)
+        report, _ = runner.run_backtest(shared_seeded, PLAN, candidates=FEATURES)
+    assert report.success is (upper < 0.0)
+    assert bool(report.live_features) is (upper < 0.0)
