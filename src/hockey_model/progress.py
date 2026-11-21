@@ -3,8 +3,9 @@
 A long command runs inside ``step``. The step logs a ``start`` line, a ``tick`` line at a set
 interval while it works, and an ``end`` line with the time it took. A step that stops early
 logs a ``stop`` line with the reason. Library code calls only the logger, so a test or the
-consumer API stays quiet until a caller installs a handler. ``cli.py`` installs one on stderr,
-so the JSON on stdout stays valid. ``scripts/run-step.sh`` writes the same lines.
+consumer API stays quiet until a caller installs a handler. ``cli.py`` installs one on stderr
+with ``to_stderr``, so the JSON on stdout stays valid. ``scripts/run-step.sh`` writes the same
+lines. Design: docs/design/progress-logging.md
 
 A line has this form, where the last three parts are optional:
 
@@ -23,8 +24,8 @@ from typing import IO, Any
 LOGGER = logging.getLogger("hockey_model.progress")
 # Seconds between two tick lines of a step that is still running.
 PROGRESS_INTERVAL = 60.0
-
-_HANDLERS: list[logging.Handler] = []
+# The text of a stop that gave no reason, so a stop line always has a reason after "reason=".
+NO_REASON = "no reason given"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,19 @@ class Timing:
     interval: float = PROGRESS_INTERVAL
     clock: Callable[[], float] = time.monotonic
     timer_factory: Callable[[float, Callable[[], None]], Any] = threading.Timer
+
+
+def _word(text: str, what: str) -> str:
+    """Return ``text`` when it is one printable word. A line splits on spaces, so it must be."""
+    if not text or not text.isprintable() or any(char.isspace() for char in text):
+        raise ValueError(f"progress {what} {text!r} must be one printable word; use a dash")
+    return text
+
+
+def _one_line(text: str) -> str:
+    """Return ``text`` on one line with no control character, or ``NO_REASON`` when it is empty."""
+    printable = "".join(char if char.isprintable() or char.isspace() else " " for char in text)
+    return " ".join(printable.split()) or NO_REASON
 
 
 class Step:
@@ -47,8 +61,8 @@ class Step:
         budget: float | None,
         clock: Callable[[], float],
     ) -> None:
-        self.command = command
-        self.name = name
+        self.command = _word(command, "command")
+        self.name = _word(name, "step name")
         self.total = total
         self.budget = budget
         self.done = 0
@@ -79,7 +93,11 @@ _CURRENT: ContextVar[Step | None] = ContextVar("hockey_model_progress_step", def
 
 
 class _Heartbeat:
-    """Log a tick line at each interval until it is cancelled."""
+    """Log a tick line at each interval until it is cancelled.
+
+    One lock covers the check, the log, and the next timer, so a tick never follows the ``end``
+    line and a cancelled heartbeat never makes a new timer.
+    """
 
     def __init__(
         self, current: Step, interval: float, factory: Callable[[float, Callable[[], None]], Any]
@@ -87,16 +105,19 @@ class _Heartbeat:
         self._step = current
         self._interval = interval
         self._factory = factory
+        self._lock = threading.Lock()
         self._cancelled = False
         self._timer: Any = None
 
     def start(self) -> None:
-        self._schedule()
+        with self._lock:
+            self._schedule()
 
     def cancel(self) -> None:
-        self._cancelled = True
-        if self._timer is not None:
-            self._timer.cancel()
+        with self._lock:
+            self._cancelled = True
+            if self._timer is not None:
+                self._timer.cancel()
 
     def _schedule(self) -> None:
         self._timer = self._factory(self._interval, self._fire)
@@ -104,10 +125,11 @@ class _Heartbeat:
         self._timer.start()
 
     def _fire(self) -> None:
-        if self._cancelled:
-            return
-        LOGGER.info(self._step.line("tick"))
-        self._schedule()
+        with self._lock:
+            if self._cancelled:
+                return
+            LOGGER.info(self._step.line("tick"))
+            self._schedule()
 
 
 @contextmanager
@@ -122,20 +144,20 @@ def step(
     """Log the start, the ticks, and the end of one step of ``command``.
 
     ``total`` is the count of work units when it is known. ``budget`` is the seconds that the
-    step may use, and each line shows what is left. ``name`` must be one word, so a line splits
-    on spaces. The heartbeat thread stops in a ``finally``, also when the step raises.
+    step may use, and each line shows what is left. ``command`` and ``name`` must be one word
+    each, so a line splits on spaces. The heartbeat thread stops in a ``finally``, also when
+    the step raises. A reason that ``stopped`` gave stays when the step raises.
     """
-    if not name or any(char.isspace() for char in name):
-        raise ValueError(f"progress step name {name!r} must be one word with no space; use a dash")
     current = Step(command, name, total, budget, timing.clock)
     token = _CURRENT.set(current)
     heartbeat = _Heartbeat(current, timing.interval, timing.timer_factory)
-    LOGGER.info(current.line("start"))
-    heartbeat.start()
     try:
+        LOGGER.info(current.line("start"))
+        heartbeat.start()
         yield current
     except BaseException as error:
-        current.reason = type(error).__name__
+        if current.reason is None:
+            current.reason = type(error).__name__
         raise
     finally:
         heartbeat.cancel()
@@ -154,22 +176,21 @@ def stopped(reason: str) -> None:
     """Say that the innermost running step stopped early, and why. The text becomes one line."""
     current = _CURRENT.get()
     if current is not None:
-        current.reason = " ".join(reason.split())
+        current.reason = _one_line(reason)
 
 
-def install_stderr_handler(stream: IO[str]) -> None:
-    """Write the progress lines to ``stream``. A second call replaces the first handler."""
-    remove_stderr_handler()
+@contextmanager
+def to_stderr(stream: IO[str]) -> Generator[None]:
+    """Write the progress lines to ``stream`` while the block runs, then restore the logger."""
     handler = logging.StreamHandler(stream)
     handler.setFormatter(logging.Formatter("%(message)s"))
+    level, propagate = LOGGER.level, LOGGER.propagate
     LOGGER.addHandler(handler)
     LOGGER.setLevel(logging.INFO)
     LOGGER.propagate = False
-    _HANDLERS.append(handler)
-
-
-def remove_stderr_handler() -> None:
-    """Remove the handler that ``install_stderr_handler`` added, if any."""
-    while _HANDLERS:
-        LOGGER.removeHandler(_HANDLERS.pop())
-    LOGGER.propagate = True
+    try:
+        yield
+    finally:
+        LOGGER.removeHandler(handler)
+        LOGGER.setLevel(level)
+        LOGGER.propagate = propagate

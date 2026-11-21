@@ -204,11 +204,8 @@ def main(argv: Sequence[str] | None = None, runtime: CliRuntime | None = None) -
         args = _parser().parse_args(argv)
         if args.command in STORE_COMMANDS:
             # The lines go to stderr, so the JSON on stdout stays valid.
-            progress.install_stderr_handler(sys.stderr)
-            try:
+            with progress.to_stderr(sys.stderr):
                 payload, code = run_store_command(args)
-            finally:
-                progress.remove_stderr_handler()
             print(json.dumps(payload, default=_json_default, sort_keys=True))
             return code
         if runtime is None:

@@ -38,10 +38,12 @@ class _ProgressLines(logging.Handler):
 def progress_lines() -> Iterator[list[str]]:
     """Collect the progress lines that a test makes, as text, in the order they were logged."""
     handler = _ProgressLines()
+    level = progress.LOGGER.level
     progress.LOGGER.addHandler(handler)
     progress.LOGGER.setLevel(logging.INFO)
     yield handler.lines
     progress.LOGGER.removeHandler(handler)
+    progress.LOGGER.setLevel(level)
 
 
 @pytest.fixture

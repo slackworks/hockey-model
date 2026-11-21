@@ -3,7 +3,8 @@
 import logging
 import re
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 
 import pytest
 from hypothesis import given
@@ -63,13 +64,24 @@ def timing(clock: FakeClock, timers: Timers, interval: float = 60.0) -> progress
     return progress.Timing(interval=interval, clock=clock, timer_factory=timers)
 
 
-@pytest.fixture
-def lines() -> Iterator[list[str]]:
+@contextmanager
+def capture() -> Generator[list[str]]:
+    """Collect the progress lines of the block, and restore the logger after it."""
     handler = ListHandler()
+    level = progress.LOGGER.level
     progress.LOGGER.addHandler(handler)
     progress.LOGGER.setLevel(logging.INFO)
-    yield handler.lines
-    progress.LOGGER.removeHandler(handler)
+    try:
+        yield handler.lines
+    finally:
+        progress.LOGGER.removeHandler(handler)
+        progress.LOGGER.setLevel(level)
+
+
+@pytest.fixture
+def lines() -> Iterator[list[str]]:
+    with capture() as captured:
+        yield captured
 
 
 @pytest.fixture
@@ -196,22 +208,113 @@ def test_a_library_call_is_silent_when_no_handler_is_installed(
     assert (captured.out, captured.err) == ("", "")
 
 
-def test_the_stderr_handler_writes_the_lines_and_installs_once(
+def test_the_stderr_block_writes_the_lines_and_restores_the_logger(
     capsys: pytest.CaptureFixture[str], clock: FakeClock, timers: Timers
 ) -> None:
-    progress.install_stderr_handler(sys.stderr)
-    progress.install_stderr_handler(sys.stderr)
-    try:
+    before = (progress.LOGGER.level, progress.LOGGER.propagate, list(progress.LOGGER.handlers))
+    with progress.to_stderr(sys.stderr):
         with progress.step("fit", "run", timing=timing(clock, timers)):
             pass
-    finally:
-        progress.remove_stderr_handler()
+    assert (progress.LOGGER.level, progress.LOGGER.propagate, progress.LOGGER.handlers) == before
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.splitlines() == [
         "progress fit run start elapsed=0.0s",
         "progress fit run end elapsed=0.0s",
     ]
+
+
+def test_the_stderr_block_restores_the_logger_when_the_body_raises() -> None:
+    before = (progress.LOGGER.level, progress.LOGGER.propagate, list(progress.LOGGER.handlers))
+    with pytest.raises(RuntimeError):
+        with progress.to_stderr(sys.stderr):
+            raise RuntimeError("boom")
+    assert (progress.LOGGER.level, progress.LOGGER.propagate, progress.LOGGER.handlers) == before
+
+
+def test_a_reason_that_was_named_stays_when_the_step_raises(
+    lines: list[str], clock: FakeClock, timers: Timers
+) -> None:
+    with pytest.raises(KeyError):
+        with progress.step("refresh", "days", timing=timing(clock, timers)):
+            progress.stopped("three days failed")
+            raise KeyError("x")
+    assert lines[-1].endswith(" stop elapsed=0.0s reason=three days failed")
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "\n\t", "\x1b[31m", "\x00"])
+def test_a_reason_with_no_printable_text_says_that_no_reason_was_given(
+    lines: list[str], clock: FakeClock, timers: Timers, reason: str
+) -> None:
+    with progress.step("a", "b", timing=timing(clock, timers)):
+        progress.stopped(reason)
+    expected = "[31m" if reason == "\x1b[31m" else progress.NO_REASON
+    assert lines[-1].endswith(f"reason={expected}")
+
+
+@given(reason=st.text(max_size=60))
+def test_a_stop_line_is_one_line_with_printable_text_only(reason: str) -> None:
+    with capture() as captured:
+        with progress.step("cmd", "name", timing=timing(FakeClock(), Timers())):
+            progress.stopped(reason)
+    stop = captured[-1]
+    assert len(stop.splitlines()) == 1
+    assert _LINE.fullmatch(stop), stop
+    assert all(char.isprintable() for char in stop)
+    assert "  " not in stop
+
+
+@pytest.mark.parametrize("command", ["", "two words", "esc\x1b"])
+def test_a_command_that_is_not_one_printable_word_is_refused(command: str) -> None:
+    with pytest.raises(ValueError, match="one printable word"):
+        with progress.step(command, "run"):
+            pass
+
+
+class _TimerThatCannotStart(FakeTimer):
+    def start(self) -> None:
+        raise RuntimeError("cannot start new thread")
+
+
+def test_a_heartbeat_that_cannot_start_still_ends_the_step_cleanly(
+    lines: list[str], clock: FakeClock
+) -> None:
+    def factory(interval: float, function: Callable[[], None]) -> FakeTimer:
+        return _TimerThatCannotStart(interval, function)
+
+    with pytest.raises(RuntimeError, match="cannot start"):
+        with progress.step("fit", "run", timing=progress.Timing(60.0, clock, factory)):
+            pass
+    assert lines[-1].endswith("reason=RuntimeError")
+    progress.advance()
+    with progress.step("fit", "after", timing=progress.Timing(60.0, clock, Timers())):
+        assert progress.advance() is None
+
+
+def test_a_cancelled_heartbeat_makes_no_new_timer(
+    lines: list[str], clock: FakeClock, timers: Timers
+) -> None:
+    with progress.step("fit", "run", timing=timing(clock, timers)):
+        pass
+    made = len(timers.made)
+    timers.made[-1].function()
+    assert len(timers.made) == made
+
+
+@given(counts=st.lists(st.integers(min_value=0, max_value=50), max_size=8), split=st.integers(0, 8))
+def test_the_count_of_a_nested_step_is_the_sum_of_its_own_advances(
+    counts: list[int], split: int
+) -> None:
+    clock, timers = FakeClock(), Timers()
+    outer_counts, inner_counts = counts[:split], counts[split:]
+    with progress.step("a", "outer", timing=timing(clock, timers)) as outer:
+        for count in outer_counts:
+            progress.advance(count)
+        with progress.step("a", "inner", timing=timing(clock, timers)) as inner:
+            for count in inner_counts:
+                progress.advance(count)
+        assert inner.done == sum(inner_counts)
+        assert outer.done == sum(outer_counts)
 
 
 _LINE = re.compile(
@@ -225,22 +328,30 @@ _LINE = re.compile(
     total=st.one_of(st.none(), st.integers(min_value=0, max_value=1000)),
     budget=st.one_of(st.none(), st.floats(min_value=0.0, max_value=1e6)),
     seconds=st.floats(min_value=0.0, max_value=1e5),
+    reason=st.one_of(st.none(), st.text(max_size=20)),
 )
-def test_every_line_has_the_one_format(
-    done: int, total: int | None, budget: float | None, seconds: float
+def test_every_line_has_the_one_format_and_the_values_of_the_step(
+    done: int, total: int | None, budget: float | None, seconds: float, reason: str | None
 ) -> None:
-    handler = ListHandler()
-    progress.LOGGER.addHandler(handler)
-    progress.LOGGER.setLevel(logging.INFO)
-    clock = FakeClock()
-    try:
-        with progress.step(
-            "cmd", "step", total=total, budget=budget, timing=timing(clock, Timers())
-        ):
+    clock, timers = FakeClock(), Timers()
+    with capture() as captured:
+        with progress.step("cmd", "step", total=total, budget=budget, timing=timing(clock, timers)):
             progress.advance(done)
             clock.now += seconds
-    finally:
-        progress.LOGGER.removeHandler(handler)
-    assert len(handler.lines) == 2
-    for line in handler.lines:
+            timers.fire_last()
+            if reason is not None:
+                progress.stopped(reason)
+    assert [line.split()[3] for line in captured] == [
+        "start",
+        "tick",
+        "end" if reason is None else "stop",
+    ]
+    for line in captured:
         assert _LINE.fullmatch(line), line
+    tick = captured[1]
+    assert f"elapsed={seconds:.1f}s" in tick
+    if total is not None:
+        assert f" done={done}/{total}" in tick
+    if budget is not None:
+        assert f" budget_left={max(0.0, budget - seconds):.0f}s" in tick
+    assert (" reason=" in captured[-1]) == (reason is not None)
