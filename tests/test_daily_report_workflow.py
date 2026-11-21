@@ -65,6 +65,7 @@ def test_the_gate_step_checks_each_output_before_it_writes_it() -> None:
     """A jq failure inside an echo argument would pass, and an empty output skips the build."""
     text = WORKFLOW.read_text(encoding="utf-8")
     gate = text[text.index("\n  gate:\n") : text.index("\n  build:\n")]
-    for field in ("due", "publish", "date", "reason"):
-        assert f"jq -er '.{field} | select(type ==" in gate, field
+    assert 'bash scripts/gate-outputs.sh gate.json >> "$GITHUB_OUTPUT"' in gate
+    # jq -e exits 1 for a false value, so no gate step may read a boolean with it.
+    assert "jq -e" not in gate
     assert '"due=$(jq' not in gate

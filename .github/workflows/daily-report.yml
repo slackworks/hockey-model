@@ -74,18 +74,11 @@ jobs:
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json
-          # A failed jq in a command substitution inside echo would not stop the step, and an
-          # empty output would skip the build with a green result. Each value is set first.
-          due="$(jq -er '.due | select(type == "boolean")' gate.json)"
-          publish="$(jq -er '.publish | select(type == "boolean")' gate.json)"
-          day="$(jq -er '.date | select(type == "string")' gate.json)"
-          reason="$(jq -er '.reason | select(type == "string")' gate.json)"
-          {
-            echo "due=$due"
-            echo "publish=$publish"
-            echo "day=$day"
-          } >> "$GITHUB_OUTPUT"
-          echo "Report gate for $day: $reason" >> "$GITHUB_STEP_SUMMARY"
+          # The script checks the type of each field before it prints, so an empty or wrong value
+          # fails the step and never skips the build with a green result.
+          bash scripts/gate-outputs.sh gate.json >> "$GITHUB_OUTPUT"
+          echo "Report gate for $(jq -r '.date' gate.json): $(jq -r '.reason' gate.json)" \
+            >> "$GITHUB_STEP_SUMMARY"
       # The overhead of each job is measured here, so the trigger lead can be set from data.
       - if: always()
         name: Report the job time
