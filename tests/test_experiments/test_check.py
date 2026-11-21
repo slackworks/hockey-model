@@ -181,6 +181,7 @@ class TestCheckAll:
         assert result["ok"] is True, result["errors"]
         ids = [entry["id"] for entry in result["records"]]
         assert "0001-v1-forward-test" in ids
+        assert "0002-v1-forward-test" in ids
 
 
 class TestRegistrationCommit:
@@ -452,6 +453,7 @@ class TestRegistryRules:
         result = check_all(repo_root=clone)
         assert result["ok"] is False
         assert "shallow clone" in result["errors"][0]
+        assert "fetch-depth: 0" in result["errors"][0]
 
     def test_a_malformed_historical_blob_is_an_error_not_a_crash(
         self, tmp_path: Path, registry_dir: Path

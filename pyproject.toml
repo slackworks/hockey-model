@@ -54,7 +54,11 @@ max-complexity = 8
 source_paths = ["src"]
 # The parsers and the rate math: pure functions whose tests need a strong oracle.
 only_mutate = [
+    "src/hockey_model/backtest/golden.py",
     "src/hockey_model/backtest/metrics.py",
+    "src/hockey_model/backtest/runner.py",
+    "src/hockey_model/backtest/shards.py",
+    "src/hockey_model/backtest/units.py",
     "src/hockey_model/experiments/models.py",
     "src/hockey_model/game_model/elo.py",
     "src/hockey_model/game_model/logistic.py",

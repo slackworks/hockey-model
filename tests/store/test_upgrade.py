@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from seeding import add_game, add_team_form
 
@@ -350,11 +350,7 @@ _ROW = st.tuples(
 )
 
 
-@settings(
-    max_examples=25,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+@settings(max_examples=25, deadline=None)
 @given(data=st.lists(_ROW, min_size=0, max_size=8, unique_by=lambda r: (r[0], r[1], r[5])))
 def test_any_v1_rows_keep_their_values_and_gain_unknown_counts(data: list[tuple]) -> None:
     # Each example needs its own directory, because a store and its backup must not exist yet.

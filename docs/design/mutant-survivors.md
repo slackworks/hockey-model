@@ -42,3 +42,37 @@ The issue body lists them. Two more:
 
 The done list of the issue body holds.
 Also write the final counts as JSON in `docs/mutation-baseline.json`: `{"commit": "...", "modules": {"sources.nhl": {"killed": n, "survived": 0, "pragma": n}}}`, so #75 and #76 read a number and not a log.
+
+## Survivors of the backtest modules that no test can kill (#288)
+
+The modules `backtest.golden`, `backtest.runner`, `backtest.shards`, and `backtest.units` joined `only_mutate` in #288.
+`backtest.runner` has no survivor.
+The survivors below stay on purpose, and each row gives the reason.
+A survivor that is not in this list is a gap in the tests.
+A mutant that ends in `timeout` counts as detected.
+
+### `backtest.golden`
+
+| Mutants | Change | Reason no test can kill it |
+| --- | --- | --- |
+| `canonical_hashes` 20, 27; `canonical_fit_hash` 21; `write_golden_files` 20, 49 | `"utf-8"` becomes `"UTF-8"` | Python reads both spellings as the same codec. The bytes are equal. |
+| `write_golden_files` 15, 17, 35, 37 | The `encoding` argument is removed or is `None` | `json.dumps` escapes every non-ASCII character, so the text is ASCII. ASCII gives the same bytes in each encoding that the locale can select. |
+
+### `backtest.units`
+
+| Mutants | Change | Reason no test can kill it |
+| --- | --- | --- |
+| `open_read_only` 2, 4, 6 | `uri=True` becomes `None`, is removed, or becomes `False` | The SQLite build of the test machine reads `file:` names as URIs with or without the flag. |
+| `database_path` 8, 9 | The case of `PRAGMA database_list` changes | SQL keywords do not depend on case. |
+
+### `backtest.shards`
+
+| Mutants | Change | Reason no test can kill it |
+| --- | --- | --- |
+| `build_season_rows` 11 | The goalie mode is `None` | The run does not finish, so mutmut reports a timeout. This counts as detected. |
+
+### When a new survivor appears
+
+1. Run `uv run mutmut show <name>` and read the change.
+2. Write a test that fails for the change. Run the module again.
+3. When no test can fail for the change, add one row here with the reason.

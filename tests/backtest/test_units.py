@@ -4,14 +4,18 @@ import os
 import sqlite3
 import tempfile
 import time
+from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from hockey_model.backtest import units
 from hockey_model.backtest.units import (
     Unit,
+    _timed,
     database_path,
     open_read_only,
     run_units,
@@ -100,7 +104,7 @@ def test_a_failed_unit_stops_the_running_workers_at_once() -> None:
 
 def test_a_worker_that_dies_names_the_unfinished_units() -> None:
     units = [Unit("first", die, (3,)), Unit("second", slow_value, (30.0, 1))]
-    with pytest.raises(HockeyModelError, match=r"a worker process died.*'first'.*'second'"):
+    with pytest.raises(HockeyModelError, match=r"a worker process died.*'first', 'second'"):
         run_units(units, 2)
 
 
@@ -116,8 +120,12 @@ def test_a_worker_count_below_one_is_an_error(workers: int) -> None:
 
 def test_a_read_only_connection_refuses_a_write(tmp_path: Path) -> None:
     path = tmp_path / "s.db"
-    with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE t (x INTEGER)")
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE t (x INTEGER)")
+        writer.commit()
+    finally:
+        writer.close()
     conn = open_read_only(path)
     try:
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
@@ -152,8 +160,12 @@ def test_a_path_with_special_characters_opens_the_file_that_was_written(name: st
 
 
 def test_a_read_only_open_of_a_missing_file_names_the_path_and_the_fix(tmp_path: Path) -> None:
-    with pytest.raises(HockeyModelError, match="cannot open the store .*absent.db.*check that"):
+    with pytest.raises(HockeyModelError) as caught:
         open_read_only(tmp_path / "absent.db")
+    message = str(caught.value)
+    assert message.startswith("backtest: a worker cannot open the store ")
+    assert str(tmp_path / "absent.db") in message
+    assert message.endswith("check that the file exists and that its directory is readable")
 
 
 def test_the_database_path_is_the_file_of_the_connection(tmp_path: Path) -> None:
@@ -165,22 +177,112 @@ def test_the_database_path_is_the_file_of_the_connection(tmp_path: Path) -> None
         conn.close()
 
 
-def test_an_in_memory_connection_has_no_path_for_a_worker() -> None:
+def two_arguments(first: str, second: str) -> int:
+    raise HockeyModelError(first, second)
+
+
+def test_an_error_of_this_package_keeps_its_other_arguments() -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        run_units([Unit("u", two_arguments, ("a", "b"))], 1)
+    assert caught.value.args[1:] == ("b",)
+
+
+def test_an_error_of_another_type_names_the_unit_and_the_fix_in_full() -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        run_units([Unit("u", boom, ("bad",))], 1)
+    assert str(caught.value) == (
+        "backtest: unit 'u' failed: ValueError: bad; "
+        "fix the cause named in this message, then run the backtest again"
+    )
+
+
+def missing_table(name: str) -> int:
     conn = sqlite3.connect(":memory:")
     try:
-        with pytest.raises(HockeyModelError, match="no file"):
-            database_path(conn)
+        return conn.execute(f"SELECT * FROM {name}").fetchone()[0]
     finally:
         conn.close()
 
 
-def test_a_connection_with_uncommitted_changes_has_no_path_for_a_worker(tmp_path: Path) -> None:
+def test_a_sqlite_error_carries_the_fix_that_fits_its_code() -> None:
+    with pytest.raises(HockeyModelError) as caught:
+        run_units([Unit("u", missing_table, ("absent",))], 1)
+    assert "`hockey-model store upgrade`" in str(caught.value)
+    assert "no known cause fits" not in str(caught.value)
+
+
+def test_the_in_memory_refusal_says_what_to_run_instead() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(HockeyModelError) as caught:
+            database_path(conn)
+    finally:
+        conn.close()
+    assert str(caught.value) == (
+        "backtest: the store connection has no file, so a worker cannot open it; "
+        "run the backtest on a store file, or with --workers 1"
+    )
+
+
+def test_the_uncommitted_refusal_says_what_to_run_instead(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "s.db")
     try:
         conn.execute("CREATE TABLE t (x INTEGER)")
         conn.commit()
         conn.execute("INSERT INTO t VALUES (1)")
-        with pytest.raises(HockeyModelError, match="uncommitted changes.*commit the connection"):
+        with pytest.raises(HockeyModelError) as caught:
             database_path(conn)
     finally:
         conn.close()
+    assert str(caught.value) == (
+        "backtest: the store connection has uncommitted changes, so a worker would not "
+        "see them; commit the connection first, or run the backtest with --workers 1"
+    )
+
+
+class _InlinePool:
+    """A stand-in for the process pool that runs each call at once and records its size."""
+
+    sizes: list[int | None] = []
+
+    def __init__(self, max_workers: int | None = None) -> None:
+        self.sizes.append(max_workers)
+
+    def __enter__(self) -> _InlinePool:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def submit(self, fn, *args):
+        future: Future = Future()
+        future.set_result(fn(*args))
+        return future
+
+
+@pytest.fixture
+def inline_pool(monkeypatch: pytest.MonkeyPatch) -> type[_InlinePool]:
+    _InlinePool.sizes = []
+    monkeypatch.setattr(units, "ProcessPoolExecutor", _InlinePool)
+    return _InlinePool
+
+
+@pytest.mark.parametrize(("workers", "count", "size"), [(4, 3, 3), (2, 5, 2), (3, 3, 3)])
+def test_the_pool_has_one_process_for_each_unit_up_to_the_worker_count(
+    inline_pool: type[_InlinePool], workers: int, count: int, size: int
+) -> None:
+    run_units([Unit(f"u{i}", square, (i,)) for i in range(count)], workers)
+    assert inline_pool.sizes == [size]
+
+
+def test_one_unit_runs_in_this_process_with_no_pool(inline_pool: type[_InlinePool]) -> None:
+    assert run_units([Unit("only", square, (5,))], 4) == [25]
+    assert inline_pool.sizes == []
+
+
+def test_the_elapsed_time_of_a_unit_is_the_difference_of_two_clock_readings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readings = iter([10.0, 12.5])
+    monkeypatch.setattr(units, "time", SimpleNamespace(monotonic=lambda: next(readings)))
+    assert _timed(Unit("u", square, (3,))) == (2.5, 9)
