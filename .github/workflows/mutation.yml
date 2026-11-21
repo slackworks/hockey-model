@@ -86,7 +86,17 @@ jobs:
         run: |
           uv run mutmut export-cicd-stats
           uv run mutmut results >mutation-results.txt
-          uv run python3 scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json
+      - name: List the timed-out mutants
+        id: timeouts
+        # The list is advisory. A failure here is not an export failure, so the report still
+        # judges the stats, and the report names a list that is missing.
+        if: always()
+        continue-on-error: true
+        run: uv run python3 scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json
+      - name: Note a failed list
+        if: steps.timeouts.outcome == 'failure'
+        run: |
+          echo "The list of timed-out mutants failed. Its error is in the log of that step." >>"$GITHUB_STEP_SUMMARY"
       - name: Note a failed export
         if: steps.export.outcome == 'failure'
         run: |
