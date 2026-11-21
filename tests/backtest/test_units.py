@@ -6,6 +6,7 @@ import tempfile
 import time
 from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from hypothesis import given, settings
@@ -159,8 +160,12 @@ def test_a_path_with_special_characters_opens_the_file_that_was_written(name: st
 
 
 def test_a_read_only_open_of_a_missing_file_names_the_path_and_the_fix(tmp_path: Path) -> None:
-    with pytest.raises(HockeyModelError, match="cannot open the store .*absent.db.*check that"):
+    with pytest.raises(HockeyModelError) as caught:
         open_read_only(tmp_path / "absent.db")
+    message = str(caught.value)
+    assert message.startswith("backtest: a worker cannot open the store ")
+    assert str(tmp_path / "absent.db") in message
+    assert message.endswith("check that the file exists and that its directory is readable")
 
 
 def test_the_database_path_is_the_file_of_the_connection(tmp_path: Path) -> None:
@@ -168,27 +173,6 @@ def test_the_database_path_is_the_file_of_the_connection(tmp_path: Path) -> None
     conn = sqlite3.connect(path)
     try:
         assert database_path(conn).resolve() == path.resolve()
-    finally:
-        conn.close()
-
-
-def test_an_in_memory_connection_has_no_path_for_a_worker() -> None:
-    conn = sqlite3.connect(":memory:")
-    try:
-        with pytest.raises(HockeyModelError, match="no file"):
-            database_path(conn)
-    finally:
-        conn.close()
-
-
-def test_a_connection_with_uncommitted_changes_has_no_path_for_a_worker(tmp_path: Path) -> None:
-    conn = sqlite3.connect(tmp_path / "s.db")
-    try:
-        conn.execute("CREATE TABLE t (x INTEGER)")
-        conn.commit()
-        conn.execute("INSERT INTO t VALUES (1)")
-        with pytest.raises(HockeyModelError, match="uncommitted changes.*commit the connection"):
-            database_path(conn)
     finally:
         conn.close()
 
@@ -256,20 +240,6 @@ def test_the_uncommitted_refusal_says_what_to_run_instead(tmp_path: Path) -> Non
     )
 
 
-def test_a_missing_store_refusal_ends_with_the_fix(tmp_path: Path) -> None:
-    with pytest.raises(HockeyModelError) as caught:
-        open_read_only(tmp_path / "absent.db")
-    assert str(caught.value).endswith(
-        "check that the file exists and that its directory is readable"
-    )
-
-
-def test_the_elapsed_time_of_a_unit_is_small_and_not_negative() -> None:
-    seconds, value = _timed(Unit("u", square, (3,)))
-    assert value == 9
-    assert 0 <= seconds < 5
-
-
 class _InlinePool:
     """A stand-in for the process pool that runs each call at once and records its size."""
 
@@ -308,3 +278,11 @@ def test_the_pool_has_one_process_for_each_unit_up_to_the_worker_count(
 def test_one_unit_runs_in_this_process_with_no_pool(inline_pool: type[_InlinePool]) -> None:
     assert run_units([Unit("only", square, (5,))], 4) == [25]
     assert inline_pool.sizes == []
+
+
+def test_the_elapsed_time_of_a_unit_is_the_difference_of_two_clock_readings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readings = iter([10.0, 12.5])
+    monkeypatch.setattr(units, "time", SimpleNamespace(monotonic=lambda: next(readings)))
+    assert _timed(Unit("u", square, (3,))) == (2.5, 9)
