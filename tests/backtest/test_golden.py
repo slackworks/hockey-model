@@ -36,7 +36,8 @@ from hockey_model.game_model.training import training_rows
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "fixtures" / "backtest_golden.json"
-SCRIPT = require_path(ROOT / "scripts" / "backtest_golden.py")
+# The script is outside the mutation copy, so only the tests that run it need the guard.
+SCRIPT = ROOT / "scripts" / "backtest_golden.py"
 EMPTY_REPORT = BacktestReport((), (), (), (), {}, (), False, (), (), {})
 START = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -167,6 +168,32 @@ def test_the_files_and_the_hashes_are_written(store: sqlite3.Connection, tmp_pat
     ]
 
 
+def _indent_of_second_line(text: str) -> str:
+    line = text.splitlines()[1]
+    return line[: len(line) - len(line.lstrip(" "))]
+
+
+def test_the_report_and_the_hashes_files_are_indented_by_two_spaces(
+    store: sqlite3.Connection, tmp_path: Path
+) -> None:
+    report, records = _seeded_run(store)
+    write_golden_files(report, records, tmp_path)
+    assert _indent_of_second_line(report_text(report)) == "  "
+    assert _indent_of_second_line((tmp_path / "hashes.json").read_text(encoding="utf-8")) == "  "
+    assert (tmp_path / "hashes.json").read_text(encoding="utf-8").endswith("}\n")
+
+
+def test_the_out_directory_may_be_new_nested_or_already_there(
+    store: sqlite3.Connection, tmp_path: Path
+) -> None:
+    report, records = _seeded_run(store)
+    nested = tmp_path / "a" / "b"
+    write_golden_files(report, records, nested)
+    assert (nested / "report.json").is_file()
+    write_golden_files(report, records, nested)
+    assert (nested / "hashes.json").is_file()
+
+
 def test_two_backtest_runs_give_the_same_exact_hashes(
     store: sqlite3.Connection, tmp_path: Path
 ) -> None:
@@ -177,7 +204,7 @@ def test_two_backtest_runs_give_the_same_exact_hashes(
 
 
 def _run_script(*args: str) -> int:
-    return runpy.run_path(str(SCRIPT))["main"](list(args))
+    return runpy.run_path(str(require_path(SCRIPT)))["main"](list(args))
 
 
 def _store_path(store: sqlite3.Connection) -> Path:

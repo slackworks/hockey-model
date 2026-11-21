@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -255,3 +256,102 @@ def test_the_sharded_rows_equal_the_full_build_for_generated_histories(
                 assert shard == whole
         finally:
             conn.close()
+
+
+def _shard(store: sqlite3.Connection, season: int, final_games: int | None = None) -> shards.Shard:
+    games = shards._final_games(store, PLAN.burn_in)
+    return shards.Shard(
+        season,
+        GoalieMode.ACTUAL,
+        PLAN.burn_in,
+        tuple(FEATURES),
+        season_boundaries(games)[season],
+        len(games) if final_games is None else final_games,
+    )
+
+
+def test_the_final_games_include_the_burn_in_season(store: sqlite3.Connection) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    seasons = {game.season for game in shards._final_games(store, PLAN.burn_in)}
+    assert min(seasons) == PLAN.burn_in
+
+
+def test_a_worker_builds_the_rows_of_its_season(store: sqlite3.Connection) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    full = training_rows(store, 2, 7, GoalieMode.ACTUAL, PLAN.burn_in, names=FEATURES)
+    for season in (2, 5):
+        rows = shards.build_season_rows(shards.database_path(store), _shard(store, season))
+        assert rows == [row for row in full if row.game.season == season]
+
+
+def test_a_worker_closes_its_connection(
+    store: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    opened: list[sqlite3.Connection] = []
+    real = shards.open_read_only
+
+    def spy(path: Path) -> sqlite3.Connection:
+        opened.append(real(path))
+        return opened[-1]
+
+    monkeypatch.setattr(shards, "open_read_only", spy)
+    shards.build_season_rows(shards.database_path(store), _shard(store, 3))
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].execute("SELECT 1")
+
+
+def test_a_worker_that_sees_another_game_count_names_both_counts(
+    store: sqlite3.Connection,
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    shard = _shard(store, 3)
+    stale = _shard(store, 3, shard.final_games + 1)
+    with pytest.raises(HockeyModelError) as caught:
+        shards.build_season_rows(shards.database_path(store), stale)
+    assert str(caught.value) == (
+        f"backtest: the store changed during the run: the parent read {stale.final_games} "
+        f"final games and a worker read {shard.final_games}; do not refresh "
+        "the store while a backtest or a fit runs, then run it again"
+    )
+
+
+def test_each_worker_gets_the_ratings_before_its_season(
+    store: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    seen: dict[int, object] = {}
+    real = shards.training_rows
+
+    def spy(
+        conn: sqlite3.Connection,
+        first: int,
+        last: int,
+        mode: GoalieMode,
+        burn_in: int,
+        **kwargs: Any,
+    ):
+        seen[first] = kwargs.get("elo_start")
+        return real(conn, first, last, mode, burn_in, **kwargs)
+
+    monkeypatch.setattr(shards, "training_rows", spy)
+    shards._build(store, (2, 7), PLAN.burn_in, FEATURES, (GoalieMode.ACTUAL,), 1)
+    boundaries = season_boundaries(shards._final_games(store, PLAN.burn_in))
+    assert sorted(seen) == [2, 3, 4, 5, 6, 7]
+    assert seen == {season: boundaries[season] for season in range(2, 8)}
+    assert seen[3]
+
+
+def test_a_worker_result_count_that_differs_from_the_shard_count_is_refused(
+    store: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    monkeypatch.setattr(shards, "run_units", lambda units, workers: [])
+    with pytest.raises(ValueError, match="shorter"):
+        shards._build(store, (2, 7), PLAN.burn_in, FEATURES, (GoalieMode.ACTUAL,), 1)

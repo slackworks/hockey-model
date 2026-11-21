@@ -51,7 +51,13 @@ RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_ke
 # A fit over the two heaviest shards of that run gives ``wall = work / 3.87 + 105``
 # seconds: about 3.87 effective workers, and 105s of startup and stats before the first
 # mutant. It predicts 24.8 minutes for shard 3, which timed out at its 25-minute limit.
-# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes.
+# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes for the four
+# shards before the backtest modules joined.
+#
+# The backtest modules joined in #288, from local runs on one machine: runner 618s,
+# units 740s, shards 260s, golden 140s. Shard 2 gained units and golden, which brings it to
+# about 2600s of work. Shard 3 gained runner and shards, which brings it to about 2400s.
+# Read the new work as an estimate until a CI run records the real durations.
 #
 # The fit under-reads a shard of cheap mutants. Old shard 0 held 190 mutants of
 # sources.http, summed to 357s, and took 385s: 1.95 times its prediction. Each mutant is
@@ -61,8 +67,10 @@ RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_ke
 SHARDS: tuple[tuple[str, ...], ...] = (
     ("experiments.models", "json_schema"),
     ("backtest.metrics",),
-    ("sources.nhl", "sources.http", "sources.payload"),
+    ("sources.nhl", "sources.http", "sources.payload", "backtest.units", "backtest.golden"),
     (
+        "backtest.runner",
+        "backtest.shards",
         "sources.espn",
         "sources.daily_faceoff",
         "sources.moneypuck",
