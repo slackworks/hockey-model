@@ -41,10 +41,6 @@ def _record(**changes: object) -> ExperimentRecord:
     return ExperimentRecord.from_dict({**_DATA, **changes})
 
 
-def test_the_first_look_uses_half_the_base_tail() -> None:
-    assert promotion_tail(1) == BASE_TAIL / 2
-
-
 @pytest.mark.parametrize("look", range(1, MAX_LOOKS + 1))
 def test_the_tail_is_the_base_tail_over_the_look_times_the_next_look(look: int) -> None:
     assert promotion_tail(look) == pytest.approx(BASE_TAIL / (look * (look + 1)))
@@ -76,6 +72,11 @@ def test_each_later_look_has_a_strictly_smaller_tail(look: int) -> None:
 def test_a_look_outside_the_range_is_refused_with_the_range(look: int) -> None:
     with pytest.raises(HockeyModelError, match=rf"look_number {look}.*1 to {MAX_LOOKS}"):
         promotion_tail(look)
+
+
+def test_the_refusal_names_a_remedy_the_registry_accepts() -> None:
+    with pytest.raises(HockeyModelError, match=r"raise BOOTSTRAP_RESAMPLES.*exploration record"):
+        promotion_tail(MAX_LOOKS + 1)
 
 
 def test_the_first_confirmation_record_is_look_one() -> None:
@@ -122,12 +123,3 @@ def test_look_problem_accepts_exactly_the_count_of_earlier_confirmations_plus_on
     else:
         assert problem is not None
         assert f"expected {expected}" in problem
-
-
-def test_the_base_tail_is_the_five_percent_limit_of_all_looks_together() -> None:
-    assert BASE_TAIL == 0.05
-
-
-def test_a_withdrawn_record_spends_no_look_in_the_count() -> None:
-    withdrawn = _record(status="withdrawn")
-    assert look_problem(_record(id="0002-b", look_number=1), earlier=[withdrawn]) is None

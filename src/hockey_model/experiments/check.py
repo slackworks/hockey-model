@@ -30,7 +30,6 @@ from hockey_model.experiments.cohort import (
 from hockey_model.experiments.history import (
     check_immutable_fields,
     check_one_shot,
-    check_withdrawn_stays,
     deleted_record_ids,
     registration_commit,
 )
@@ -50,10 +49,12 @@ from hockey_model.experiments.registry import (
     duplicate_numbers,
     get_record,
     list_records,
+    misnamed_record_files,
     registry_dir,
     results_dir,
 )
 from hockey_model.experiments.schemas import CHECK_OUTPUT_SCHEMA, EXPERIMENT_SCHEMA
+from hockey_model.experiments.withdrawn import check_withdrawn
 from hockey_model.game_model.features import feature_name_problem
 from hockey_model.game_model.seasons import exploration_plan, scored_label
 from hockey_model.store.timestamps import iso_utc
@@ -151,6 +152,11 @@ def run_experiment(
     root = repo_root or Path.cwd()
     record = get_record(record_id, root)
     validate_against_schema(record, EXPERIMENT_SCHEMA, "EXPERIMENT_SCHEMA")
+    if record.status == STATUS_WITHDRAWN:
+        raise HockeyModelError(
+            f"experiment {record.id!r}: status is 'withdrawn'; a withdrawn record never runs, "
+            "so register a new record"
+        )
 
     cohort_games = 0
     plan_notes: list[str] = []
@@ -208,6 +214,11 @@ def _registry_errors(ids: list[str], repo_root: Path) -> list[str]:
         "a registered record cannot be deleted"
         for record_id in deleted_record_ids(ids, repo_root)
     )
+    errors.extend(
+        f"{name}: the registry holds this JSON file, but its name is not a record id, so the "
+        "look count skips it; rename it to NNNN-slug.json or remove it"
+        for name in misnamed_record_files(repo_root)
+    )
     return errors
 
 
@@ -231,7 +242,7 @@ def _check_one(record_id: str, repo_root: Path) -> CheckEntry:
     else:
         check_immutable_fields(record, commit, repo_root)
         check_one_shot(record, repo_root)
-        check_withdrawn_stays(record, repo_root)
+        check_withdrawn(record, repo_root)
         entry["registration_commit"] = commit
 
     if record.result is not None:
@@ -255,13 +266,9 @@ def _check_status_matches_result(record: ExperimentRecord) -> None:
     An inconclusive record may lack one, because a run without an interval writes none.
     """
     has_result = record.result is not None
-    if record.status == STATUS_WITHDRAWN and has_result:
+    if record.status in {STATUS_REGISTERED, STATUS_WITHDRAWN} and has_result:
         raise HockeyModelError(
-            f"experiment {record.id!r}: status is 'withdrawn' but the record holds a result"
-        )
-    if record.status == STATUS_REGISTERED and has_result:
-        raise HockeyModelError(
-            f"experiment {record.id!r}: status is 'registered' but the record holds a result"
+            f"experiment {record.id!r}: status is {record.status!r} but the record holds a result"
         )
     if record.status in {STATUS_PROMOTED, STATUS_REJECTED} and not has_result:
         raise HockeyModelError(

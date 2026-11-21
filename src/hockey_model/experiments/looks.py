@@ -44,7 +44,8 @@ def promotion_tail_exact(look_number: int) -> Fraction:
     if not 1 <= look_number <= MAX_LOOKS:
         raise HockeyModelError(
             f"look_number {look_number} is outside the supported range 1 to {MAX_LOOKS}; "
-            "register a new hypothesis instead of a further look at the same games"
+            "the bootstrap resolves no smaller tail; raise BOOTSTRAP_RESAMPLES to allow more "
+            "looks, or run an exploration record, which cannot promote"
         )
     return Fraction(BASE_TAIL) / (look_number * (look_number + 1))
 
@@ -52,6 +53,16 @@ def promotion_tail_exact(look_number: int) -> Fraction:
 def promotion_tail(look_number: int) -> float:
     """Return the share the interval cuts at look ``look_number``, as a float."""
     return float(promotion_tail_exact(look_number))
+
+
+def _withdrawn_note(withdrawn: Sequence[str]) -> str:
+    """Return a note that names the withdrawn records, which spend no look."""
+    if not withdrawn:
+        return ""
+    return (
+        f". Withdrawn records spend no look ({', '.join(withdrawn)}), so withdrawing a record "
+        "after a later one counted it breaks that one's look_number"
+    )
 
 
 def look_problem(record: ExperimentRecord, earlier: Sequence[ExperimentRecord]) -> str | None:
@@ -65,13 +76,15 @@ def look_problem(record: ExperimentRecord, earlier: Sequence[ExperimentRecord]) 
     """
     if record.cohort != CONFIRMATION:
         return None
-    spent = [r.id for r in earlier if r.cohort == CONFIRMATION and r.status != STATUS_WITHDRAWN]
+    confirmations = [r for r in earlier if r.cohort == CONFIRMATION]
+    spent = [r.id for r in confirmations if r.status != STATUS_WITHDRAWN]
+    withdrawn = [r.id for r in confirmations if r.status == STATUS_WITHDRAWN]
     expected = len(spent) + 1
     if record.look_number != expected:
         named = ", ".join(spent) if spent else "none"
         return (
             f"look_number is {record.look_number}, expected {expected}: "
             f"earlier confirmation records score overlapping games ({named}); "
-            f"set look_number to {expected}"
+            f"set look_number to {expected}{_withdrawn_note(withdrawn)}"
         )
     return None

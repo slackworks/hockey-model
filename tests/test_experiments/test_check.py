@@ -405,7 +405,7 @@ class TestRegistryRules:
         assert any("0002-other: tracked" in error for error in result["errors"])
 
     def test_a_deleted_record_without_a_result_is_no_loss(self, tmp_path: Path, registry_dir: Path):
-        """A record that never ran can be removed before it matters."""
+        """A record that never ran can be removed. The number it frees is tracked in #291."""
         _init_repo(tmp_path)
         register(registry_dir, {"id": "0001-valid"})
         register(registry_dir, {"id": "0002-draft"})

@@ -21,6 +21,7 @@ from jsonschema import Draft202012Validator
 from hockey_model.experiments.looks import MAX_LOOKS
 from hockey_model.experiments.models import (
     IMMUTABLE_FIELDS,
+    VALID_STATUSES,
     ExperimentRecord,
     HockeyModelError,
     record_from_text,
@@ -57,7 +58,7 @@ _MINIMAL_SCHEMA = {
         "cohort": {"type": "string", "enum": ["exploration", "confirmation"]},
         "status": {
             "type": "string",
-            "enum": ["registered", "rejected", "inconclusive", "promoted"],
+            "enum": list(VALID_STATUSES),
         },
         "min_games": {"type": "integer"},
     },
