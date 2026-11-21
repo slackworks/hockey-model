@@ -62,7 +62,8 @@ def holds(conn: sqlite3.Connection, requirement: Requirement) -> bool:
     pragma = "PRAGMA table_info(" + requirement.table + ")"
     found = {row[1]: row[3] for row in conn.execute(pragma)}
     if not requirement.present:
-        return requirement.column not in found
+        # A table that does not exist has no column, and it does not hold the shape either.
+        return bool(found) and requirement.column not in found
     if requirement.column not in found:
         return False
     return not requirement.not_null or bool(found[requirement.column])

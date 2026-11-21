@@ -79,14 +79,16 @@ class RefreshRun:
         unit: Callable[[datetime], int],
         expected_absence: Callable[[Exception], str | None] | None = None,
     ) -> bool:
-        """Run one unit of work in one transaction. Return False when it failed.
+        """Run one unit of work in one transaction. Return False when it wrote nothing.
 
         A failed unit writes nothing, adds its error to the report, and leaves a
         ``source_reads`` row with ``ok = 0``. The unit returns the rows it wrote.
 
         ``expected_absence`` takes the failure and returns a note when the failure is a resource
         that does not exist yet. The note replaces the error, and no failed read is stored, so the
-        absence never becomes a known gap. The next refresh tries the unit again.
+        absence never becomes a known gap. The next refresh tries the unit again. The
+        return value is False for an expected absence too, so a caller that counts
+        failures counts it, and the callback must name one file only.
         """
         stamp = self.stamp()
         try:
