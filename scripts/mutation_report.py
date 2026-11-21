@@ -40,6 +40,8 @@ from pathlib import Path
 MARKER = "<!-- hockey-model-mutation-report -->"
 TITLE = "Mutation report: the weekly run needs a look"
 PROVISIONAL_BASELINE = 524
+# The report lists this many timed-out mutants, and counts the rest.
+TIMEOUT_LIST_CAP = 20
 # ``no_tests`` is a finished outcome: the test run reached the mutant and no test covers it.
 COUNT_KEYS = ("killed", "survived", "timeout", "no_tests", "total")
 STATUS_CLEAN = "clean"
@@ -198,6 +200,56 @@ def build_body(
     return "\n".join(lines) + "\n"
 
 
+def _read_timeouts(path: Path) -> list[tuple[str, float, int]]:
+    """Read the list of timed-out mutants. Raise ValueError that names the bad part."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{path}: {_reason(error)}") from error
+    items = data.get("timeouts") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError(f"{path}: the file has no timeouts list")
+    found: list[tuple[str, float, int]] = []
+    for item in items:
+        name = item.get("mutant") if isinstance(item, dict) else None
+        estimated = item.get("estimated_s") if isinstance(item, dict) else None
+        limit = item.get("limit_s") if isinstance(item, dict) else None
+        if not isinstance(name, str) or isinstance(estimated, bool) or isinstance(limit, bool):
+            raise ValueError(f"{path}: a timeout entry needs mutant, estimated_s, and limit_s")
+        if not isinstance(estimated, int | float) or not isinstance(limit, int):
+            raise ValueError(f"{path}: a timeout entry needs mutant, estimated_s, and limit_s")
+        found.append((name, float(estimated), limit))
+    return found
+
+
+def timeouts_section(path: Path) -> str:
+    """Return the body section that lists the timed-out mutants, or text that says why not.
+
+    Each run measures the test times again, so the CPU limit of a mutant moves from run to run.
+    The estimate and the limit let a reader tell a mutant that hangs from one near a moved limit.
+    A list that cannot be read changes nothing else in the report.
+    """
+    try:
+        items = _read_timeouts(path)
+    except ValueError as error:
+        return f"\nThe list of timed-out mutants could not be read: {error}\n"
+    if not items:
+        return ""
+    lines = [
+        "",
+        "Timed-out mutants. Each run measures the test times again, so the limit moves from run "
+        "to run, and a mutant near its limit can time out in one run and survive in the next:",
+        "",
+    ]
+    lines += [
+        f"- `{name}`: estimated {estimated:g} s, limit {limit} s"
+        for name, estimated, limit in items[:TIMEOUT_LIST_CAP]
+    ]
+    if len(items) > TIMEOUT_LIST_CAP:
+        lines.append(f"- and {len(items) - TIMEOUT_LIST_CAP} more")
+    return "\n".join(lines) + "\n"
+
+
 def _is_bot(author: object) -> bool:
     """Return True when gh reports the author as a bot account."""
     return isinstance(author, dict) and author.get("is_bot") is True
@@ -262,6 +314,7 @@ def _parser() -> argparse.ArgumentParser:
     for key in RESULT_KEYS:
         status.add_argument(f"--{key}-result", choices=RESULT_VALUES, default=None)
     status.add_argument("--out", type=Path)
+    status.add_argument("--timeouts", type=Path, help="the list of timed-out mutants")
     status.add_argument("--run-url")
     status.add_argument(
         "--reason",
@@ -299,6 +352,8 @@ def _status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             args.run_url,
             causes(stats, status, given, given_results or {k: "success" for k in RESULT_KEYS}),
         )
+        if args.timeouts is not None:
+            body += timeouts_section(args.timeouts)
         args.out.write_text(body, encoding="utf-8")
     print(status)
     return 0
