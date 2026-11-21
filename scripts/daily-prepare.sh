@@ -15,10 +15,10 @@
 # skips what it already read. A budget that stops the backfill before it reads one older
 # day or game, not counting the last two days, exits with code 1, and the message names
 # --budget-seconds: raise BACKFILL_BUDGET_S. The backtest files and a prepared-DATE
-# marker go next to the store, where daily-report.sh finds them. The backtest runs its
-# feature builds one season at a time in up to BACKTEST_WORKERS processes (default 4, the
-# cores of a GitHub runner), and the output does not change with the count. Any failed step stops
-# the script with its exit code, so a failed run writes no marker.
+# marker go next to the store, where daily-report.sh finds them. The backtest and the fit build
+# their feature rows one season at a time in up to BACKTEST_WORKERS processes (default 4, the
+# cores of a GitHub runner), and the output does not change with the count. Any failed step
+# stops the script with its exit code, so a failed run writes no marker.
 set -euo pipefail
 
 day=""
@@ -157,7 +157,8 @@ fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
-uv run hockey-model fit --features "$live_features" --label live
+uv run hockey-model fit --features "$live_features" --label live \
+  --workers "${BACKTEST_WORKERS:-4}"
 mv "$backtest_games.new" "$backtest_games"
 mv "$backtest_json.new" "$backtest_json"
 touch "$store_dir/prepared-$day"

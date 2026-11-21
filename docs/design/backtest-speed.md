@@ -89,7 +89,7 @@ Measured on 2026-11-20 on a copy of the real store (`~/.cache/hockey-model/real.
 | total, 4 workers | 3252 |
 
 The two feature builds are more than 99.9% of the time of the backtest.
-The final `fit` that follows in `daily-prepare.sh` builds the actual rows again, which costs as much as the first build; #289 tracks that.
+The final `fit` that follows in `daily-prepare.sh` builds the actual rows again, which costs as much as the first build. The season shards below cut that cost too (#289).
 Every fit and every bootstrap run takes a tenth of a second, so a process pool for them costs more than it saves.
 They stay named units and run in the main process.
 The JSON report and the per-game CSV were byte-identical for 1 and for 4 workers on the real store (checked with `cmp`).
@@ -108,6 +108,20 @@ Each season is one unit for each goalie mode, so there are 20 units for the 10 s
 The sharded run is 3.5 times faster than the serial run (4454 s), and 2.6 times faster than the run with one worker for each full build (3252 s).
 The report and the per-game CSV were byte-identical to the serial run on the real store (checked with `cmp`).
 The golden test runs the sharded build too, and its canonical hashes match the committed ones.
+
+### Final fit (#289)
+
+The final `fit` goes through the newest season that holds a final game, and the backtest stops at the last scored season.
+The two row sets differ, so the fit cannot reuse the rows of the backtest.
+`fit --workers N` builds its rows with the same season shards (`actual_rows`) instead.
+
+| Step | Seconds |
+| --- | --- |
+| `fit`, 1 worker (full build) | 1213 |
+| `fit`, 4 workers (season shards) | 366 |
+
+The saved weights were byte-identical for the two fits on the real store.
+A prepare of a new day takes about 27 minutes with 4 workers: the backtest at 1262 s and the fit at 366 s, down from about 95 minutes.
 
 ### Target
 

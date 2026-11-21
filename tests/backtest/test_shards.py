@@ -7,7 +7,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from test_runner_store import PLAN, seed
 
-from hockey_model.backtest.shards import build_sharded
+from hockey_model.backtest.shards import actual_rows, build_sharded
 from hockey_model.game_model.elo import EloBook, replay, season_boundaries
 from hockey_model.game_model.features import FEATURES, GoalieMode
 from hockey_model.game_model.training import training_rows
@@ -124,3 +124,22 @@ def test_the_sharded_build_equals_two_full_builds(store: sqlite3.Connection) -> 
 def test_the_sharded_build_of_an_empty_store_is_empty(store: sqlite3.Connection) -> None:
     store.commit()
     assert build_sharded(store, PLAN, FEATURES, 2) == ([], [])
+
+
+def test_the_rows_for_a_fit_equal_the_full_build_for_any_worker_count(
+    store: sqlite3.Connection,
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    expected = training_rows(store, 2, 7, GoalieMode.ACTUAL, PLAN.burn_in, names=FEATURES)
+    for workers in (1, 2, 4):
+        assert actual_rows(store, 2, 7, FEATURES, workers, PLAN.burn_in) == expected
+
+
+def test_the_rows_for_a_fit_of_a_later_range_start_from_the_boundary(
+    store: sqlite3.Connection,
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    expected = training_rows(store, 4, 6, GoalieMode.ACTUAL, PLAN.burn_in, names=FEATURES)
+    assert actual_rows(store, 4, 6, FEATURES, 3, PLAN.burn_in) == expected

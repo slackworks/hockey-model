@@ -66,6 +66,7 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
             'report; "" fits the Elo alone, which is the result of a failed joint test'
         ),
     )
+    _add_workers(parser)
     parser.add_argument(
         "--label",
         default=None,

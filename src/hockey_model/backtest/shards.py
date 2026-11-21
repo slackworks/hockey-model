@@ -15,7 +15,7 @@ from pathlib import Path
 from hockey_model.backtest.units import Unit, database_path, open_read_only, run_units
 from hockey_model.game_model.elo import season_boundaries
 from hockey_model.game_model.features import GoalieMode
-from hockey_model.game_model.seasons import SeasonPlan
+from hockey_model.game_model.seasons import ELO_BURN_IN, SeasonPlan
 from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.store.reads import LATEST_GAME, final_games_before
 
@@ -55,6 +55,31 @@ def _boundaries(conn: sqlite3.Connection, burn_in: int) -> dict[int, dict[str, f
     return season_boundaries(games)
 
 
+def _build(
+    conn: sqlite3.Connection,
+    seasons_range: tuple[int, int],
+    burn_in: int,
+    names: Sequence[str],
+    modes: Sequence[GoalieMode],
+    workers: int,
+) -> dict[GoalieMode, list[TrainingRow]]:
+    """Build the rows of each mode, one season at a time, and join them in season order."""
+    path = database_path(conn)
+    boundaries = _boundaries(conn, burn_in)
+    seasons = sorted(s for s in boundaries if seasons_range[0] <= s <= seasons_range[1])
+    keys = [(mode, season) for mode in modes for season in seasons]
+    units = [
+        Unit(
+            f"build {mode.value} rows {season}",
+            build_season_rows,
+            (path, Shard(season, mode, burn_in, tuple(names), boundaries[season])),
+        )
+        for mode, season in keys
+    ]
+    parts = dict(zip(keys, run_units(units, workers), strict=True))
+    return {mode: [row for season in seasons for row in parts[(mode, season)]] for mode in modes}
+
+
 def build_sharded(
     conn: sqlite3.Connection, plan: SeasonPlan, names: Sequence[str], workers: int
 ) -> tuple[list[TrainingRow], list[TrainingRow]]:
@@ -64,21 +89,25 @@ def build_sharded(
     in that range. The guess shards come first in the queue, because the guess build is the
     longer one.
     """
-    first, last = plan.fit_first, plan.scored[1]
-    path = database_path(conn)
-    boundaries = _boundaries(conn, plan.burn_in)
-    seasons = sorted(season for season in boundaries if first <= season <= last)
-    keys = [(mode, season) for mode in _MODES for season in seasons]
-    units = [
-        Unit(
-            f"build {mode.value} rows {season}",
-            build_season_rows,
-            (path, Shard(season, mode, plan.burn_in, tuple(names), boundaries[season])),
-        )
-        for mode, season in keys
+    rows = _build(conn, (plan.fit_first, plan.scored[1]), plan.burn_in, names, _MODES, workers)
+    return rows[GoalieMode.ACTUAL], rows[GoalieMode.GUESS]
+
+
+def actual_rows(
+    conn: sqlite3.Connection,
+    first: int,
+    last: int,
+    names: Sequence[str],
+    workers: int,
+    burn_in: int = ELO_BURN_IN,
+) -> list[TrainingRow]:
+    """Return the rows of the games from ``first`` through ``last`` with the goalie who started.
+
+    One worker runs the full build. More workers build one season at a time, and the rows are
+    the same. The fit command uses this.
+    """
+    if workers <= 1:
+        return training_rows(conn, first, last, GoalieMode.ACTUAL, burn_in, names=names)
+    return _build(conn, (first, last), burn_in, names, (GoalieMode.ACTUAL,), workers)[
+        GoalieMode.ACTUAL
     ]
-    parts = dict(zip(keys, run_units(units, workers), strict=True))
-    return (
-        [row for season in seasons for row in parts[(GoalieMode.ACTUAL, season)]],
-        [row for season in seasons for row in parts[(GoalieMode.GUESS, season)]],
-    )

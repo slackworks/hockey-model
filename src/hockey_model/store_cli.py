@@ -9,10 +9,11 @@ from pathlib import Path
 
 from hockey_model.backtest.game_records import write_game_records
 from hockey_model.backtest.runner import run_backtest
+from hockey_model.backtest.shards import actual_rows
 from hockey_model.daily_report import build_report, model_identity, report_tag, write_report
 from hockey_model.game import game_win_probability
 from hockey_model.game_day import game_day_of, game_day_window
-from hockey_model.game_model.features import GoalieMode, feature_name_problem
+from hockey_model.game_model.features import feature_name_problem
 from hockey_model.game_model.imputation import check_imputation
 from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
@@ -21,7 +22,6 @@ from hockey_model.game_model.training import (
     game_input,
     last_trained_season,
     last_trained_start,
-    training_rows,
 )
 from hockey_model.report_gate import compare_inputs, decide, warning
 from hockey_model.report_trigger import (
@@ -160,7 +160,7 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
                 f"run `hockey-model refresh`, or pass --through-season {newest}"
             )
         if features:
-            rows = training_rows(conn, FIT_FIRST, through, GoalieMode.ACTUAL, names=features)
+            rows = actual_rows(conn, FIT_FIRST, through, features, args.workers)
             if not rows:
                 raise HockeyModelError(
                     f"fit through {through}: no games in the store from {FIT_FIRST}; "
