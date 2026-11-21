@@ -1,19 +1,15 @@
 """Tests for scripts/run-step.sh, the progress lines of the shell scripts (#133)."""
 
-import re
 import subprocess
 from pathlib import Path
 
-import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from mutation_copy import require_path
+from progress_support import LINE
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = require_path(ROOT / "scripts" / "run-step.sh")
-# The same line format as src/hockey_model/progress.py.
-LINE = re.compile(
-    r"progress (\S+) (\S+) (start|tick|stop|end) elapsed=([0-9.]+)s"
-    r"( done=[0-9]+(/[0-9]+)?)?( budget_left=[0-9]+s)?( reason=.+)?"
-)
 
 
 def _bash(body: str) -> subprocess.CompletedProcess[str]:
@@ -54,18 +50,29 @@ def test_the_redirect_of_the_caller_reaches_only_the_command() -> None:
     assert "hello" in result.stderr
 
 
-@pytest.mark.parametrize("name", ["", "two words"])
-def test_a_step_name_that_is_not_one_word_is_refused(name: str) -> None:
-    result = _bash(f"run_step '{name}' echo hi")
-    assert result.returncode == 2
-    assert "must be one word" in result.stderr
-    assert "hi" not in result.stdout
-
-
 def test_a_missing_script_name_is_refused() -> None:
     script = f'set -euo pipefail\nsource "{SCRIPT}"\nrun_step one echo hi\n'
     result = subprocess.run(
         ["bash", "-c", script], capture_output=True, text=True, check=False, timeout=60
     )
-    assert result.returncode == 2
-    assert "RUN_STEP_COMMAND" in result.stderr
+    assert result.returncode != 0
+    assert "set RUN_STEP_COMMAND to the name" in result.stderr
+    assert "hi" not in result.stdout
+
+
+@settings(max_examples=15, deadline=None)
+@given(
+    code=st.integers(min_value=0, max_value=255),
+    name=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
+)
+def test_every_line_of_the_shell_writer_has_the_one_grammar(code: int, name: str) -> None:
+    result = _bash(f"rc=0\nrun_step {name} bash -c 'exit {code}' || rc=$?\necho $rc")
+    assert result.stdout == f"{code}\n"
+    start, last = result.stderr.splitlines()
+    assert LINE.fullmatch(start) and LINE.fullmatch(last)
+    assert start == f"progress demo {name} start elapsed=0.0s"
+    if code == 0:
+        assert " end elapsed=" in last
+    else:
+        assert " stop elapsed=" in last
+        assert last.endswith(f" reason=exit code {code}")

@@ -1,7 +1,6 @@
 """Tests for the progress lines that long commands write to stderr (#133)."""
 
 import logging
-import re
 import sys
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
@@ -9,6 +8,7 @@ from contextlib import contextmanager
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from progress_support import LINE
 
 from hockey_model import progress
 
@@ -259,7 +259,7 @@ def test_a_stop_line_is_one_line_with_printable_text_only(reason: str) -> None:
             progress.stopped(reason)
     stop = captured[-1]
     assert len(stop.splitlines()) == 1
-    assert _LINE.fullmatch(stop), stop
+    assert LINE.fullmatch(stop), stop
     assert all(char.isprintable() for char in stop)
     assert "  " not in stop
 
@@ -317,12 +317,6 @@ def test_the_count_of_a_nested_step_is_the_sum_of_its_own_advances(
         assert outer.done == sum(outer_counts)
 
 
-_LINE = re.compile(
-    r"progress (\S+) (\S+) (start|tick|stop|end) elapsed=([0-9.]+)s"
-    r"( done=[0-9]+(/[0-9]+)?)?( budget_left=[0-9]+s)?( reason=.+)?"
-)
-
-
 @given(
     done=st.integers(min_value=0, max_value=1000),
     total=st.one_of(st.none(), st.integers(min_value=0, max_value=1000)),
@@ -347,11 +341,13 @@ def test_every_line_has_the_one_format_and_the_values_of_the_step(
         "end" if reason is None else "stop",
     ]
     for line in captured:
-        assert _LINE.fullmatch(line), line
+        assert LINE.fullmatch(line), line
     tick = captured[1]
-    assert f"elapsed={seconds:.1f}s" in tick
+    # The clock adds to 100.0, so the elapsed time is the difference after the float rounding.
+    elapsed = clock.now - 100.0
+    assert f"elapsed={elapsed:.1f}s" in tick
     if total is not None:
         assert f" done={done}/{total}" in tick
     if budget is not None:
-        assert f" budget_left={max(0.0, budget - seconds):.0f}s" in tick
+        assert f" budget_left={max(0.0, budget - elapsed):.0f}s" in tick
     assert (" reason=" in captured[-1]) == (reason is not None)
