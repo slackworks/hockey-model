@@ -7,7 +7,7 @@ All history is read as of the earlier of ``as_of`` and the game start.
 
 import math
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -17,22 +17,14 @@ from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.goalies import boxscore_starter, resolve_goalie
 from hockey_model.identity import Catalog
 from hockey_model.store.reads import (
-    mp_attempt_form_before,
     mp_goalie_form_before,
     mp_team_form_before,
     player_catalog,
     team_games_before,
 )
 
-# The production candidates. The attempt set replaces only xg_form, for the leak test (#77).
+# The production candidates.
 FEATURES = ("xg_form", "goalie_gsax", "rest")
-ATTEMPT_FEATURES = ("attempt_form", "goalie_gsax", "rest")
-TeamFormReader = Callable[[sqlite3.Connection, str, datetime, int], Sequence[tuple[float, float]]]
-_FORM_READERS: dict[str, tuple[TeamFormReader, MissingKind]] = {
-    "xg_form": (mp_team_form_before, MissingKind.XG_FORM),
-    "attempt_form": (mp_attempt_form_before, MissingKind.ATTEMPT_FORM),
-}
-ALL_FEATURE_NAMES = ("xg_form", "attempt_form", "goalie_gsax", "rest")
 GOALIE_FEATURE = "goalie_gsax"
 FORM_WINDOW = 10
 GOALIE_WINDOW = 20
@@ -66,9 +58,9 @@ class FeatureRow:
 
 def feature_name_problem(names: Sequence[str]) -> str | None:
     """Return why ``names`` is not a usable feature list, or ``None`` when it is."""
-    unknown = [name for name in names if name not in ALL_FEATURE_NAMES]
+    unknown = [name for name in names if name not in FEATURES]
     if unknown:
-        return f"unknown feature {unknown[0]!r}; use any of {', '.join(ALL_FEATURE_NAMES)}"
+        return f"unknown feature {unknown[0]!r}; use any of {', '.join(FEATURES)}"
     repeated = sorted({name for name in names if names.count(name) > 1})
     if repeated:
         return f"feature {repeated[0]!r} is named more than once"
@@ -90,13 +82,9 @@ def _share(rows: Sequence[tuple[float, float]]) -> tuple[float | None, int]:
 
 
 def _share_form(
-    conn: sqlite3.Connection,
-    game: Game,
-    cutoff: datetime,
-    read: TeamFormReader,
-    kind: MissingKind,
+    conn: sqlite3.Connection, game: Game, cutoff: datetime
 ) -> tuple[float, list[MissingInput], list[MissingInput]]:
-    """Return home minus away share of ``read``'s made-for over its total.
+    """Return home minus away share of the expected goals for over their total.
 
     The second list holds the teams with no share, which make the difference neutral. The third
     list holds the teams that have a share although a game with a zero total was left out.
@@ -105,7 +93,7 @@ def _share_form(
     gaps: list[MissingInput] = []
     left_out: list[MissingInput] = []
     for team in (game.home, game.away):
-        rows = read(conn, team, cutoff, FORM_WINDOW)
+        rows = mp_team_form_before(conn, team, cutoff, FORM_WINDOW)
         share, skipped = _share(rows)
         shares[team] = share
         if share is None:
@@ -114,7 +102,7 @@ def _share_form(
                 if skipped
                 else "no MoneyPuck games before this game"
             )
-            gaps.append(MissingInput(kind, team, reason))
+            gaps.append(MissingInput(MissingKind.XG_FORM, team, reason))
         elif skipped:
             note = f"{skipped} of {len(rows)} MoneyPuck games have a zero total and are left out"
             left_out.append(MissingInput(MissingKind.FORM_GAMES_LEFT_OUT, team, note))
@@ -122,6 +110,18 @@ def _share_form(
     if home is None or away is None:
         return NEUTRAL_FORM, gaps, left_out
     return home - away, gaps, left_out
+
+
+def _xg_form(
+    conn: sqlite3.Connection, game: Game, cutoff: datetime, names: Sequence[str]
+) -> tuple[dict[str, float], list[MissingInput], tuple[DegradedInput, ...], bool]:
+    """Return the xg_form value, its notes, its degraded input, and whether a team was read."""
+    if "xg_form" not in names:
+        return {}, [], (), False
+    value, gaps, left_out = _share_form(conn, game, cutoff)
+    degraded = (_degraded("xg_form", MissingKind.XG_FORM, gaps),) if gaps else ()
+    # Two teams, so fewer than two gaps means the form was read for at least one team.
+    return {"xg_form": value}, [*gaps, *left_out], degraded, len(gaps) < 2  # noqa: PLR2004
 
 
 def _starter(
@@ -257,11 +257,7 @@ def build_features(
         raise ValueError(f"build_features: {problem}")
     catalog = player_catalog(conn) if catalog is None else catalog
     cutoff = min(as_of, game.start)
-    forms = {
-        name: _share_form(conn, game, cutoff, reader, kind)
-        for name, (reader, kind) in _FORM_READERS.items()
-        if name in names
-    }
+    values, missing, imputed, form_used = _xg_form(conn, game, cutoff, names)
     gsax, goalie_missing, goalie_used = _goalie_gsax(conn, game, as_of, goalie_mode, catalog)
     if GOALIE_FEATURE not in names:
         # The starter notes stay, because a reader wants to know who plays. The goalie form
@@ -269,16 +265,7 @@ def build_features(
         goalie_missing = [m for m in goalie_missing if m.kind is not MissingKind.GOALIE_FORM]
         goalie_used = False
     rest, rest_missing = _rest(conn, game, cutoff)
-    # Two teams, so fewer than two gaps means the form was read for at least one team.
-    form_used = any(len(gaps) < 2 for _, gaps, _ in forms.values())  # noqa: PLR2004
-    values = {name: value for name, (value, _, _) in forms.items()}
     values.update({"goalie_gsax": gsax, "rest": rest})
-    missing = [m for _, gaps, left_out in forms.values() for m in (*gaps, *left_out)]
-    imputed = tuple(
-        _degraded(name, _FORM_READERS[name][1], gaps)
-        for name, (_, gaps, _) in forms.items()
-        if gaps
-    )
     # A goalie or a rest value that was not measured is set to a stand-in for that team.
     if GOALIE_FEATURE in names:
         imputed += _degraded_if(GOALIE_FEATURE, MissingKind.GOALIE_FORM, goalie_missing)

@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from seeding import restore_unblocked_columns
 from test_upgrade import make_v1_store, rows, version_of
 
 from hockey_model.store.db import SCHEMA_VERSION, connect
@@ -32,6 +33,7 @@ def v5(tmp_path: Path) -> Path:
     # Version 6 still held these two columns, which the 6->7 step drops.
     conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
     conn.execute("ALTER TABLE injury_reads ADD COLUMN nhl_id INTEGER")
+    restore_unblocked_columns(conn)
     conn.execute("UPDATE schema_version SET version = 5")
     conn.commit()
     conn.close()

@@ -33,20 +33,7 @@ _LEDGER = (
     " applied_at TEXT NOT NULL, backup_path TEXT NOT NULL)"
 )
 _VIEWS_PATH = Path(__file__).with_name("views.sql")
-# The MoneyPuck team file is read on the weekly schedule, so after an upgrade the
-# attempt counts arrive only at the next weekly read unless the reread flag forces it.
-_NEXT_STEP = (
-    "run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest; "
-    "until it runs, the attempt-form features are empty and every game counts as missing"
-)
 _SKIP_NOTE = "no store file there yet; the first refresh creates it at the current version"
-# Only the 1->2 step writes an empty count. The decision to ask for a reread is taken from
-# the data below, because a version 2 store that a 1->2 step made can reach a later version
-# with its counts still NULL.
-_EMPTY_ATTEMPTS_FROM = 1
-# The view, not the table: a reread appends a counted row and leaves the v1 row in place, so
-# a table count would ask for the reread again forever.
-_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM latest_mp_team_games WHERE attempts_known = 0"
 
 
 @dataclass(frozen=True)
@@ -57,7 +44,7 @@ class UpgradeReport:
     the last upgrade that the ledger records, or None when there is none. The workflow drops
     that file after the run, so a no-op report can name a backup that is gone.
     ``from_version`` is None when there is no store file and the caller allowed a skip.
-    ``next_step`` is a command to run, or None. ``note`` is a statement about the run.
+    ``note`` is a statement about the run.
     """
 
     path: str
@@ -65,7 +52,6 @@ class UpgradeReport:
     to_version: int
     changed: bool
     backup_path: str | None
-    next_step: str | None = None
     note: str | None = None
 
 
@@ -287,10 +273,9 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
             _refuse_a_null_column(conn, path)
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
-        next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
     finally:
         conn.close()
-    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step, note)
+    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), note)
 
 
 def _start_version(conn: sqlite3.Connection, path: Path) -> tuple[int, str | None]:
@@ -333,18 +318,3 @@ def _stamp_ahead_note(path: Path, earned: int, missing: Requirement) -> str:
         f"{missing.need}. Every change from version {earned} runs again, "
         "and the ledger records it."
     )
-
-
-def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
-    """Return True when the upgrade left a MoneyPuck attempt count empty.
-
-    The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
-    The answer comes from the data, not from the starting version, because a version 2 store
-    that the 1->2 step made can reach a later version with its counts still NULL. A reread
-    adds a counted row beside the old one, so the check reads the newest read of each team
-    game, as the model does.
-    """
-    if stored < _EMPTY_ATTEMPTS_FROM + 1:
-        return True
-    row = conn.execute(_EMPTY_ATTEMPTS_SQL).fetchone()
-    return row is not None and int(row[0]) > 0

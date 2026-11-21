@@ -58,6 +58,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add a `notes` list to the `experiments check` output. It says `deletion history not checked` and the reason when the check runs outside a git work tree or before the first commit. [feat:experiments]
 - Add `scripts/manual-prepare-pending.sh` and a `gate` job to `daily-prepare`. A scheduled run stands aside while a manual run waits or runs, so it no longer cancels a waiting forced prepare. The store group moves from the workflow to the `prepare` job, and `prep-running.sh` reads only the start of the `prepare` job. [fix:ci]
 - Add the release workflow `release.yml`, which runs for a tag that starts with `v`. `scripts/check_release.py` fails unless the tag is `v` and `project.version`, the version is a normal PEP 440 version with no local part and no `.dev` part, and `CHANGELOG.md` has a `## [VERSION]` section with text. The build job runs the wheel smoke test and checks that the wheel and the source archive name the version. The publish job, the only job that can write, attaches both files to the GitHub release through `scripts/publish-release.sh`, which skips a file with the same bytes and stops on a file with other bytes. [feat:ci]
+- Make the release workflow fail unless the newest push run of `ci.yml` for the tagged commit succeeded, through `scripts/check-commit-ci.sh`. A tag on a commit with a red or a missing push run publishes nothing, and a pull request run does not count. [feat:ci]
 - Add `renovate.json` for Renovate, with a `minimumReleaseAge` hold, strict internal checks, digest pins for actions, and no automerge until #104 shows the required checks. Dependabot stays on for alerts only. See `docs/design/dependency-updates.md`. [feat:ci]
 
 ### Changed
@@ -70,7 +71,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
-- The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
+- The MoneyPuck form reads fail with the game named when a stored team game or goalie game has no expected goals. A skip would move the form window further back with no word. The reread flag writes the row again. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
 
 - Record the DraftKings comparison in the README, the backtest report, and the run report. The model is level with the line in 2024-25 and worse in 2025-26, and it fails the blend gate. [docs:backtest]
@@ -90,6 +91,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Drop `starter_reads.nhl_id` and `injury_reads.nhl_id` from the store, which is now schema version 7. No code wrote a value there or read one. `hockey-model store upgrade` copies any value that it finds in these columns, with the other columns of its row, to the new table `retired_nhl_ids` before it drops them. A store that holds no value gets an empty table. [feat:store]
 - Skip the `validation` and `test` jobs of CI for a pull request that changes only Markdown, through a new `changes` job and `scripts/ci-changes.sh`. A change to the TLA design note still runs them, because a test reads it. [feat:ci]
 - Run `pytest` with `-n auto` (pytest-xdist) in the CI test job and in the pre-push coverage hook. [feat:ci]
+- Remove the attempt-form research path of the leak test (#77, #93): the `--candidates` option of `hockey-model backtest`, the `attempt_form` feature and the `attempt_form` missing kind, `mp_attempt_form_before`, and the `next_step` field of `hockey-model store upgrade`, which only asked for a reread before an attempt-form backtest. A fit or a candidate list that names `attempt_form` now fails with the list of features. The stored attempt columns stay. The report `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that reproduces it. [refactor:model]
+- Drop `mp_team_games.unblocked_for` and `mp_team_games.unblocked_against` from the store, which is now schema version 8, and stop reading the two `unblockedShotAttempts` columns of the MoneyPuck file. No feature used them. `hockey-model store upgrade` copies every stored value, with the game, the team, and the read time of its row, to the new table `retired_mp_unblocked` before it rebuilds `mp_team_games`. Every other value of a row stays, so the next read of the file writes no row again. [refactor:store]
 
 ### Fixed
 

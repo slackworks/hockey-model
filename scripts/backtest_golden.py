@@ -23,8 +23,8 @@ from pathlib import Path
 from hockey_model.backtest.golden import write_golden_files
 from hockey_model.backtest.runner import run_backtest
 from hockey_model.backtest.units import open_read_only
+from hockey_model.game_model.features import FEATURES
 from hockey_model.store.db import sqlite_failure_fix
-from hockey_model.store_cli_parsers import CANDIDATE_SETS
 from hockey_model.types import HockeyModelError
 
 
@@ -52,9 +52,7 @@ def _run(args: argparse.Namespace) -> int:
     try:
         conn = open_read_only(args.db)
         try:
-            report, records = run_backtest(
-                conn, candidates=CANDIDATE_SETS["xg"], workers=args.workers
-            )
+            report, records = run_backtest(conn, candidates=FEATURES, workers=args.workers)
         finally:
             conn.close()
         hashes = write_golden_files(report, records, args.out)

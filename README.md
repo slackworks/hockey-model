@@ -121,26 +121,24 @@ HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model backtest --games-out
 
 - `refresh` reads every source and appends each read with its fetch time. It exits 1 when a source failed, and it prints what each source wrote, the errors, the credits, and `backfill_complete`. The first backfill makes about 16,000 NHL requests at two a second, so it takes hours. A backfill reads one year at a time, newest year first. `--budget-seconds N` stops it after N seconds, and `backfill_complete` is then false. The budget also stops the MoneyPuck files: a run reads one stale MoneyPuck file at least, and it stops before the next one when the time is spent. A refresh skips a score day, boxscore, or MoneyPuck file whose reads failed in a row, and the notes name it. A URL becomes a skipped gap after `ABANDON_AFTER_FAILED_READS` failed reads in a row that span `ABANDON_MIN_SPAN_DAYS`, or after that many in a row when each failed with a permanent HTTP status such as 403. A live feed is read on every run instead: a failed read of a feed that is already a known gap records no error, so it does not set the exit code, and each prediction names it as a stale source. One good read clears that gap with no flag needed. `--retry-skipped` reads every skipped unit again once, and one good read clears a skip. Run it again after a stop or an error: it skips what it already has. A game that started long ago and is still not final stays in the worklist: its score day is read again after a wait, at most `MAX_UNRESOLVED_DAYS` days in one run, and the notes name the game. After the MoneyPuck files, the notes count the rows that match no stored game and the rows whose game is not final yet. `refresh --starters-only` reads no MoneyPuck file, so it writes neither note.
 - `refresh --starters-only` reads only the schedule, the goalie sources, and the injuries. The report run uses it after the prepare run's full refresh.
-- `fit --through-season YYYYYYYY --features a,b [--workers N]` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, `rest`, and `attempt_form` (the leak test of #77).
+- `fit --through-season YYYYYYYY --features a,b [--workers N]` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, and `rest`.
 - `game GAME_ID [--level L] [--fit-id N]` prints the prediction of one stored game with the fit labelled `live`, or with fit `N` when `--fit-id` is given.
-- `backtest [--games-out PATH] [--candidates {xg,attempt}] [--workers N]` runs the walk-forward backtest and prints a JSON report. `--workers N` builds the feature rows one season at a time in up to N processes, each with its own read-only store connection, and logs the wall time of each unit on stderr. `experiments run` and `fit` take the same option. The report and the CSV are the same for every N. `--games-out` writes one CSV row for each scored game and run. `--candidates attempt` replaces `xg_form` with the shot-attempt form, the leak test in #77.
+- `backtest [--games-out PATH] [--workers N]` runs the walk-forward backtest and prints a JSON report. `--workers N` builds the feature rows one season at a time in up to N processes, each with its own read-only store connection, and logs the wall time of each unit on stderr. `experiments run` and `fit` take the same option. The report and the CSV are the same for every N. `--games-out` writes one CSV row for each scored game and run.
 - `store upgrade [--db PATH] [--if-missing {fail,skip}]` moves an older store to the current schema, one version at a time.
 It keeps every row and every fit ID.
 The default `--if-missing fail` names a store file that does not exist.
 `--if-missing skip` exits 0 and reports that there is no store yet, for a first run that writes one later.
 It first writes a backup beside the store, named `<store>.v<version>.bak`, and it never overwrites an earlier backup.
 The daily workflows delete that backup before they save the store to the cache, so a later no-op report can name a backup that is no longer there.
-`--if-missing skip` reports `from_version: null` and a `note`, and never a `next_step`.
+`--if-missing skip` reports `from_version: null` and a `note`.
 The change runs in one transaction, so a failure leaves the store as it was.
-The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote, so the attempt-form features skip those rows.
+The two MoneyPuck shot-attempt columns are NULL for the rows that version 1 wrote. No feature reads them.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.
 Opening a store never migrates it, so a consumer on an old store fails and names this command.
 Opening a store also checks the shape of its tables against the stamp.
 A stamp that names a version the tables do not hold fails at open and names the missing column, instead of a later `no such column`.
 The daily prepare and report scripts run this command on the store that the workflow cache restores.
 Upgrade the producer first, then the consumers.
-After the upgrade, run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest.
-Until that refresh runs, the attempt-form features are empty.
 The report lists `coverage`: the scored games of each season and game type, with the expected count of a regular season (`EXPECTED_REGULAR_GAMES` in `game_model/seasons.py`) and the stored games of that season that never finished.
 `eligible` is false when a listed regular season is under `MIN_SEASON_COVERAGE` of its expected count, or when the scored games hold fewer than `MIN_INDEPENDENT_BLOCKS` independent blocks for the bootstrap.
 Then `success` is false, `live_features` is empty, the interval is `null`, and `ineligible_reasons` says why. The scores stay in the report as descriptions.
@@ -203,7 +201,7 @@ A game has these fields.
 | `degraded_inputs` | list | Features set to a neutral value for a team with no data: `feature`, `kind`, and `teams`. |
 | `training` | object or null | `fit_id`, `fit_through_season`, and `membership` (`in_sample`, `out_of_sample`, or `unknown`). Null when `skipped` holds a reason. |
 
-`missing.kind` and `degraded_inputs[].kind` hold one of `goalie_unconfirmed`, `goalie_unknown`, `goalie_conflict`, `xg_form`, `attempt_form`, `form_games_left_out`, `goalie_form`, `stale_source`, `late_run`, or `rest_unknown`.
+`missing.kind` and `degraded_inputs[].kind` hold one of `goalie_unconfirmed`, `goalie_unknown`, `goalie_conflict`, `xg_form`, `form_games_left_out`, `goalie_form`, `stale_source`, `late_run`, or `rest_unknown`.
 
 One report, with one game:
 
@@ -288,7 +286,7 @@ The 90% interval (5th to 95th percentile) of the difference is -0.0144 to -0.008
 The live features are expected-goals form and rest.
 The guess run vetoed goalie goals saved above expected.
 MoneyPuck's expected-goals model may have trained on the scored games, so the gain may look larger than it was.
-Issue #77 tests this with a form built from shot-attempt counts.
+Issue #77 tested this with a form built from shot-attempt counts. The form is gone, and `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that holds it.
 A reviewer then scored the model against the last pre-game DraftKings line on matched regular season games.
 The model is level with the line in 2024-25 (0.6633 against 0.6604) and worse in 2025-26 (0.6911 against 0.6826, interval +0.0035 to +0.0140).
 The model does not pass the blend gate for betting.
@@ -433,7 +431,7 @@ Release in this order:
 4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
 5. Tag the merge commit `vX.Y.Z`, and push the tag.
 
-The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`.
+The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`, and a commit with no successful push run of `ci.yml` (`scripts/check-commit-ci.sh`).
 Re-run only the failed jobs after a failure, because a run of all jobs builds the files again, and a file with other bytes stops the publish.
 A pre-release version, such as `0.2.0rc1`, makes a pre-release.
 The workflow publishes to no package index.

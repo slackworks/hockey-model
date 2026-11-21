@@ -1,12 +1,17 @@
 """Helpers that put small, known rows into a test store."""
 
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.sources.moneypuck import GoalieGameRow, TeamGameRow
 from hockey_model.sources.nhl import BoxscoreRows, GameRow, GoalieRow, PlayerRow
+from hockey_model.store.db import connect
 from hockey_model.store.fits import FitArtifact
+from hockey_model.store.migrations import mp_team_games_ddl
 from hockey_model.store.moneypuck_writes import write_goalie_games, write_team_games
 from hockey_model.store.nhl_writes import write_boxscore, write_games
 from hockey_model.store.source_reads import ESPN_INJURIES, record_read
@@ -28,6 +33,16 @@ def artifact(
     the fit to a game, or ``None`` to let ``created_at`` be the bound.
     """
     return FitArtifact(1, fit, through, ARTIFACT_TIME, trained_through=trained_through)
+
+
+@contextmanager
+def fresh_store(directory: Path) -> Generator[sqlite3.Connection]:
+    """Yield an empty store in ``directory``. A Hypothesis example needs its own store."""
+    connection = connect(directory / "store.db")
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def utc(text: str) -> datetime:
@@ -98,8 +113,8 @@ def add_team_form(
     *,
     attempts: tuple[int, int] = (50, 50),
 ) -> None:
-    """Store one MoneyPuck team-game row. The unblocked counts are fixed at 40 and 40."""
-    row = TeamGameRow(game_id, team, "2026-01-01", xg_for, xg_against, *attempts, 40, 40)
+    """Store one MoneyPuck team-game row."""
+    row = TeamGameRow(game_id, team, "2026-01-01", xg_for, xg_against, *attempts)
     write_team_games(conn, [row], FETCHED)
 
 
@@ -148,13 +163,34 @@ def record_injury_snapshot(conn: sqlite3.Connection, fetched_at: str) -> None:
     record_read(conn, ESPN_INJURIES, "u", utc(fetched_at))
 
 
-def add_retired_columns(conn: sqlite3.Connection) -> None:
+def add_nhl_id_columns(conn: sqlite3.Connection) -> None:
     """Give a fresh store the two columns that the 6->7 step dropped."""
     for table in ("starter_reads", "injury_reads"):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN nhl_id INTEGER")
 
 
+def restore_unblocked_columns(conn: sqlite3.Connection) -> None:
+    """Give a fresh store the mp_team_games table of version 7, which had two unblocked counts.
+
+    Each row that the table holds gets the counts 40 and 40, as the old test helper wrote them.
+    """
+    columns = (
+        "game_id, team, game_date, xg_for, xg_against, shot_attempts_for, shot_attempts_against,"
+        " attempts_known, fetched_at"
+    )
+    held = conn.execute(f"SELECT {columns} FROM mp_team_games").fetchall()
+    conn.execute("DROP VIEW IF EXISTS latest_mp_team_games")
+    conn.execute("DROP TABLE mp_team_games")
+    conn.execute(mp_team_games_ddl("mp_team_games"))
+    conn.execute("CREATE INDEX mp_team_games_team ON mp_team_games (team)")
+    conn.executemany(
+        f"INSERT INTO mp_team_games ({columns}, unblocked_for, unblocked_against)"
+        " VALUES (?,?,?,?,?,?,?,?,?,40,40)",
+        held,
+    )
+
+
 def stamp_old_version(conn: sqlite3.Connection, version: int) -> None:
     """Make a fresh store look like ``version``, which is below 7."""
-    add_retired_columns(conn)
+    add_nhl_id_columns(conn)
     conn.execute("UPDATE schema_version SET version = ?", (version,))

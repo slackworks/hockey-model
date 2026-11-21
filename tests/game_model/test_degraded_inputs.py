@@ -67,11 +67,6 @@ def test_no_form_feature_means_nothing_is_degraded(store: sqlite3.Connection) ->
     assert [d.feature for d in _row(store, names=("rest",)).imputed] == ["rest"]
 
 
-def test_the_attempt_feature_reports_its_own_kind(store: sqlite3.Connection) -> None:
-    row = _row(store, names=("attempt_form",))
-    assert row.imputed == (DegradedInput("attempt_form", MissingKind.ATTEMPT_FORM, (HOME, AWAY)),)
-
-
 def test_the_prediction_carries_the_degraded_inputs(store: sqlite3.Connection) -> None:
     _form(store, AWAY, 3.0, 1.0)
     result = NhlGameModel(store, artifact(XG_FIT), GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)

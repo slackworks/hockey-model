@@ -6,6 +6,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from seeding import fresh_store
 
 from hockey_model.sources.moneypuck import GoalieGameRow, TeamGameRow
 from hockey_model.store.db import connect
@@ -27,7 +30,7 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def team_row(xg_for: float = 2.5, attempts_for: int = 50) -> TeamGameRow:
-    return TeamGameRow(2025020697, "BOS", "2026-01-10", xg_for, 1.5, attempts_for, 40, 30, 20)
+    return TeamGameRow(2025020697, "BOS", "2026-01-10", xg_for, 1.5, attempts_for, 40)
 
 
 def test_write_team_games_skips_unchanged_rows(conn: sqlite3.Connection) -> None:
@@ -78,3 +81,37 @@ def test_write_team_games_writes_a_changed_attempt_count(conn: sqlite3.Connectio
         "SELECT shot_attempts_for FROM latest_mp_team_games ORDER BY fetched_at"
     ).fetchall()
     assert counts == [(51,)]
+
+
+_ROW = st.builds(
+    TeamGameRow,
+    game_id=st.integers(min_value=1, max_value=3),
+    team=st.sampled_from(["BOS", "TOR"]),
+    game_date=st.just("2026-01-10"),
+    xg_for=st.sampled_from([0.5, 1.0, 2.5]),
+    xg_against=st.sampled_from([0.5, 1.5]),
+    shot_attempts_for=st.integers(min_value=40, max_value=42),
+    shot_attempts_against=st.just(40),
+)
+_BATCH = st.lists(_ROW, max_size=5, unique_by=lambda row: (row.game_id, row.team))
+
+
+@settings(max_examples=50, deadline=None)
+@given(batches=st.lists(_BATCH, min_size=1, max_size=5))
+def test_write_team_games_writes_exactly_the_rows_that_differ_from_the_newest_read(
+    tmp_path_factory: pytest.TempPathFactory, batches: list[list[TeamGameRow]]
+) -> None:
+    """A model of the newest read of each game gives the count, and a repeat writes none."""
+    newest: dict[tuple[int, str], TeamGameRow] = {}
+    with fresh_store(tmp_path_factory.mktemp("writes")) as store:
+        for number, batch in enumerate(batches):
+            stamp = T0 + timedelta(days=number)
+            differing = [row for row in batch if newest.get((row.game_id, row.team)) != row]
+            assert write_team_games(store, batch, stamp) == len(differing)
+            newest.update({(row.game_id, row.team): row for row in batch})
+            assert write_team_games(store, batch, stamp + timedelta(hours=1)) == 0
+            stored = store.execute(
+                "SELECT game_id, team, game_date, xg_for, xg_against, shot_attempts_for,"
+                " shot_attempts_against FROM latest_mp_team_games"
+            ).fetchall()
+            assert {(row[0], row[1]): TeamGameRow(*row) for row in stored} == newest

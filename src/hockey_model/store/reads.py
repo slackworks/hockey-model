@@ -22,7 +22,7 @@ from hockey_model.store.source_reads import ESPN_INJURIES, LIVE_FEED_MAX_AGE
 from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.team_codes import NHL_TEAM_CODES
-from hockey_model.types import Player, Slot
+from hockey_model.types import HockeyModelError, Player, Slot
 
 # An NHL game ends about three hours after the puck drops, with overtime and a shootout.
 RESULT_DELAY = timedelta(hours=3)
@@ -113,40 +113,35 @@ def goalie_starts_before(
     return [(row[0], row[1]) for row in cursor]
 
 
+def _no_missing_value(game_id: int, what: str, values: Sequence[object | None]) -> None:
+    """Raise unless every value of one stored MoneyPuck row is there.
+
+    The parser never writes a NULL, so a NULL means that the file was edited or damaged. A read
+    that skipped the row would shift the form window with no word, so the read fails instead.
+    """
+    if any(value is None for value in values):
+        raise HockeyModelError(
+            f"read MoneyPuck {what}: game {game_id} has no value stored; "
+            "run `hockey-model refresh --reread-moneypuck` to write the row again"
+        )
+
+
 def mp_team_form_before(
     conn: sqlite3.Connection, team: str, before: datetime, limit: int
 ) -> list[tuple[float, float]]:
     """Return ``(xg_for, xg_against)`` of the newest MoneyPuck games of the franchise."""
-    return _mp_pairs_before(conn, ("xg_for", "xg_against"), team, before, limit)
-
-
-_MP_PAIR_COLUMNS = frozenset({"xg_for", "xg_against", "shot_attempts_for", "shot_attempts_against"})
-
-
-def _mp_pairs_before(
-    conn: sqlite3.Connection, columns: tuple[str, str], team: str, before: datetime, limit: int
-) -> list[tuple[float, float]]:
-    """Return two named MoneyPuck team-game columns of the newest games of the franchise.
-
-    The names are placed in the SQL, so only the known columns are accepted.
-    """
-    unknown = [name for name in columns if name not in _MP_PAIR_COLUMNS]
-    if unknown:
-        raise ValueError(
-            f"read MoneyPuck form: unknown column {unknown[0]!r}; "
-            f"use one of {sorted(_MP_PAIR_COLUMNS)}"
-        )
     codes = franchise_codes(team)
     cursor = conn.execute(
-        f"SELECT m.{columns[0]}, m.{columns[1]} FROM latest_mp_team_games m"
+        "SELECT m.game_id, m.xg_for, m.xg_against FROM latest_mp_team_games m"
         " JOIN latest_final_games g ON g.game_id = m.game_id"
         f" WHERE m.team IN ({placeholders(codes)}) AND g.start_utc <= ?"
-        # A NULL is an unknown value, such as a version 1 row has for attempt counts.
-        f" AND m.{columns[0]} IS NOT NULL AND m.{columns[1]} IS NOT NULL"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
         (*codes, result_cutoff(before), limit),
     )
-    return [(row[0], row[1]) for row in cursor]
+    found = cursor.fetchall()
+    for game_id, *values in found:
+        _no_missing_value(game_id, f"team expected goals of {team}", values)
+    return [(row[1], row[2]) for row in found]
 
 
 def mp_goalie_form_before(
@@ -154,13 +149,16 @@ def mp_goalie_form_before(
 ) -> list[tuple[float, int]]:
     """Return ``(xg_against, goals_against)`` of the newest MoneyPuck games of a goalie."""
     cursor = conn.execute(
-        "SELECT m.xg_against, m.goals_against FROM latest_mp_goalie_games m"
+        "SELECT m.game_id, m.xg_against, m.goals_against FROM latest_mp_goalie_games m"
         " JOIN latest_final_games g ON g.game_id = m.game_id"
         " WHERE m.nhl_id = ? AND g.start_utc <= ?"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
         (nhl_id, result_cutoff(before), limit),
     )
-    return [(row[0], row[1]) for row in cursor]
+    found = cursor.fetchall()
+    for game_id, *values in found:
+        _no_missing_value(game_id, f"goalie expected goals of {nhl_id}", values)
+    return [(row[1], row[2]) for row in found]
 
 
 def starter_reads_before(
@@ -252,15 +250,6 @@ def game_row(conn: sqlite3.Connection, game_id: int) -> GameRow | None:
         (game_id,),
     ).fetchone()
     return None if row is None else _game_row(row)
-
-
-def mp_attempt_form_before(
-    conn: sqlite3.Connection, team: str, before: datetime, limit: int
-) -> list[tuple[float, float]]:
-    """Return ``(shot attempts for, against)`` of the newest MoneyPuck games of the franchise."""
-    return _mp_pairs_before(
-        conn, ("shot_attempts_for", "shot_attempts_against"), team, before, limit
-    )
 
 
 def games_on_day(conn: sqlite3.Connection, day: date) -> list[GameRow]:

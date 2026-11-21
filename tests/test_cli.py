@@ -17,7 +17,7 @@ from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.metrics import calibration
 from hockey_model.backtest.runner import BacktestReport, ScoredRun
 from hockey_model.cli import CliRuntime
-from hockey_model.game_model.features import ALL_FEATURE_NAMES
+from hockey_model.game_model.features import FEATURES
 from hockey_model.identity import Catalog
 from hockey_model.models import FixedStatModel
 from hockey_model.sources.errors import SourceError
@@ -417,7 +417,7 @@ def test_feature_names_ignore_spaces_around_names() -> None:
     assert parse_features(" xg_form , rest ") == ("xg_form", "rest")
 
 
-@given(st.lists(st.sampled_from(ALL_FEATURE_NAMES), unique=True, max_size=4))
+@given(st.lists(st.sampled_from(FEATURES), unique=True, max_size=4))
 def test_feature_names_round_trip_any_distinct_known_list(names: list[str]) -> None:
     assert parse_features(",".join(names)) == tuple(names)
 
@@ -429,24 +429,28 @@ def test_feature_names_return_distinct_known_names_or_raise(text: str) -> None:
     except HockeyModelError:
         return
     assert len(set(names)) == len(names)
-    assert all(name in ALL_FEATURE_NAMES for name in names)
+    assert all(name in FEATURES for name in names)
 
 
-def test_cli_fit_accepts_the_attempt_form_research_recipe(
+def test_cli_fit_refuses_the_retired_attempt_form(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    """A research fit stays possible, and the saved fit predicts."""
+    """The attempt form is gone, so a fit that names it fails with the list of features."""
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert (
-        cli.main(
-            ["fit", "--through-season", "20152016", "--features", "attempt_form", "--label", "live"]
-        )
-        == 0
+    args = ["fit", "--through-season", "20152016", "--features", "attempt_form", "--label", "live"]
+    assert cli.main(args) == 2
+    assert "unknown feature 'attempt_form'; use any of xg_form, goalie_gsax, rest" in (
+        capsys.readouterr().err
     )
-    capsys.readouterr()
-    assert cli.main(["game", "2025020001"]) == 0
+
+
+def test_the_backtest_command_has_no_candidates_option(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["backtest", "--candidates", "attempt"]) == 2
+    assert "unrecognized arguments: --candidates attempt" in capsys.readouterr().err
 
 
 def test_the_selected_recipe_leaves_the_vetoed_feature_out_of_the_served_fit(

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from seeding import restore_unblocked_columns
 from test_upgrade import make_v1_store, rows, version_of
 
 from hockey_model.store import upgrade
@@ -32,6 +33,7 @@ def _v6(path: Path, starter_ids: list[int | None], injury_ids: list[int | None])
     conn = sqlite3.connect(path)
     conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
     conn.execute("ALTER TABLE injury_reads ADD COLUMN nhl_id INTEGER")
+    restore_unblocked_columns(conn)
     for row, nhl_id in zip(STARTERS, starter_ids, strict=True):
         conn.execute(
             f"INSERT INTO starter_reads ({_STARTER_COLUMNS}, nhl_id) VALUES (?,?,?,?,?,?,?)",
@@ -86,7 +88,7 @@ def test_a_fresh_store_holds_neither_column(tmp_path: Path) -> None:
 def test_the_step_drops_both_columns_and_keeps_every_other_value(all_null: Path) -> None:
     report = upgrade_store(all_null)
     assert (report.from_version, report.to_version, report.changed) == (6, SCHEMA_VERSION, True)
-    assert version_of(all_null) == SCHEMA_VERSION == 7
+    assert version_of(all_null) == SCHEMA_VERSION
     assert "nhl_id" not in _columns(all_null, "starter_reads")
     assert "nhl_id" not in _columns(all_null, "injury_reads")
     starters = rows(all_null, f"SELECT {_STARTER_COLUMNS} FROM starter_reads ORDER BY rowid")
@@ -201,6 +203,7 @@ def test_any_populated_id_is_archived_and_every_other_value_survives(
     conn = sqlite3.connect(path)
     conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
     conn.execute("ALTER TABLE injury_reads ADD COLUMN nhl_id INTEGER")
+    restore_unblocked_columns(conn)
     for row, nhl_id in zip(starters, starter_ids, strict=True):
         conn.execute(
             f"INSERT INTO starter_reads ({_STARTER_COLUMNS}, nhl_id) VALUES (?,?,?,?,?,?,?)",

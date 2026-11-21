@@ -427,9 +427,7 @@ def test_a_refresh_names_the_moneypuck_rows_that_match_no_stored_game(
 
 
 def test_a_starters_only_refresh_does_not_note_moneypuck_rows(conn: sqlite3.Connection) -> None:
-    write_team_games(
-        conn, [TeamGameRow(999, "TOR", "2026-01-10", 2.5, 1.5, 50, 40, 30, 20)], FETCHED
-    )
+    write_team_games(conn, [TeamGameRow(999, "TOR", "2026-01-10", 2.5, 1.5, 50, 40)], FETCHED)
     report = refresh_starters(conn, FakeClient(), now=NOW)
     assert not any(n.startswith("moneypuck:") for n in report.notes)
 
