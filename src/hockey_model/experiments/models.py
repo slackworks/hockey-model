@@ -7,12 +7,15 @@ and the criteria for promoting or rejecting it.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError, best_match
+from jsonschema.protocols import Validator
 
 from hockey_model.types import HockeyModelError
 
@@ -40,38 +43,6 @@ IMMUTABLE_FIELDS = (
     "candidate_features",
     "look_number",
 )
-
-# Schema keywords this validator implements. Any other keyword raises, so a record
-# never passes on a rule the validator quietly ignores.
-_SCHEMA_KEYWORDS = frozenset(
-    {
-        "$schema",
-        "type",
-        "enum",
-        "pattern",
-        "format",
-        "items",
-        "minItems",
-        "maxItems",
-        "minimum",
-        "maximum",
-        "required",
-        "properties",
-    }
-)
-_DATE_FORMATS = frozenset({"date"})
-# ``date.fromisoformat`` also accepts 20261031 and 2026-W44-6, so the shape comes first.
-_DATE_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-# Each JSON Schema type in the words an error message uses.
-_TYPE_WORDS = {
-    "string": "a string",
-    "integer": "an integer",
-    "number": "a number",
-    "boolean": "a boolean",
-    "object": "an object",
-    "array": "an array",
-    "null": "null",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,153 +159,36 @@ def record_from_text(text: str, source: str) -> ExperimentRecord:
     return ExperimentRecord.from_dict(data)
 
 
+@lru_cache(maxsize=16)
+def _validator(schema_text: str, schema_name: str) -> Validator:
+    """Build the validator of a schema once. A schema that is not valid JSON Schema is refused."""
+    schema = json.loads(schema_text)
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise HockeyModelError(
+            f"{schema_name}: the schema is not valid JSON Schema: {exc.message}; fix the schema"
+        ) from exc
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
 def validate_against_schema(
     record: ExperimentRecord | Mapping[str, Any],
     schema: Mapping[str, Any],
     schema_name: str = "schema",
 ) -> None:
-    """Validate a record against a JSON Schema given as a mapping.
+    """Validate a record against a JSON Schema (Draft 2020-12) given as a mapping.
 
-    Raises ``HockeyModelError`` when the record does not match.
+    Raises ``HockeyModelError`` for the best-matching error. The message names the JSON path,
+    the schema, the failing rule, and the fix.
     """
     data = record.to_dict() if isinstance(record, ExperimentRecord) else record
-    _validate_value(data, schema, schema_name, "$")
-
-
-def _validate_value(value: Any, schema: Mapping[str, Any], schema_name: str, path: str) -> None:
-    """Validate one value against one schema node."""
-    unsupported = sorted(set(schema) - _SCHEMA_KEYWORDS)
-    if unsupported:
+    # A tuple is a JSON array once it is written, and jsonschema reads only a list as an array.
+    data = json.loads(json.dumps(data))
+    validator = _validator(json.dumps(schema, sort_keys=True), schema_name)
+    error = best_match(validator.iter_errors(data))
+    if error is not None:
         raise HockeyModelError(
-            f"{path} in {schema_name}: this validator does not implement the schema "
-            f"keyword(s) {', '.join(unsupported)}; add support or remove the keyword"
+            f"{error.json_path} in {schema_name}: {error.message} "
+            f"(rule {error.validator!r}); change the value to match the schema"
         )
-    expected = schema.get("type")
-    if expected is not None and not _type_matches(value, expected):
-        names = expected if isinstance(expected, (list, tuple)) else [expected]
-        wanted = " or ".join(_TYPE_WORDS[name] for name in names)
-        raise HockeyModelError(f"{path}: expected {wanted}, got {type(value).__name__}")
-    _check_enum(value, schema, path)
-    _check_pattern(value, schema, path)
-    _check_format(value, schema, path)
-    _check_bound(value, schema, path)
-    if isinstance(value, (list, tuple)):
-        _check_array(value, schema, schema_name, path)
-    elif isinstance(value, dict):
-        _check_object(value, schema, schema_name, path)
-
-
-def _type_matches(value: Any, expected: str | list[str]) -> bool:
-    """Return True when the value is one of the schema types."""
-    names = expected if isinstance(expected, (list, tuple)) else [expected]
-    return any(_matches_one(value, name) for name in names)
-
-
-def _matches_one(value: Any, name: str) -> bool:
-    """Return True when the value is of one JSON Schema type."""
-    if name == "string":
-        return isinstance(value, str)
-    if name == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if name == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if name == "boolean":
-        return isinstance(value, bool)
-    if name == "object":
-        return isinstance(value, dict)
-    if name == "array":
-        return isinstance(value, (list, tuple))
-    if name == "null":
-        return value is None
-    raise HockeyModelError(f"unknown schema type {name!r}")
-
-
-def _check_enum(value: Any, schema: Mapping[str, Any], path: str) -> None:
-    """Check that a value is one of the enum values."""
-    enum_values = schema.get("enum")
-    if enum_values is not None and value not in enum_values:
-        raise HockeyModelError(f"{path}: value {value!r} not in {list(enum_values)}")
-
-
-def _check_pattern(value: Any, schema: Mapping[str, Any], path: str) -> None:
-    """Check that a string matches the schema pattern."""
-    pattern = schema.get("pattern")
-    if pattern is None:
-        return
-    if not isinstance(value, str):
-        raise HockeyModelError(
-            f"{path}: pattern {pattern!r} needs a string, got {type(value).__name__}"
-        )
-    if not _matches_pattern(value, pattern):
-        raise HockeyModelError(f"{path}: {value!r} does not match pattern {pattern!r}")
-
-
-def _matches_pattern(value: str, pattern: str) -> bool:
-    """Match a value against a pattern. A bad pattern is a schema bug, not a record bug."""
-    try:
-        return re.compile(pattern).fullmatch(value) is not None
-    except re.error as exc:
-        raise HockeyModelError(f"schema pattern {pattern!r} is not a valid regex: {exc}") from exc
-
-
-def _check_format(value: Any, schema: Mapping[str, Any], path: str) -> None:
-    """Check the declared string format. Only ``date`` is supported."""
-    fmt = schema.get("format")
-    if fmt is None:
-        return
-    if fmt not in _DATE_FORMATS:
-        raise HockeyModelError(f"{path}: this validator does not implement format {fmt!r}")
-    if not isinstance(value, str):
-        raise HockeyModelError(f"{path}: format {fmt!r} needs a string, got {type(value).__name__}")
-    if _DATE_SHAPE.fullmatch(value) is None:
-        raise HockeyModelError(f"{path}: {value!r} is not a YYYY-MM-DD date")
-    try:
-        date.fromisoformat(value)
-    except ValueError as exc:
-        raise HockeyModelError(f"{path}: {value!r} is not a YYYY-MM-DD date: {exc}") from exc
-
-
-def _check_bound(value: Any, schema: Mapping[str, Any], path: str) -> None:
-    """Check the numeric bounds the schema declares. A non-number reaches the type check first."""
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return
-    minimum = schema.get("minimum")
-    if minimum is not None and value < minimum:
-        raise HockeyModelError(f"{path}: {value} is below the minimum {minimum}")
-    maximum = schema.get("maximum")
-    if maximum is not None and value > maximum:
-        raise HockeyModelError(f"{path}: {value} is above the maximum {maximum}")
-
-
-def _check_array(
-    value: Any,
-    schema: Mapping[str, Any],
-    schema_name: str,
-    path: str,
-) -> None:
-    """Check the length bounds of an array and validate its items."""
-    minimum = schema.get("minItems")
-    if minimum is not None and len(value) < minimum:
-        raise HockeyModelError(f"{path}: expected at least {minimum} items, got {len(value)}")
-    maximum = schema.get("maxItems")
-    if maximum is not None and len(value) > maximum:
-        raise HockeyModelError(f"{path}: expected at most {maximum} items, got {len(value)}")
-    items_schema = schema.get("items")
-    if items_schema is not None:
-        for index, item in enumerate(value):
-            _validate_value(item, items_schema, schema_name, f"{path}[{index}]")
-
-
-def _check_object(
-    value: Any,
-    schema: Mapping[str, Any],
-    schema_name: str,
-    path: str,
-) -> None:
-    """Check the required keys of an object and validate its properties."""
-    for name in schema.get("required", []):
-        if name not in value:
-            raise HockeyModelError(f"{path}: missing required field {name!r} in {schema_name}")
-    for name, prop_schema in schema.get("properties", {}).items():
-        if name in value:
-            _validate_value(value[name], prop_schema, schema_name, f"{path}.{name}")

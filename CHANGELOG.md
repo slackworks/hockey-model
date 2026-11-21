@@ -49,6 +49,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `hockey-model backtest --workers N`, and the same option of `hockey-model experiments run`. They build the feature rows one season at a time in worker processes, each season from the Elo ratings before its first game, and log the wall time of each unit. The report and the per-game CSV do not change with N. `daily-prepare.sh` passes `BACKTEST_WORKERS` (default 4). On the real store the backtest takes about 21 minutes with 4 workers, down from 74, and `hockey-model fit --workers N` takes about 6 minutes, down from 20. [feat:model]
 - Add `scripts/backtest_golden.py` and a golden test that hash the backtest report, the per-game rows, and the fitted weights on the seeded store with floats rounded to nine decimals, so a speed change that moves a number fails the test. The script also writes the exact hashes of the report and the CSV. [chore:test]
 - Install the locked runtime dependencies (`uv export` of `uv.lock`, with hashes) before the wheel in the wheel smoke test, and install the wheel with `--no-deps`, so the smoke job tests the tree that `uv.lock` pins. [chore:ci]
+- Validate the experiment records and the check output with `jsonschema` (Draft 2020-12), the first runtime dependency, instead of a hand-written interpreter. An error names the JSON path, the schema, the failing rule, and the fix. [refactor:experiments]
 
 ### Changed
 

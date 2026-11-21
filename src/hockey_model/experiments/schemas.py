@@ -37,7 +37,12 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
         "title": {"type": "string"},
         "hypothesis": {"type": "string"},
         "cohort": {"type": "string", "enum": ["exploration", "confirmation"]},
-        "data_cutoff": {"type": "string", "format": "date"},
+        "data_cutoff": {
+            "type": "string",
+            "format": "date",
+            # fromisoformat also parses 20261031 and 2026-W44-6, so the shape is stated here.
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        },
         "primary_metric": {"type": "string"},
         "baseline": {
             "type": "object",
