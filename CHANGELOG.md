@@ -52,6 +52,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `scripts/backtest_golden.py` and a golden test that hash the backtest report, the per-game rows, and the fitted weights on the seeded store with floats rounded to nine decimals, so a speed change that moves a number fails the test. The script also writes the exact hashes of the report and the CSV. [chore:test]
 - Install the locked runtime dependencies (`uv export` of `uv.lock`, with hashes) before the wheel in the wheel smoke test, and install the wheel with `--no-deps`, so the smoke job tests the tree that `uv.lock` pins. [chore:ci]
 - Validate the experiment records and the check output with `jsonschema` (Draft 2020-12), the first runtime dependency, instead of a hand-written interpreter. An error names the JSON path, the schema, the failing rule, the fix, and the count of errors it does not show. A pattern matches the whole string, so `0001-x\n` is refused. A keyword or a format that nothing enforces, a NaN, and a value JSON cannot hold are refused too. A roster player with a bad `eligible` value is refused with the player id and the value. [refactor:experiments]
+- Add the backtest runner, the sharded build, the worker units, and the golden check to the mutation run, and kill their survivors with tests. The mutants that no test can kill are listed with their reasons in `docs/design/mutant-survivors.md`. The mutation shards place the four new modules. [test:backtest]
+- Add `docs/design/tla-scope.md`, which says what a TLA+ model of this project may and may not claim. [docs:tla]
 
 ### Changed
 
@@ -74,6 +76,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep each daily report build as its own `report-DATE-HHMMSSZ` file, named by its `generated_at` time, so a rerun no longer replaces a published version. The `report-DATE` files stay as the alias for the newest build. [fix:report]
 - Run `daily-prepare` at minute 14 and `daily-report` at minute 44 of every hour. A late or failed run is retried within the hour, and a confirmed goalie reaches the release within the hour. A report run that finds no prepared marker skips before the first puck drop and fails after it. [feat:report]
 - Remove `TRIGGER_HOURS_UTC`, `scripts/trigger_hours.py`, `PREP_WINDOW`, `PREP_QUEUE_ALLOWANCE`, `PREP_CRON_HOUR_UTC`, `prep_too_early`, and the `prep_too_early` field of `report-due`. `report-due` still says `puck_drop_passed`. [refactor:report]
+- Remove `noted` and `AbandonedIsNoted` from the daily prepare TLA+ model. The model had its own copy of the note, so the property proved the model and not the code. `test_every_abandoned_url_is_noted` checks the note against the code instead. [fix:tla]
+- Give each Hypothesis example its own store or directory in the store, runner, and report tests, so no example sees the state of another, and drop the health-check suppressions that hid this. [test:hygiene]
 
 ### Fixed
 
