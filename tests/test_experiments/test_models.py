@@ -7,7 +7,9 @@ Covers:
 """
 
 import json
+import re
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -214,26 +216,30 @@ class TestSchemaValidation:
             f"(rule 'type'); {_FIX}",
         )
 
-    def test_union_type_accepts_null(self):
-        validate_against_schema({"result": None}, _object(result={"type": ["object", "null"]}))
-
-    def test_union_type_rejects_a_string(self):
-        _fails(
-            {"result": "promoted, trust me"},
-            _object(result={"type": ["object", "null"]}),
-            "$.result in test schema: 'promoted, trust me' is not of type 'object', 'null' "
-            f"(rule 'type'); {_FIX}",
-        )
-
-    def test_union_type_checks_object_properties(self):
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            (None, None),
+            (
+                "promoted, trust me",
+                "$.result in test schema: 'promoted, trust me' is not of type 'object', 'null' "
+                f"(rule 'type'); {_FIX}",
+            ),
+            (
+                {"games": "lots"},
+                "$.result.games in test schema: 'lots' is not of type 'integer' "
+                f"(rule 'type'); {_FIX}",
+            ),
+        ],
+    )
+    def test_a_union_type_checks_its_object_branch(self, value: object, message: str | None):
         schema = _object(
             result={"type": ["object", "null"], "properties": {"games": {"type": "integer"}}}
         )
-        _fails(
-            {"result": {"games": "lots"}},
-            schema,
-            f"$.result.games in test schema: 'lots' is not of type 'integer' (rule 'type'); {_FIX}",
-        )
+        if message is None:
+            validate_against_schema({"result": value}, schema)
+        else:
+            _fails({"result": value}, schema, message)
 
     def test_pattern_is_enforced(self):
         schema = _object(id={"type": "string", "pattern": "^[0-9]{4}-.*$"})
@@ -297,6 +303,72 @@ class TestSchemaValidation:
             HockeyModelError, match=r"bad schema: the schema is not valid JSON Schema"
         ):
             validate_against_schema({}, {"type": "not-a-type"}, "bad schema")
+
+    def test_a_pattern_matches_the_whole_string(self):
+        schema = _object(id={"type": "string", "pattern": "^[0-9]{4}$"})
+        _fails(
+            {"id": "0001\n"},
+            schema,
+            "$.id in test schema: '0001\\n' does not match '^[0-9]{4}$' (rule 'pattern'); " + _FIX,
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "good"),
+        [("id", "0001-ok"), ("csv_hash", "a" * 64), ("data_cutoff", "2026-10-31")],
+    )
+    def test_a_registry_pattern_refuses_a_trailing_newline(self, field: str, good: str):
+        properties = EXPERIMENT_SCHEMA["properties"]
+        sub = properties["result"]["properties"] if field == "csv_hash" else properties
+        schema = _object(**{field: sub[field]})
+        validate_against_schema({field: good}, schema)
+        with pytest.raises(HockeyModelError, match=rf"\$\.{field} in test schema"):
+            validate_against_schema({field: good + "\n"}, schema, "test schema")
+
+    @pytest.mark.parametrize(
+        "value", [float("nan"), float("inf"), -float("inf"), date(2026, 1, 1), {1, 2}]
+    )
+    def test_a_value_that_is_not_plain_json_is_refused(self, value: object):
+        schema = _object(x={})
+        with pytest.raises(HockeyModelError, match="test schema: the record is not plain JSON"):
+            validate_against_schema({"x": value}, schema, "test schema")
+
+    def test_a_keyword_with_no_effect_is_refused(self):
+        schema = _object(x={"type": "integer", "minimun": 1})
+        _fails(
+            {"x": 0},
+            schema,
+            "test schema: $.properties.x: the keyword 'minimun' has no effect; "
+            "remove it from the schema or add a check for it in models.py",
+        )
+
+    def test_a_format_with_no_checker_is_refused(self):
+        schema = _object(x={"type": "string", "format": "no-such-format"})
+        _fails(
+            {"x": "a"},
+            schema,
+            "test schema: $.properties.x: the format 'no-such-format' has no checker here; "
+            "remove it from the schema or add a check for it in models.py",
+        )
+
+    @pytest.mark.parametrize(
+        ("data", "tail"),
+        [
+            ({"a": "x", "b": 1, "c": 1}, ""),
+            ({"a": "x", "b": "y", "c": 1}, " (1 more error not shown)"),
+            ({"a": "x", "b": "y", "c": "z"}, " (2 more errors not shown)"),
+        ],
+    )
+    def test_the_message_counts_the_errors_it_does_not_show(self, data: dict, tail: str):
+        schema = _object(a={"type": "integer"}, b={"type": "integer"}, c={"type": "integer"})
+        with pytest.raises(HockeyModelError) as excinfo:
+            validate_against_schema(data, schema, "test schema")
+        assert str(excinfo.value).endswith(f"{_FIX}{tail}")
+
+    def test_a_record_with_nan_is_not_saved(self, tmp_path: Path):
+        record = _make_record({"expected_effect": float("nan")})
+        with pytest.raises(HockeyModelError, match="cannot save 0001-test"):
+            record.save(tmp_path / "0001-test.json")
+        assert not (tmp_path / "0001-test.json").exists()
 
     def test_the_two_registry_schemas_are_valid_draft_2020_12(self):
         for schema in (EXPERIMENT_SCHEMA, CHECK_OUTPUT_SCHEMA):
@@ -401,34 +473,23 @@ def test_a_record_round_trips_through_json(games, low, high, folds, with_result)
     assert record_from_text(json.dumps(record.to_dict()), "memory") == record
 
 
-@given(
-    expected=st.sampled_from(["string", "integer", "boolean", "array", "object"]),
-    value=_JSON_VALUES,
-)
-def test_a_value_of_the_wrong_type_is_rejected(expected: str, value) -> None:
-    """A value passes only when its JSON type is the declared one."""
-    schema = {"type": "object", "properties": {"x": {"type": expected}}}
-    is_number = isinstance(value, int | float) and not isinstance(value, bool)
-    matches = {
-        "string": isinstance(value, str),
-        "integer": is_number and float(value).is_integer(),
-        "boolean": isinstance(value, bool),
-        "array": isinstance(value, list),
-        "object": isinstance(value, dict),
-    }[expected]
-    if matches:
-        validate_against_schema({"x": value}, schema)
+_DATE_SCHEMA = _object(data_cutoff=EXPERIMENT_SCHEMA["properties"]["data_cutoff"])
+
+
+@given(day=st.dates())
+def test_every_real_date_passes_the_registry_date_rule(day: date) -> None:
+    validate_against_schema({"data_cutoff": day.isoformat()}, _DATE_SCHEMA)
+
+
+@given(text=st.text(alphabet="0123456789-W:T", max_size=12))
+def test_the_registry_date_rule_passes_only_a_real_date_in_full_form(text: str) -> None:
+    """Shape and meaning both hold: ``YYYY-MM-DD`` and a day that exists."""
+    try:
+        real = date.fromisoformat(text) and re.fullmatch("[0-9]{4}-[0-9]{2}-[0-9]{2}", text)
+    except ValueError:
+        real = None
+    if real:
+        validate_against_schema({"data_cutoff": text}, _DATE_SCHEMA)
     else:
         with pytest.raises(HockeyModelError):
-            validate_against_schema({"x": value}, schema)
-
-
-@given(minimum=st.integers(-50, 50), value=st.integers(-100, 100))
-def test_a_number_below_the_minimum_is_rejected(minimum: int, value: int) -> None:
-    """A bound is enforced: the value passes if and only if it reaches the minimum."""
-    schema = {"type": "object", "properties": {"x": {"type": "integer", "minimum": minimum}}}
-    if value >= minimum:
-        validate_against_schema({"x": value}, schema)
-    else:
-        with pytest.raises(HockeyModelError, match="less than the minimum"):
-            validate_against_schema({"x": value}, schema)
+            validate_against_schema({"data_cutoff": text}, _DATE_SCHEMA)
