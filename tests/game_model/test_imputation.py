@@ -119,7 +119,9 @@ def test_a_fit_is_refused_exactly_when_some_share_is_above_the_limit(
         for names in rows_imputed
     ]
     names = ["xg_form", "rest", "goalie_gsax"]
-    over = any(q.share > limit for q in feature_quality(rows, names))
+    over = any(
+        sum(name in imputed for imputed in rows_imputed) / len(rows) > limit for name in names
+    )
     if over:
         with pytest.raises(ImputationLimitError):
             check_imputation(rows, names, limit)

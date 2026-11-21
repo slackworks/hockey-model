@@ -242,6 +242,9 @@ def _write_build(report_dir: Path, generated: str) -> None:
     (report_dir / f"backtest-games-{DAY}.csv").write_text("game_id,elo\n1,1\n", encoding="utf-8")
 
 
+# The shared fixtures are the fake gh and the report directory. Every example writes its own
+# report into that directory, and the test reads only the newest call, so no example sees
+# the state of another.
 @settings(
     max_examples=20,
     deadline=None,

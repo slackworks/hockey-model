@@ -2,19 +2,31 @@
 
 import math
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from hockey_model.game_model.features import ALL_FEATURE_NAMES, feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
-from hockey_model.store.db import StoreError
+from hockey_model.store.db import StoreError, connect
 from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@contextmanager
+def _fresh_store(factory: pytest.TempPathFactory) -> Generator[sqlite3.Connection]:
+    """Yield an empty store that belongs to one Hypothesis example."""
+    connection = connect(factory.mktemp("store") / "store.db")
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _loaded(conn: sqlite3.Connection, fit_id: int) -> LogisticFit:
@@ -106,22 +118,26 @@ def test_malformed_diagnostics_say_to_fit_again(store: sqlite3.Connection) -> No
 _FINITE = st.floats(allow_nan=False, allow_infinity=False)
 
 
-@settings(max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=40, deadline=None)
 @given(
     iterations=st.integers(min_value=0, max_value=50),
     numbers=st.lists(_FINITE, min_size=4, max_size=4),
     scaling=st.dictionaries(st.text(min_size=1, max_size=8), _FINITE, max_size=3),
 )
 def test_any_diagnostics_round_trip_through_the_store(
-    store: sqlite3.Connection, iterations: int, numbers: list[float], scaling: dict[str, float]
+    tmp_path_factory: pytest.TempPathFactory,
+    iterations: int,
+    numbers: list[float],
+    scaling: dict[str, float],
 ) -> None:
     objective, gradient_norm, condition, l2 = numbers
     diagnostics = FitDiagnostics(
         iterations, objective, gradient_norm, condition, l2, scaling, dict(scaling), "stop"
     )
     fit = LogisticFit((), 0.0, 1.0, {}, diagnostics)
-    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
-    assert _loaded(store, fit_id) == fit
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
 
 
 @pytest.mark.parametrize(
@@ -167,7 +183,7 @@ def test_a_saved_fit_whose_features_and_weights_disagree_says_to_fit_again(
 _WEIGHT = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False)
 
 
-@settings(max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=40, deadline=None)
 @given(
     features=st.lists(
         st.sampled_from(ALL_FEATURE_NAMES), unique=True, max_size=len(ALL_FEATURE_NAMES)
@@ -177,12 +193,17 @@ _WEIGHT = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False)
     data=st.data(),
 )
 def test_any_fit_round_trips_through_the_store(
-    store: sqlite3.Connection, features: list[str], intercept: float, elo_weight: float, data: Any
+    tmp_path_factory: pytest.TempPathFactory,
+    features: list[str],
+    intercept: float,
+    elo_weight: float,
+    data: Any,
 ) -> None:
     weights = {name: data.draw(_WEIGHT) for name in features}
     fit = LogisticFit(tuple(features), intercept, elo_weight, weights)
-    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
-    assert _loaded(store, fit_id) == fit
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
 
 
 def _row_count(store: sqlite3.Connection) -> int:
@@ -228,10 +249,10 @@ _NUMBER = st.one_of(
 )
 
 
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None)
 @given(names=_NAMES, intercept=_NUMBER, weight=_NUMBER, drop_a_weight=st.booleans())
 def test_save_fit_accepts_a_fit_exactly_when_it_follows_the_four_rules(
-    store: sqlite3.Connection,
+    tmp_path_factory: pytest.TempPathFactory,
     names: list[str],
     intercept: float,
     weight: float,
@@ -248,14 +269,14 @@ def test_save_fit_accepts_a_fit_exactly_when_it_follows_the_four_rules(
         and set(weights) == set(names)
         and all(map(math.isfinite, [intercept, *weights.values()]))
     )
-    before = _row_count(store)
-    if valid:
-        save_fit(store, FitRecord(fit, 20252026, T0))
-        assert _row_count(store) == before + 1
-    else:
-        with pytest.raises(StoreError):
+    with _fresh_store(tmp_path_factory) as store:
+        if valid:
             save_fit(store, FitRecord(fit, 20252026, T0))
-        assert _row_count(store) == before
+            assert _row_count(store) == 1
+        else:
+            with pytest.raises(StoreError):
+                save_fit(store, FitRecord(fit, 20252026, T0))
+            assert _row_count(store) == 0
 
 
 @given(names=_NAMES)

@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from hockey_model.backtest import eligibility, runner
@@ -295,12 +295,12 @@ _RECORDS = st.builds(
 )
 
 
-@settings(
-    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
+@settings(max_examples=40, deadline=None)
 @given(records=st.lists(_RECORDS, min_size=1, max_size=8))
-def test_the_game_csv_reads_back_to_the_records(records: list[GameRecord], tmp_path: Path) -> None:
-    target = tmp_path / "games.csv"
+def test_the_game_csv_reads_back_to_the_records(
+    records: list[GameRecord], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    target = tmp_path_factory.mktemp("csv") / "games.csv"
     write_game_records(target, records)
     with target.open(newline="") as handle:
         table = list(csv.DictReader(handle))
