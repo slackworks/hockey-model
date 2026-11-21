@@ -154,7 +154,7 @@ class HttpClient:
             except HTTPError as exc:
                 exc.close()
                 if not _is_retryable_status(exc.code):
-                    raise SourceError(source, url, f"HTTP {exc.code}") from exc
+                    raise SourceError(source, url, f"HTTP {exc.code}", permanent=True) from exc
                 reason = f"HTTP {exc.code}"
                 delay = _backoff_s(attempt, exc.headers.get("Retry-After"))
             except _Refused as exc:

@@ -153,6 +153,9 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "DROP TABLE model_fits",
         "ALTER TABLE model_fits_v5 RENAME TO model_fits",
     ),
+    # A row that an earlier version wrote keeps NULL, which means that the cause of the
+    # failure is unknown. The reader counts it as transient.
+    5: ("ALTER TABLE source_reads ADD COLUMN permanent INTEGER",),
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.

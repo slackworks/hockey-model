@@ -153,6 +153,33 @@ def test_get_raises_on_404_without_retry() -> None:
     assert len(opener.requests) == 1
 
 
+@pytest.mark.parametrize("code", [400, 401, 403, 404])
+def test_an_error_status_that_a_retry_cannot_change_is_permanent(code: int) -> None:
+    opener = ScriptedOpener([_http_error(code)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is True
+
+
+def test_a_failure_that_ran_out_of_retries_is_not_permanent() -> None:
+    opener = ScriptedOpener([_http_error(503)] * 4)
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is False
+
+
+def test_a_network_error_is_not_permanent() -> None:
+    opener = ScriptedOpener([OSError("down")] * 4)
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is False
+
+
+def test_a_source_error_is_transient_unless_it_says_otherwise() -> None:
+    assert SourceError("nhl", NHL_URL, "x").permanent is False
+    assert SourceError("nhl", NHL_URL, "x", permanent=True).permanent is True
+
+
 def test_get_rejects_unknown_host_before_any_request() -> None:
     opener = ScriptedOpener([])
     with pytest.raises(ValueError, match="no host policy") as info:
