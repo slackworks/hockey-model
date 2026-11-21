@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from test_upgrade import make_v1_store, rows, version_of
 
 from hockey_model.store import upgrade
@@ -178,3 +180,54 @@ def test_a_version_1_store_reaches_the_new_shape(tmp_path: Path) -> None:
     assert version_of(path) == SCHEMA_VERSION
     assert "nhl_id" not in _columns(path, "starter_reads")
     assert "nhl_id" not in _columns(path, "injury_reads")
+
+
+_IDS = st.lists(
+    st.one_of(st.none(), st.integers(min_value=1, max_value=10**9)), min_size=1, max_size=6
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(starter_ids=_IDS, injury_ids=_IDS)
+def test_any_populated_id_is_archived_and_every_other_value_survives(
+    tmp_path_factory: pytest.TempPathFactory,
+    starter_ids: list[int | None],
+    injury_ids: list[int | None],
+) -> None:
+    starters = [(*STARTERS[0][:5], f"2026-01-19T{n:02d}:00:00Z") for n in range(len(starter_ids))]
+    injuries = [(*INJURIES[0][:4], f"2026-01-19T{n:02d}:00:00Z") for n in range(len(injury_ids))]
+    path = tmp_path_factory.mktemp("v7") / "store.db"
+    connect(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
+    conn.execute("ALTER TABLE injury_reads ADD COLUMN nhl_id INTEGER")
+    for row, nhl_id in zip(starters, starter_ids, strict=True):
+        conn.execute(
+            f"INSERT INTO starter_reads ({_STARTER_COLUMNS}, nhl_id) VALUES (?,?,?,?,?,?,?)",
+            (*row, nhl_id),
+        )
+    for row, nhl_id in zip(injuries, injury_ids, strict=True):
+        conn.execute(
+            f"INSERT INTO injury_reads ({_INJURY_COLUMNS}, nhl_id) VALUES (?,?,?,?,?,?)",
+            (*row, nhl_id),
+        )
+    conn.execute("UPDATE schema_version SET version = 6")
+    conn.commit()
+    conn.close()
+    upgrade_store(path)
+    assert rows(path, f"SELECT {_STARTER_COLUMNS} FROM starter_reads ORDER BY rowid") == starters
+    assert rows(path, f"SELECT {_INJURY_COLUMNS} FROM injury_reads ORDER BY rowid") == injuries
+    archived = rows(
+        path,
+        "SELECT source_table, fetched_at, nhl_id FROM retired_nhl_ids ORDER BY source_table, rowid",
+    )
+    expected = [
+        ("injury_reads", injuries[n][4], value)
+        for n, value in enumerate(injury_ids)
+        if value is not None
+    ] + [
+        ("starter_reads", starters[n][5], value)
+        for n, value in enumerate(starter_ids)
+        if value is not None
+    ]
+    assert archived == expected

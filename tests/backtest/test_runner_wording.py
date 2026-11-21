@@ -337,3 +337,24 @@ def test_scoring_refuses_a_guess_run_that_lacks_a_game(monkeypatch: pytest.Monke
     monkeypatch.setattr(runner, "in_cohort", lambda game, plan: True)
     with pytest.raises(HockeyModelError, match="differ in the scored games"):
         runner._score_seasons(_games(1, 2), _games(1), ("rest",), PLAN)
+
+
+_IDS = st.lists(st.integers(min_value=1, max_value=8), unique=True, max_size=8)
+
+
+@settings(max_examples=100, deadline=None)
+@given(actual=_IDS, guess=_IDS, order=st.randoms(use_true_random=False))
+def test_the_check_raises_exactly_when_the_game_sets_differ(
+    actual: list[int], guess: list[int], order: Any
+) -> None:
+    shuffled = list(guess)
+    order.shuffle(shuffled)
+    only_actual, only_guess = set(actual) - set(guess), set(guess) - set(actual)
+    if not only_actual and not only_guess:
+        runner._check_same_games(_games(*actual), _games(*shuffled))
+        return
+    with pytest.raises(HockeyModelError) as caught:
+        runner._check_same_games(_games(*actual), _games(*shuffled))
+    text = str(caught.value)
+    assert f"{len(only_actual)} only in the actual run" in text
+    assert f"{len(only_guess)} only in the guess run" in text

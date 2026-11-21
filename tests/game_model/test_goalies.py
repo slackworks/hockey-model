@@ -4,6 +4,8 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_injury, add_starter_read, utc
 
 from hockey_model.game import (
@@ -13,7 +15,9 @@ from hockey_model.game import (
     StarterSource,
     StarterStatus,
 )
+from hockey_model.game_model import goalies
 from hockey_model.game_model.goalies import STARTER_WINDOW, resolve_goalie
+from hockey_model.store.reads import StarterReadRow
 from hockey_model.types import Player, Slot
 
 START = utc("2026-01-20T00:00")
@@ -336,3 +340,27 @@ def test_a_stale_injury_list_adds_a_note_to_the_guess(season: sqlite3.Connection
     # The old list is not used, so the guess is still Ingram, and the note says why.
     assert start is not None and start.player.full_name == "C. Ingram"
     assert any("injury list" in m.note for m in missing)
+
+
+_PLAYERS = [
+    Player(f"nhl:{i}", None, i + 1, f"Goalie {i}", frozenset({Slot.G}), "TOR") for i in range(4)
+]
+
+
+@settings(max_examples=100, deadline=None)
+@given(choices=st.lists(st.integers(min_value=0, max_value=3), min_size=1, max_size=8))
+def test_the_first_confirmed_goalie_is_kept_and_each_other_goalie_gets_one_note(
+    choices: list[int],
+) -> None:
+    kept = None
+    notes: list = []
+    for number, choice in enumerate(choices):
+        stamp = utc("2026-01-19T00:00") + timedelta(minutes=number)
+        read = StarterReadRow(
+            StarterSource.ESPN, f"Goalie {choice}", StarterStatus.CONFIRMED, stamp
+        )
+        kept = goalies._first_confirmed(kept, read, _PLAYERS[choice], "TOR", notes)
+    assert kept is not None
+    assert kept.player is _PLAYERS[choices[0]]
+    assert len(notes) == sum(1 for choice in choices[1:] if choice != choices[0])
+    assert {n.kind for n in notes} <= {MissingKind.GOALIE_CONFLICT}

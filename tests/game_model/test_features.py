@@ -17,6 +17,7 @@ from seeding import (
 )
 
 from hockey_model.game import Game, GoalieStart, MissingKind, StarterSource, StarterStatus
+from hockey_model.game_model import features as feature_module
 from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.features import (
     ATTEMPT_FEATURES,
@@ -424,3 +425,54 @@ def test_a_set_without_rest_reports_no_rest_gap(store: sqlite3.Connection) -> No
 def test_a_set_with_rest_reports_the_rest_gap_of_each_new_team(store: sqlite3.Connection) -> None:
     row = features(store, names=("rest",))
     assert kinds(row).count(MissingKind.REST_UNKNOWN) == 2
+
+
+_ROWS = st.lists(
+    st.tuples(
+        st.floats(min_value=0.0, max_value=6.0, allow_nan=False),
+        st.floats(min_value=0.0, max_value=6.0, allow_nan=False),
+    ),
+    max_size=10,
+)
+
+
+@settings(max_examples=100, deadline=None)
+@given(rows=_ROWS)
+def test_a_share_counts_every_zero_total_game_and_stays_between_zero_and_one(
+    rows: list[tuple[float, float]],
+) -> None:
+    mean, skipped = feature_module._share(rows)
+    zero_total = sum(1 for made, allowed in rows if made + allowed <= 0)
+    assert skipped == zero_total
+    assert (mean is None) == (zero_total == len(rows))
+    if mean is not None:
+        assert 0.0 <= mean <= 1.0
+
+
+@settings(max_examples=25, deadline=None)
+@given(home_rows=_ROWS, away_rows=_ROWS)
+def test_swapping_the_teams_negates_the_xg_form_and_keeps_the_gaps(
+    tmp_path_factory: pytest.TempPathFactory,
+    home_rows: list[tuple[float, float]],
+    away_rows: list[tuple[float, float]],
+) -> None:
+    conn = connect(tmp_path_factory.mktemp("swap") / "store.db")
+    try:
+        for team, rows, base in ((HOME, home_rows, 1000), (AWAY, away_rows, 2000)):
+            for number, (xg_for, xg_against) in enumerate(rows):
+                stamp = f"2026-01-{10 + number:02d}T00:00"
+                add_game(conn, base + number, stamp, home=team, away="MTL")
+                add_team_form(conn, base + number, team, xg_for, xg_against)
+        names = ("xg_form",)
+        forward = build_features(
+            conn, game(), AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=names
+        )
+        swapped_game = Game(100, AWAY, HOME, START)
+        backward = build_features(
+            conn, swapped_game, AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=names
+        )
+    finally:
+        conn.close()
+    assert backward.values["xg_form"] == pytest.approx(-forward.values["xg_form"])
+    gaps = lambda row: sorted((m.kind, m.team, m.note) for m in row.missing)  # noqa: E731
+    assert gaps(forward) == gaps(backward)
