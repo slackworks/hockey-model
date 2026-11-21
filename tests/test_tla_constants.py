@@ -5,6 +5,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from mutation_copy import require_path
 
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES
@@ -144,3 +146,26 @@ def test_repeated_constant_fails_with_name() -> None:
 def test_missing_constants_block_fails() -> None:
     with pytest.raises(pytest.fail.Exception, match="no CONSTANTS block"):
         parse_constants("INVARIANTS\n    TypeOK\n", "x.cfg")
+
+
+_NAMES = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", min_size=1, max_size=12
+)
+_VALUES = st.text(alphabet="abcXYZ0123456789{}, ", min_size=1, max_size=20).map(str.strip)
+
+
+@given(constants=st.dictionaries(_NAMES, _VALUES.filter(bool), min_size=1, max_size=8))
+def test_parse_returns_every_constant_line_that_it_was_given(constants: dict[str, str]) -> None:
+    lines = [f"    {name} = {value}" for name, value in constants.items()]
+    text = "\n".join(["CONSTANTS", *lines, "INVARIANTS", "    TypeOK", ""])
+    assert parse_constants(text, "x.cfg") == constants
+
+
+@given(text=st.text(max_size=200))
+def test_parse_returns_a_mapping_or_fails_with_a_message(text: str) -> None:
+    try:
+        values = parse_constants(text, "x.cfg")
+    except pytest.fail.Exception as error:
+        assert "x.cfg" in str(error)
+    else:
+        assert all(isinstance(name, str) and isinstance(raw, str) for name, raw in values.items())
