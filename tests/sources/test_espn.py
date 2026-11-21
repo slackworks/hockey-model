@@ -203,3 +203,18 @@ def test_injury_rejects_a_return_date_that_is_not_text(value: object) -> None:
     payload["injuries"][0]["injuries"][0]["details"]["returnDate"] = value
     with pytest.raises(SourceParseError, match="returnDate"):
         parse_injuries(payload)
+
+
+def test_scoreboard_game_with_an_empty_probables_list_gives_no_read() -> None:
+    payload = load(SCOREBOARD)
+    for competitor in payload["events"][0]["competitions"][0]["competitors"]:
+        competitor["probables"] = []
+    assert len(parse_scoreboard_starters(payload)) == 20
+
+
+@pytest.mark.parametrize("value", [None, "none", {}, 3])
+def test_scoreboard_probables_that_are_not_a_list_raise(value: object) -> None:
+    payload = load(SCOREBOARD)
+    payload["events"][0]["competitions"][0]["competitors"][0]["probables"] = value
+    with pytest.raises(SourceParseError, match="probables must be a list"):
+        parse_scoreboard_starters(payload)
