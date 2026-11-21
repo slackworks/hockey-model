@@ -141,12 +141,61 @@ def _parse_json(text: str) -> object:
         ) from error
 
 
+def _locked_requirements(work: Path, env: dict[str, str]) -> Path:
+    """Export the runtime dependencies that uv.lock pins, with hashes, to a requirements file."""
+    path = work / "requirements.txt"
+    _run(
+        [
+            "uv",
+            "export",
+            "--locked",
+            "--no-dev",
+            "--no-emit-project",
+            "--format",
+            "requirements-txt",
+            "--project",
+            str(ROOT),
+            "-o",
+            str(path),
+        ],
+        cwd=work,
+        env=env,
+        setup=True,
+    )
+    return path
+
+
+def _has_requirements(path: Path) -> bool:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return any(line.strip() and not line.lstrip().startswith("#") for line in lines)
+
+
 def _install(work: Path, wheel: Path, env: dict[str, str]) -> Path:
+    """Install the locked dependencies, then the wheel alone, so the tree matches uv.lock."""
     venv = work / "venv"
     _run(["uv", "venv", "--python", "3.14", str(venv)], cwd=work, env=env, setup=True)
-    python = venv / "bin" / "python"
+    python = str(venv / "bin" / "python")
+    requirements = _locked_requirements(work, env)
+    if _has_requirements(requirements):
+        _run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                python,
+                "--require-hashes",
+                "-r",
+                str(requirements),
+            ],
+            cwd=work,
+            env=env,
+            setup=True,
+        )
+    else:
+        print("locked dependencies: none to install")
     _run(
-        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        ["uv", "pip", "install", "--python", python, "--no-deps", str(wheel)],
         cwd=work,
         env=env,
         setup=True,

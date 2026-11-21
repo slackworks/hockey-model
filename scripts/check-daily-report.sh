@@ -73,8 +73,7 @@ if [[ "$games" == "0" ]]; then
 fi
 
 # A 404 means no report was published. Any other answer stops the check, so an auth or
-# network error is not read as a missing report. report-gate.sh has the same lookup, so
-# change both together.
+# network error is not read as a missing report.
 answer="$(release_status "$tag")"
 case "$answer" in
 published) ;;

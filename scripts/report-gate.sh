@@ -190,7 +190,7 @@ decided() {
 decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
   # Ask for the one tag. A 404 means the day is not published yet; any other answer (auth,
-  # network) stops the run. check-daily-report.sh has the same lookup, so change both together.
+  # network) stops the run.
   answer="$(release_status "$tag")"
   case "$answer" in
   published) published=true ;;
