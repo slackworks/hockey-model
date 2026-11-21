@@ -132,7 +132,7 @@ def test_a_failed_lookup_is_not_read_as_a_missing_release(fakes: Path, tmp_path:
     build(tmp_path)
     result = publish(fakes, tmp_path, FAKE_GH_FAIL="1")
     assert result.returncode == 1
-    assert "the release lookup for v0.1.0 failed" in result.stderr
+    assert "cannot list the releases of the repository" in result.stderr
     assert not any(c.startswith("gh release create") for c in _calls(tmp_path))
 
 
@@ -142,6 +142,7 @@ def test_a_token_that_cannot_see_the_repository_creates_nothing(
     build(tmp_path)
     result = publish(fakes, tmp_path, FAKE_NO_REPO="1")
     assert result.returncode == 1
+    assert "the release lookup for v0.1.0 failed" in result.stderr
     assert not any(c.startswith("gh release create") for c in _calls(tmp_path))
 
 
@@ -269,3 +270,37 @@ def test_a_missing_prerelease_option_exits_2(fakes: Path, tmp_path: Path) -> Non
     args = ("--tag", TAG, "--dist", str(tmp_path / "dist"), "--notes", str(tmp_path / "notes.md"))
     result = _run("publish-release.sh", _env(fakes, tmp_path), *args)
     assert result.returncode == 2
+
+
+def test_a_draft_release_for_the_tag_stops_the_run_before_any_write(
+    fakes: Path, tmp_path: Path
+) -> None:
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_DRAFTS=f"v0.0.9\n{TAG}\n")
+    assert result.returncode == 1
+    assert f"a draft release for {TAG} exists" in result.stderr
+    assert not any(
+        c.startswith(("gh release create", "gh release upload")) for c in _calls(tmp_path)
+    )
+
+
+def test_a_draft_for_another_tag_does_not_stop_the_run(fakes: Path, tmp_path: Path) -> None:
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_DRAFTS="v0.0.9\n")
+    assert result.returncode == 0, result.stderr
+
+
+def test_an_existing_release_keeps_its_notes_and_the_run_says_so(
+    fakes: Path, tmp_path: Path
+) -> None:
+    build(tmp_path)
+    result = publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"{WHEEL}\n{SDIST}",
+        FAKE_REMOTE_DIR=remote(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "its notes and pre-release flag stay as they are" in result.stderr
+    assert not any(c.startswith("gh release edit") for c in _calls(tmp_path))

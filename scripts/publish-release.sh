@@ -12,6 +12,11 @@
 # uploaded, and a file with the same name and other bytes stops the run before any upload. So a
 # retry of one build is safe, and a published file is never replaced.
 #
+# A draft release for the tag stops the run, because the release lookup does not see a draft.
+# The notes and the pre-release flag of an existing release stay as they are.
+# Re-run only the failed jobs of the workflow. A run of all jobs builds the files again, and
+# a file with other bytes stops the run.
+#
 # stdout: nothing. stderr: one line for each action and for each failure.
 # Exit codes: 0 after the release holds every file, 1 for a failed check or lookup, 2 for a
 # bad argument.
@@ -59,7 +64,7 @@ while (($# > 0)); do
   esac
 done
 
-# Shape: a tag is "v" and a digit first. check_release.py checks the meaning.
+# Shape only: check_release.py is the authority on the version, and it runs before this script.
 [[ "$tag" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || fail "--tag '$tag' is not a release tag such as v0.1.0" 2
 [[ -d "$dist" ]] || fail "--dist '$dist' is not a directory; build with uv build --out-dir" 2
 [[ "$prerelease" == "true" || "$prerelease" == "false" ]] ||
@@ -69,6 +74,12 @@ done
 shopt -s nullglob
 files=("$dist"/*.whl "$dist"/*.tar.gz)
 ((${#files[@]} == 2)) || fail "$dist must hold one wheel and one source archive, and holds ${#files[@]} file(s)"
+
+drafts="$(gh release list --limit 1000 --json tagName,isDraft \
+  --jq '.[] | select(.isDraft) | .tagName')" || fail "cannot list the releases of the repository"
+if grep -qxF "$tag" <<<"$drafts"; then
+  fail "a draft release for $tag exists; publish it or delete it, then run again"
+fi
 
 answer="$(release_status "$tag")"
 case "$answer" in
@@ -88,7 +99,9 @@ fi
 
 check_dir="$(mktemp -d)"
 trap 'rm -rf "$check_dir"' EXIT
-existing="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+existing="$(gh release view "$tag" --json assets --jq '.assets[].name')" ||
+  fail "cannot list the files of the release $tag"
+echo "publish-release: $tag exists; its notes and pre-release flag stay as they are." >&2
 new=()
 for file in "${files[@]}"; do
   name="$(basename "$file")"
