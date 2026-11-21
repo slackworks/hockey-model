@@ -15,7 +15,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from test_runner_store import PLAN, seed
 
-from hockey_model.backtest import runner
+from hockey_model.backtest import report_notes, runner
 from hockey_model.backtest.eligibility import SeasonCount
 from hockey_model.game_model.features import FEATURES
 from hockey_model.store.db import connect
@@ -25,29 +25,29 @@ REFRESH = "run `hockey-model refresh --backfill-from 2014-10-01`"
 
 
 def test_the_notes_name_the_tested_count_the_vetoes_and_a_failed_test() -> None:
-    notes = runner._notes(("rest",), ("xg_form", "goalie_gsax"), success=False)
+    notes = report_notes.joint_test_notes(("rest",), ("xg_form", "goalie_gsax"), success=False)
     assert notes[0] == "3 candidate features were tested together as one joint test."
     assert "The guess run vetoed: xg_form, goalie_gsax." in notes
     assert "The joint test failed, so the Elo alone ships." in notes
 
 
 def test_a_successful_joint_test_adds_no_failure_note() -> None:
-    notes = runner._notes(("rest",), (), success=True)
+    notes = report_notes.joint_test_notes(("rest",), (), success=True)
     assert not any("joint test failed" in note for note in notes)
     assert not any(note.startswith("The guess run vetoed") for note in notes)
 
 
 def test_a_candidate_set_other_than_the_production_set_says_it_is_a_test() -> None:
-    assert runner._candidate_notes(("rest",)) == (
+    assert report_notes.candidate_notes(("rest",)) == (
         "This candidate set is a test. Nothing ships from it, and the live model reads only the "
         "production features.",
     )
-    assert runner._candidate_notes(FEATURES) == ()
+    assert report_notes.candidate_notes(FEATURES) == ()
 
 
 def test_an_unfinished_season_is_named_with_its_count() -> None:
     coverage = [SeasonCount(2, 2, 40, 82, 3), SeasonCount(3, 2, 40, 82, 0)]
-    assert runner._eligibility_notes(["too few games"], coverage) == (
+    assert report_notes.eligibility_notes(["too few games"], coverage) == (
         "Not eligible for success: too few games.",
         "Season 2 game type 2 holds 3 stored game(s) that are not final long after their start.",
     )
@@ -167,7 +167,7 @@ def test_a_run_with_no_moneypuck_feature_carries_no_moneypuck_credit(
     report, _ = runner.run_backtest(seeded, PLAN, candidates=("rest",))
     assert report.tested_features == ("rest",)
     assert report.credits == ()
-    assert runner.MONEYPUCK_LEAK_NOTE not in report.notes
+    assert report_notes.MONEYPUCK_LEAK_NOTE not in report.notes
 
 
 def test_a_run_with_a_moneypuck_feature_carries_the_credit_and_the_leak_note(
@@ -175,7 +175,7 @@ def test_a_run_with_a_moneypuck_feature_carries_the_credit_and_the_leak_note(
 ) -> None:
     report, _ = runner.run_backtest(seeded, PLAN, candidates=("xg_form", "rest"))
     assert report.credits == (runner.MONEYPUCK_CREDIT,)
-    assert runner.MONEYPUCK_LEAK_NOTE in report.notes
+    assert report_notes.MONEYPUCK_LEAK_NOTE in report.notes
 
 
 def test_the_report_holds_the_imputation_share_of_each_tested_feature(

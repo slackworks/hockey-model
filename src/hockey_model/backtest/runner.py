@@ -23,9 +23,16 @@ from hockey_model.backtest.metrics import (
     log_loss,
     per_game_log_loss,
 )
+from hockey_model.backtest.report_notes import (
+    MONEYPUCK_FEATURES,
+    candidate_notes,
+    eligibility_notes,
+    is_production,
+    joint_test_notes,
+)
 from hockey_model.backtest.shards import build_sharded
 from hockey_model.backtest.units import Unit, check_workers, run_units
-from hockey_model.game_model.features import FEATURES, GOALIE_FEATURE, GoalieMode
+from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.imputation import (
     ImputationLimitError,
     check_imputation,
@@ -37,21 +44,6 @@ from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.types import HockeyModelError
 
-MONEYPUCK_LEAK_NOTE = (
-    "The MoneyPuck expected-goals model is today's model. MoneyPuck possibly trained it on "
-    "games after the scored seasons, so results that use MoneyPuck data may look better than "
-    "they would have then."
-)
-GUESS_EQUALS_ACTUAL_NOTE = (
-    "No tested feature reads the starting goalie, so the actual run and the guess run are the "
-    "same by construction. The equal scores do not show that a wrong goalie costs nothing."
-)
-INJURY_HISTORY_NOTE = (
-    "The store has no ESPN injury history before it began to keep injury reads, so the goalie "
-    "guess run never leaves out an injured goalie. The live model does."
-)
-# Every feature here reads MoneyPuck data, so a run that uses one carries the credit and the note.
-MONEYPUCK_FEATURES = frozenset({"xg_form", "attempt_form", "goalie_gsax"})
 ELO = "elo"
 HOME_RATE = "home_rate"
 MODEL_ACTUAL = "model_actual"
@@ -328,47 +320,6 @@ def _missing_counts(games: Sequence[_Scored]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _notes(tested: Sequence[str], vetoed: Sequence[str], success: bool) -> tuple[str, ...]:
-    count = len(tested) + len(vetoed)
-    notes = [f"{count} candidate features were tested together as one joint test."]
-    if vetoed:
-        notes.append(f"The guess run vetoed: {', '.join(vetoed)}.")
-    if not success:
-        notes.append("The joint test failed, so the Elo alone ships.")
-    if MONEYPUCK_FEATURES & set(tested):
-        notes.append(MONEYPUCK_LEAK_NOTE)
-    if GOALIE_FEATURE not in tested:
-        notes.append(GUESS_EQUALS_ACTUAL_NOTE)
-    notes.append(INJURY_HISTORY_NOTE)
-    return tuple(notes)
-
-
-def _is_production(candidates: Sequence[str]) -> bool:
-    return tuple(candidates) == FEATURES
-
-
-def _candidate_notes(candidates: Sequence[str]) -> tuple[str, ...]:
-    """Say so when a run tests a set other than the production set, so no result reads as live."""
-    if _is_production(candidates):
-        return ()
-    return (
-        "This candidate set is a test. Nothing ships from it, and the live model reads only the "
-        "production features.",
-    )
-
-
-def _eligibility_notes(reasons: Sequence[str], coverage: Sequence[SeasonCount]) -> tuple[str, ...]:
-    """Say why success is refused, and name the seasons with stored games that never finished."""
-    notes = [f"Not eligible for success: {reason}." for reason in reasons]
-    notes.extend(
-        f"Season {c.season} game type {c.game_type} holds {c.unresolved} stored game(s) that are "
-        "not final long after their start."
-        for c in coverage
-        if c.unresolved
-    )
-    return tuple(notes)
-
-
 def _build_report(
     conn: sqlite3.Connection,
     plan: SeasonPlan,
@@ -400,13 +351,13 @@ def _build_report(
         candidate_features=tuple(candidates),
         vetoed=vetoed,
         tested_features=tested,
-        live_features=tested if success and _is_production(candidates) else (),
+        live_features=tested if success and is_production(candidates) else (),
         validation=validation,
         runs=runs,
         success=success,
-        notes=_notes(tested, vetoed, success)
-        + _candidate_notes(candidates)
-        + _eligibility_notes(reasons, coverage),
+        notes=joint_test_notes(tested, vetoed, success)
+        + candidate_notes(candidates)
+        + eligibility_notes(reasons, coverage),
         credits=(MONEYPUCK_CREDIT,) if uses_moneypuck else (),
         missing_inputs=_missing_counts(games),
         coverage=coverage,
