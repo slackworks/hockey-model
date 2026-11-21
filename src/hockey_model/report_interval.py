@@ -19,16 +19,11 @@ NO_RANGE_NOTE = (
 
 def interval_json(prediction: GamePrediction) -> dict[str, float] | None:
     """Return both sides of the win range, or ``None`` when the fit has no range."""
-    interval = prediction.home_win_interval
-    if interval is None:
+    home = prediction.home_win_interval
+    away = away_interval(prediction)
+    if home is None or away is None:
         return None
-    low, high = interval
-    return {
-        "home_low": low,
-        "home_high": high,
-        "away_low": 1.0 - high,
-        "away_high": 1.0 - low,
-    }
+    return {"home_low": home[0], "home_high": home[1], "away_low": away[0], "away_high": away[1]}
 
 
 def win_cell(value: float | None, interval: tuple[float, float] | None) -> str:
