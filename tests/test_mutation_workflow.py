@@ -85,3 +85,16 @@ def test_the_report_job_publishes_its_status_and_its_body() -> None:
     report = _job("report")
     assert "status: ${{ steps.decide.outputs.status }}" in report
     assert "mutation-report.md" in report
+
+
+def test_the_merge_job_lists_the_timed_out_mutants_and_uploads_the_list() -> None:
+    """The report reads the list beside the stats, so the artifact carries both files (#274)."""
+    merge = _job("merge")
+    export = merge[
+        merge.index("- name: Export results") : merge.index("- name: Note a failed export")
+    ]
+    assert "scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json" in export
+    assert export.index("mutmut export-cicd-stats") < export.index("mutation_timeouts.py")
+    upload = merge[merge.index("actions/upload-artifact") :]
+    assert "mutants/mutmut-timeouts.json" in upload
+    assert "mutants/mutmut-cicd-stats.json" in upload

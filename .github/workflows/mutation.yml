@@ -86,6 +86,7 @@ jobs:
         run: |
           uv run mutmut export-cicd-stats
           uv run mutmut results >mutation-results.txt
+          uv run python3 scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json
       - name: Note a failed export
         if: steps.export.outcome == 'failure'
         run: |
@@ -102,6 +103,7 @@ jobs:
           path: |
             mutation-results.txt
             mutants/mutmut-cicd-stats.json
+            mutants/mutmut-timeouts.json
 
   report:
     needs: [shard, merge]
