@@ -116,8 +116,9 @@ def goalie_starts_before(
 
 def mp_team_form_before(
     conn: sqlite3.Connection, team: str, before: datetime, limit: int
-) -> list[tuple[float, float]]:
-    """Return ``(xg_for, xg_against)`` of the newest MoneyPuck games of the franchise."""
+) -> tuple[list[tuple[float, float]], int]:
+    """Return the ``(xg_for, xg_against)`` pairs of the newest MoneyPuck games of the
+    franchise, and how many of those newest games a NULL column left out."""
     return _mp_pairs_before(conn, ("xg_for", "xg_against"), team, before, limit)
 
 
@@ -126,8 +127,9 @@ _MP_PAIR_COLUMNS = frozenset({"xg_for", "xg_against", "shot_attempts_for", "shot
 
 def _mp_pairs_before(
     conn: sqlite3.Connection, columns: tuple[str, str], team: str, before: datetime, limit: int
-) -> list[tuple[float, float]]:
-    """Return two named MoneyPuck team-game columns of the newest games of the franchise.
+) -> tuple[list[tuple[float, float]], int]:
+    """Return two named MoneyPuck team-game columns of the newest games of the franchise,
+    and how many of those newest games a NULL column left out of the pairs.
 
     The names are placed in the SQL, so only the known columns are accepted.
     """
@@ -142,12 +144,18 @@ def _mp_pairs_before(
         f"SELECT m.{columns[0]}, m.{columns[1]} FROM latest_mp_team_games m"
         " JOIN latest_final_games g ON g.game_id = m.game_id"
         f" WHERE m.team IN ({placeholders(codes)}) AND g.start_utc <= ?"
-        # A NULL is an unknown value, such as a version 1 row has for attempt counts.
-        f" AND m.{columns[0]} IS NOT NULL AND m.{columns[1]} IS NOT NULL"
         " ORDER BY g.start_utc DESC, g.game_id DESC LIMIT ?",
         (*codes, result_cutoff(before), limit),
     )
-    return [(row[0], row[1]) for row in cursor]
+    pairs: list[tuple[float, float]] = []
+    left_out = 0
+    for row in cursor:
+        # A NULL is an unknown value, such as a version 1 row has for attempt counts.
+        if row[0] is None or row[1] is None:
+            left_out += 1
+        else:
+            pairs.append((row[0], row[1]))
+    return pairs, left_out
 
 
 def mp_goalie_form_before(
@@ -259,8 +267,9 @@ def game_row(conn: sqlite3.Connection, game_id: int) -> GameRow | None:
 
 def mp_attempt_form_before(
     conn: sqlite3.Connection, team: str, before: datetime, limit: int
-) -> list[tuple[float, float]]:
-    """Return ``(shot attempts for, against)`` of the newest MoneyPuck games of the franchise."""
+) -> tuple[list[tuple[float, float]], int]:
+    """Return the ``(shot attempts for, against)`` pairs of the newest MoneyPuck games of the
+    franchise, and how many of those newest games a NULL column left out."""
     return _mp_pairs_before(
         conn, ("shot_attempts_for", "shot_attempts_against"), team, before, limit
     )

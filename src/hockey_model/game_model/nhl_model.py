@@ -58,7 +58,7 @@ def _goals_for_and_against(
     conn: sqlite3.Connection, team: str, cutoff: datetime
 ) -> tuple[list[float], list[float], bool]:
     """Return the goals a team's games made and allowed, and whether xG was used."""
-    rows = mp_team_form_before(conn, team, cutoff, FORM_WINDOW)
+    rows, _ = mp_team_form_before(conn, team, cutoff, FORM_WINDOW)
     if rows:
         return [made for made, _ in rows], [allowed for _, allowed in rows], True
     scored: list[float] = []

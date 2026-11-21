@@ -309,9 +309,11 @@ def test_attempt_form_skips_rows_without_counts(v1: Path) -> None:
     add_game(conn, 2001, "2026-01-01T23:00:00Z", "TOR", "BOS")
     add_game(conn, 2002, "2026-01-05T23:00:00Z", "TOR", "BOS")
     add_team_form(conn, 2002, "TOR", 2.0, 2.0, attempts=(55, 45))
-    form = mp_attempt_form_before(conn, "TOR", datetime(2026, 2, 1, tzinfo=UTC), 5)
+    form, left_out = mp_attempt_form_before(conn, "TOR", datetime(2026, 2, 1, tzinfo=UTC), 5)
     conn.close()
     assert form == [(55, 45)]
+    # The upgraded v1 row of game 2001 has unknown counts, and the window holds it.
+    assert left_out == 1
 
 
 def test_an_upgraded_table_has_the_same_columns_as_a_fresh_one(tmp_path: Path) -> None:
