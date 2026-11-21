@@ -62,9 +62,8 @@ def test_a_fit_without_a_covariance_has_no_interval() -> None:
     assert home_win_interval(no_covariance, row(0.3, xg_form=0.1), 0.8) is None
 
 
-def test_the_stored_covariance_is_the_inverse_of_the_hessian_at_the_fit() -> None:
+def _check_inverse(rows: list, wins: list[bool]) -> None:
     """Build the Hessian again from the fit, apart from the code that made the covariance."""
-    rows, wins = sample(300)
     fit = fit_logistic(rows, wins, ["xg_form"])
     diagnostics = fit.diagnostics
     assert diagnostics is not None and diagnostics.covariance is not None
@@ -76,9 +75,8 @@ def test_the_stored_covariance_is_the_inverse_of_the_hessian_at_the_fit() -> Non
     )
     beta = [intercept, *scaled_beta]
     size = len(beta)
-    hessian = [[0.0] * size for _ in range(size)]
-    for r in range(size):
-        hessian[r][r] = 1.0 if r else 1e-6
+    hessian = [[1.0 if i == j and i else 0.0 for j in range(size)] for i in range(size)]
+    hessian[0][0] = 1e-6
     for item in rows:
         x = [
             1.0,
@@ -91,9 +89,21 @@ def test_the_stored_covariance_is_the_inverse_of_the_hessian_at_the_fit() -> Non
                 hessian[i][j] += p * (1 - p) * x[i] * x[j]
     sigma = diagnostics.covariance
     for i in range(size):
+        assert sigma[i][i] > 0
         for j in range(size):
+            assert sigma[i][j] == pytest.approx(sigma[j][i], rel=1e-6, abs=1e-12)
             product = sum(sigma[i][k] * hessian[k][j] for k in range(size))
             assert product == pytest.approx(1.0 if i == j else 0.0, abs=1e-6)
+
+
+def test_the_stored_covariance_is_the_inverse_of_the_hessian_at_the_fit() -> None:
+    _check_inverse(*sample(300))
+
+
+@settings(max_examples=15, deadline=None)
+@given(n=st.integers(min_value=30, max_value=400), seed=st.integers(min_value=0, max_value=10_000))
+def test_the_covariance_is_a_symmetric_inverse_for_any_sample(n: int, seed: int) -> None:
+    _check_inverse(*sample(n, seed))
 
 
 @settings(max_examples=40, deadline=None)

@@ -40,6 +40,7 @@ The Markdown footer and the summary header say so beside every range.
 ## Edge cases
 
 - A fit with no covariance has no range. The report JSON holds `null`, and the summary says `no interval: Elo only` or says to fit again.
+- A range that does not hold the point, or a covariance that gives a negative variance, raises. The run stops, as it does for a bad win pair or a bad goal projection, so a report never prints a range that is wrong.
 - A range is optional in the schema, so `schema_version` stays 1. See `report-contract.md`.
 - The covariance is not part of the model identity hash, because it changes no prediction. The range changes `inputs_sha256`, because a reader sees it.
 
