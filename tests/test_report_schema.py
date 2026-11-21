@@ -1,33 +1,44 @@
 """Tests for the published report contract: the schema, the version, and the build index."""
 
 import json
+import re
 import sqlite3
+import tempfile
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from report_script_support import valid_report
+from mutation_copy import require_path
+from report_script_support import SCRIPTS, valid_report
 from seeding import add_game, add_team_form, artifact, utc
 
 from hockey_model import cli
 from hockey_model.daily_report import (
+    DailyLine,
     DailyReport,
+    ModelIdentity,
     build_report,
     model_identity,
     report_json,
     write_report,
 )
-from hockey_model.game import MissingKind, TrainingMembership
+from hockey_model.game import (
+    DegradedInput,
+    GamePrediction,
+    MissingInput,
+    MissingKind,
+    TrainingInfo,
+    TrainingMembership,
+)
 from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.report_schema import (
-    INDEX_SCHEMA_FILE,
     REPORT_SCHEMA_FILE,
     SCHEMA_VERSION,
     _schema,
@@ -35,9 +46,12 @@ from hockey_model.report_schema import (
     check_index,
     check_report,
     index_entry,
+    version_file,
     write_index,
 )
-from hockey_model.types import HockeyModelError
+from hockey_model.sources.nhl import GameRow
+from hockey_model.store.timestamps import iso_utc
+from hockey_model.types import HockeyModelError, Projection
 
 DAY = date(2026, 1, 20)
 NOW = utc("2026-01-20T12:00")
@@ -209,8 +223,14 @@ def _later(report: dict[str, Any], generated: str, inputs: str) -> dict[str, Any
     return other
 
 
+def test_a_build_is_named_by_its_generated_time(built: dict[str, Any]) -> None:
+    assert version_file(built) == FILE_1
+    other = _later(built, "2026-01-20T18:05:09.123456+00:00", "c" * 64)
+    assert version_file(other) == "report-2026-01-20-180509Z.json"
+
+
 def test_the_first_build_makes_an_index_of_one(built: dict[str, Any]) -> None:
-    index = add_build(None, built, FILE_1)
+    index = add_build(None, built)
     assert index["date"] == "2026-01-20"
     assert index["builds"] == [
         {
@@ -225,103 +245,279 @@ def test_the_first_build_makes_an_index_of_one(built: dict[str, Any]) -> None:
 
 
 def test_a_rebuild_adds_its_entry_and_drops_none(built: dict[str, Any]) -> None:
-    first = add_build(None, built, FILE_1)
-    second = add_build(first, _later(built, "2026-01-20T15:00:00.000000+00:00", "c" * 64), FILE_2)
-    third = add_build(second, _later(built, "2026-01-20T18:00:00.000000+00:00", "d" * 64), FILE_3)
+    first = add_build(None, built)
+    second = add_build(first, _later(built, "2026-01-20T15:00:00.000000+00:00", "c" * 64))
+    third = add_build(second, _later(built, "2026-01-20T18:00:00.000000+00:00", "d" * 64))
     assert [build["file"] for build in third["builds"]] == [FILE_1, FILE_2, FILE_3]
     assert third["builds"][0] == first["builds"][0]
 
 
 def test_the_builds_stay_in_the_order_of_their_time(built: dict[str, Any]) -> None:
     late = _later(built, "2026-01-20T18:00:00.000000+00:00", "d" * 64)
-    index = add_build(add_build(None, late, FILE_3), built, FILE_1)
+    index = add_build(add_build(None, late), built)
     assert [build["file"] for build in index["builds"]] == [FILE_1, FILE_3]
 
 
 def test_the_same_build_twice_makes_one_entry(built: dict[str, Any]) -> None:
-    once = add_build(None, built, FILE_1)
-    assert add_build(once, built, FILE_1) == once
+    once = add_build(None, built)
+    assert add_build(once, built) == once
 
 
 def test_a_report_with_no_model_has_null_identity_in_the_index(built: dict[str, Any]) -> None:
     built["model"] = None
-    entry = index_entry(built, FILE_1)
+    entry = index_entry(built)
     assert entry["code_sha"] is None and entry["fit_sha256"] is None
-    check_index(add_build(None, built, FILE_1))
+    check_index(add_build(None, built))
 
 
 def test_an_invalid_report_makes_no_index(built: dict[str, Any]) -> None:
     del built["inputs_sha256"]
     with pytest.raises(HockeyModelError, match=REPORT_SCHEMA_FILE):
-        add_build(None, built, FILE_1)
+        add_build(None, built)
 
 
 def test_a_build_of_another_day_is_refused(built: dict[str, Any]) -> None:
-    first = add_build(None, built, FILE_1)
+    first = add_build(None, built)
     other = deepcopy(built)
     other["date"] = "2026-01-21"
     with pytest.raises(HockeyModelError, match="cannot take a build of 2026-01-21"):
-        add_build(first, other, FILE_2)
-
-
-@pytest.mark.parametrize("name", ["report-2026-01-20.json", "report-2026-01-20-1200Z.json", "x"])
-def test_a_build_file_name_must_be_a_versioned_report(built: dict[str, Any], name: str) -> None:
-    with pytest.raises(HockeyModelError, match=INDEX_SCHEMA_FILE):
-        add_build(None, built, name)
+        add_build(first, other)
 
 
 @pytest.mark.parametrize("field", BUILD_FIELDS)
 def test_an_index_entry_missing_a_field_fails(built: dict[str, Any], field: str) -> None:
-    index = add_build(None, built, FILE_1)
+    index = add_build(None, built)
     del index["builds"][0][field]
     with pytest.raises(HockeyModelError, match=rf"'{field}' is a required property"):
         check_index(index)
 
 
 def test_an_index_with_no_build_fails(built: dict[str, Any]) -> None:
-    index = add_build(None, built, FILE_1)
+    index = add_build(None, built)
     index["builds"] = []
     with pytest.raises(HockeyModelError, match=r"\$\.builds in .*\(rule 'minItems'\)"):
         check_index(index)
 
 
-@given(hours=st.lists(st.integers(min_value=0, max_value=23), min_size=1, max_size=6, unique=True))
-def test_the_index_lists_every_build_in_time_order(hours: list[int]) -> None:
-    base = valid_report()
-    index = None
-    for hour in hours:
-        stamp = f"{hour:02d}0000Z"
-        report = _later(base, f"2026-01-20T{hour:02d}:00:00.000000+00:00", f"{hour:064x}")
-        index = add_build(index, report, f"report-2026-01-20-{stamp}.json")
-    assert index is not None
-    assert [b["file"][-12:-6] for b in index["builds"]] == [f"{h:02d}0000" for h in sorted(hours)]
+def test_a_missing_schema_file_names_the_file_and_the_fix() -> None:
+    with pytest.raises(HockeyModelError, match=r"nope\.schema\.json.*reinstall the hockey-model"):
+        _schema("nope.schema.json")
 
 
-def test_write_index_writes_the_file_and_counts_the_builds(
+def _write(path: Path, payload: object) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_write_index_writes_the_file_and_names_the_build(
     built: dict[str, Any], tmp_path: Path
 ) -> None:
-    report_path = tmp_path / "report.json"
-    report_path.write_text(json.dumps(built), encoding="utf-8")
     first = tmp_path / "index-1.json"
     second = tmp_path / "index-2.json"
-    assert write_index(report_path, FILE_1, None, first) == 1
-    assert write_index(report_path, FILE_2, first, second) == 2
+    assert write_index(_write(tmp_path / "r1.json", built), "2026-01-20", None, first) == (
+        1,
+        FILE_1,
+    )
+    later = _later(built, "2026-01-20T15:00:00.000000+00:00", "c" * 64)
+    assert write_index(_write(tmp_path / "r2.json", later), "2026-01-20", first, second) == (
+        2,
+        FILE_2,
+    )
     check_index(json.loads(second.read_text(encoding="utf-8")))
+
+
+def test_write_index_refuses_a_report_of_another_day(built: dict[str, Any], tmp_path: Path) -> None:
+    out = tmp_path / "index.json"
+    with pytest.raises(HockeyModelError, match="is for 2026-01-20, not 2026-01-21"):
+        write_index(_write(tmp_path / "r.json", built), "2026-01-21", None, out)
+    assert not out.exists()
 
 
 def test_write_index_names_an_unreadable_file(tmp_path: Path) -> None:
     with pytest.raises(HockeyModelError, match="report-index: cannot read the report"):
-        write_index(tmp_path / "none.json", FILE_1, None, tmp_path / "out.json")
+        write_index(tmp_path / "none.json", "2026-01-20", None, tmp_path / "out.json")
+
+
+def _index_command(report: Path, out: Path, day: str = "2026-01-20") -> list[str]:
+    return ["report-index", "--report", str(report), "--date", day, "--out", str(out)]
+
+
+def test_the_report_index_command_prints_the_build_file(
+    built: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "index.json"
+    assert cli.main(_index_command(_write(tmp_path / "r.json", built), out)) == 0
+    assert json.loads(capsys.readouterr().out) == {"out": str(out), "builds": 1, "file": FILE_1}
 
 
 def test_the_report_index_command_refuses_an_invalid_report(
     built: dict[str, Any], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     del built["games"]
-    report_path = tmp_path / "report.json"
-    report_path.write_text(json.dumps(built), encoding="utf-8")
     out = tmp_path / "index.json"
-    args = ["report-index", "--report", str(report_path), "--name", FILE_1, "--out", str(out)]
-    assert cli.main(args) != 0
+    assert cli.main(_index_command(_write(tmp_path / "r.json", built), out)) != 0
     assert "'games' is a required property" in capsys.readouterr().err
     assert not out.exists()
+
+
+_MOMENTS = st.datetimes(
+    min_value=datetime(2000, 1, 1), max_value=datetime(2099, 12, 31), timezones=st.just(UTC)
+)
+_HEX = st.text(alphabet="0123456789abcdef", min_size=64, max_size=64)
+_MODELS = st.one_of(
+    st.none(),
+    st.fixed_dictionaries(
+        {
+            "features": st.lists(st.text(max_size=6), max_size=3),
+            "fit_sha256": _HEX,
+            "code_sha": st.one_of(st.none(), st.text(max_size=12)),
+        }
+    ),
+)
+
+
+@st.composite
+def _reports(draw: st.DrawFn) -> dict[str, Any]:
+    """Draw a schema-valid report of the default day, with a drawn time, hash, and model."""
+    report = valid_report(iso_utc(draw(_MOMENTS)), inputs_sha256=draw(_HEX), model=draw(_MODELS))
+    return json.loads(json.dumps(report))
+
+
+_BATCHES = st.lists(_reports(), min_size=1, max_size=5, unique_by=version_file)
+
+
+@given(_reports())
+def test_an_index_entry_copies_the_identity_of_its_report(report: dict[str, Any]) -> None:
+    entry = index_entry(report)
+    model = report["model"]
+    assert entry["file"] == version_file(report)
+    assert entry["generated_at"] == report["generated_at"]
+    assert entry["inputs_sha256"] == report["inputs_sha256"]
+    assert entry["schema_version"] == report["schema_version"]
+    assert entry["fit_sha256"] == (model["fit_sha256"] if model else None)
+    assert entry["code_sha"] == (model["code_sha"] if model else None)
+
+
+def _fold(batch: list[dict[str, Any]]) -> dict[str, Any]:
+    index = None
+    for report in batch:
+        index = add_build(index, report)
+    assert index is not None
+    return index
+
+
+@given(_BATCHES)
+def test_an_index_keeps_every_build_in_time_order(batch: list[dict[str, Any]]) -> None:
+    index = _fold(batch)
+    assert sorted(b["file"] for b in index["builds"]) == sorted(version_file(r) for r in batch)
+    assert [b["generated_at"] for b in index["builds"]] == sorted(r["generated_at"] for r in batch)
+
+
+@given(_BATCHES, st.data())
+def test_adding_a_listed_build_again_changes_nothing(
+    batch: list[dict[str, Any]], data: st.DataObject
+) -> None:
+    index = _fold(batch)
+    again = data.draw(st.sampled_from(batch))
+    assert add_build(index, again) == index
+
+
+@given(_BATCHES)
+def test_write_index_writes_what_add_build_returns(batch: list[dict[str, Any]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        index = None
+        for number, report in enumerate(batch):
+            report_path = _write(root / f"report-{number}.json", report)
+            existing = root / f"index-{number - 1}.json" if number else None
+            out = root / f"index-{number}.json"
+            count, file_name = write_index(report_path, "2026-11-04", existing, out)
+            index = add_build(index, report)
+            assert json.loads(out.read_text(encoding="utf-8")) == index
+            assert (count, file_name) == (len(index["builds"]), version_file(report))
+
+
+_TEAMS = ["TOR", "BOS", "NYR", "MTL", "CHI", "DET"]
+_POINT = Projection(3.0, 2.0, 4.0, 0.8)
+_TEXT = st.text(max_size=12)
+_KINDS = st.sampled_from(list(MissingKind))
+_MISSING = st.builds(MissingInput, _KINDS, st.one_of(st.none(), _TEXT), _TEXT)
+_DEGRADED = st.builds(DegradedInput, _TEXT, _KINDS, st.lists(_TEXT, max_size=2).map(tuple))
+_TRAINING = st.one_of(
+    st.none(),
+    st.builds(
+        TrainingInfo,
+        st.integers(min_value=1, max_value=1000),
+        st.one_of(st.none(), st.integers(min_value=19001901, max_value=20992100)),
+        st.sampled_from(list(TrainingMembership)),
+    ),
+)
+
+
+@st.composite
+def _lines(draw: st.DrawFn) -> DailyLine:
+    home, away = draw(st.lists(st.sampled_from(_TEAMS), min_size=2, max_size=2, unique=True))
+    row = GameRow(
+        draw(st.integers(min_value=1, max_value=10**10)),
+        20252026,
+        2,
+        draw(_MOMENTS),
+        home,
+        away,
+        draw(st.sampled_from(["FUT", "LIVE", "OFF", "PPD"])),
+        None,
+        None,
+        None,
+    )
+    if draw(st.booleans()):
+        return DailyLine(row, None, draw(_TEXT))
+    chance = draw(st.floats(min_value=0.0, max_value=1.0))
+    prediction = GamePrediction(
+        chance,
+        1.0 - chance,
+        _POINT,
+        _POINT,
+        tuple(draw(st.lists(_MISSING, max_size=3))),
+        tuple(draw(st.lists(_TEXT, max_size=2))),
+        draw(st.booleans()),
+        tuple(draw(st.lists(_DEGRADED, max_size=2))),
+        draw(_TRAINING),
+    )
+    return DailyLine(row, prediction, "")
+
+
+_IDENTITIES = st.one_of(
+    st.none(),
+    st.builds(
+        ModelIdentity,
+        st.lists(_TEXT, max_size=3).map(tuple),
+        _HEX,
+        st.one_of(st.none(), _TEXT),
+    ),
+)
+_DAILY_REPORTS = st.builds(
+    DailyReport,
+    st.dates(min_value=date(2000, 1, 1), max_value=date(2099, 12, 31)),
+    _MOMENTS,
+    st.floats(min_value=0.01, max_value=0.99),
+    st.lists(_lines(), max_size=4).map(tuple),
+    _IDENTITIES,
+    st.lists(_TEXT, max_size=2).map(tuple),
+)
+
+
+@given(_DAILY_REPORTS)
+def test_every_report_the_code_can_build_passes_the_schema(report: DailyReport) -> None:
+    data = report_json(report)
+    check_report(data)
+    assert json.loads(json.dumps(data)) == data
+    assert len({tuple(sorted(game)) for game in data["games"]}) <= 1
+
+
+def test_the_shell_name_pattern_matches_the_names_the_code_writes(built: dict[str, Any]) -> None:
+    """daily-report.sh finds the newest build by name, so its pattern must follow the code."""
+    script = require_path(SCRIPTS / "daily-report.sh").read_text(encoding="utf-8")
+    found = re.search(r'grep -E "(\^report-\$\{day\}-\[0-9\]\{6\}Z\\\.json\$)"', script)
+    assert found, "daily-report.sh no longer holds the build name pattern; update this test"
+    pattern = found.group(1).replace("${day}", built["date"])
+    assert re.fullmatch(pattern, version_file(built))

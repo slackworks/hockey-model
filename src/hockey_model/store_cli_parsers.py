@@ -196,7 +196,11 @@ def _add_report_index(parser: argparse.ArgumentParser) -> None:
     """Add the files that the index step reads and writes."""
     parser.add_argument("--report", type=Path, required=True, metavar="PATH")
     parser.add_argument(
-        "--name", required=True, metavar="FILE", help="the versioned file name of the build"
+        "--date",
+        type=date.fromisoformat,
+        required=True,
+        metavar="YYYY-MM-DD",
+        help="the release day; the report must be for this day",
     )
     parser.add_argument(
         "--existing", type=Path, default=None, metavar="PATH", help="the index to add to"

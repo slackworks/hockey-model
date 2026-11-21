@@ -307,7 +307,8 @@ def write_report(report: DailyReport, out_dir: Path) -> tuple[Path, Path]:
     """Write the Markdown and JSON copies. Return their paths, Markdown first.
 
     Both strings are built before either file is written, and the JSON must pass the report
-    schema, so a failed build or an invalid report writes nothing.
+    schema, so a build failure or an invalid report writes no file. A failed disk write can
+    leave the Markdown file alone.
     """
     markdown = report_markdown(report)
     data = report_json(report)

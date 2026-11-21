@@ -176,7 +176,7 @@ def test_publish_refuses_a_report_without_the_generated_time(
 ) -> None:
     _write_report(tmp_path / "report")
     (tmp_path / "report" / f"report-{DAY}.json").write_text(
-        json.dumps({"generated_at": generated}) + "\n", encoding="utf-8"
+        json.dumps(valid_report(generated)) + "\n", encoding="utf-8"
     )
     result = _publish(fakes, tmp_path)
     assert result.returncode == 1
@@ -280,9 +280,7 @@ def test_publish_uploads_the_index_with_the_first_build(fakes: Path, tmp_path: P
 
 def test_publish_adds_a_rebuild_to_the_index_on_the_release(fakes: Path, tmp_path: Path) -> None:
     _write_report(tmp_path / "report")
-    earlier = add_build(
-        None, valid_report("2026-11-04T10:00:00.000000+00:00"), f"report-{DAY}-100000Z.json"
-    )
+    earlier = add_build(None, valid_report("2026-11-04T10:00:00.000000+00:00"))
     remote = tmp_path / "remote"
     remote.mkdir()
     (remote / f"index-{DAY}.json").write_text(json.dumps(earlier), encoding="utf-8")
@@ -296,7 +294,7 @@ def test_publish_adds_a_rebuild_to_the_index_on_the_release(fakes: Path, tmp_pat
     assert result.returncode == 0, result.stderr
     files = [b["file"] for b in _index(tmp_path / "report")["builds"]]
     assert files == [f"report-{DAY}-100000Z.json", f"report-{DAY}-202013Z.json"]
-    alias = [line for line in _calls(tmp_path) if "--clobber" in line]
+    alias = _calls_with(tmp_path, "gh release upload", "--clobber")
     assert alias and f"/index-{DAY}.json" in alias[0]
 
 
@@ -341,3 +339,66 @@ def test_publish_stops_when_the_index_on_the_release_is_not_valid(
     assert result.returncode == 1
     assert "report_index.schema.json" in result.stderr
     assert not any(line.startswith("gh release upload") for line in _calls(tmp_path))
+
+
+def test_publish_refuses_a_report_of_another_day(fakes: Path, tmp_path: Path) -> None:
+    report = tmp_path / "report"
+    _write_report(report)
+    other = valid_report(date="2026-11-05")
+    (report / f"report-{DAY}.json").write_text(json.dumps(other) + "\n", encoding="utf-8")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 1
+    assert "is for 2026-11-05, not 2026-11-04" in result.stderr
+    assert not any(line.startswith("gh release upload") for line in _calls(tmp_path))
+
+
+def test_publish_checks_both_versions_before_it_uploads_either(fakes: Path, tmp_path: Path) -> None:
+    # The Markdown version is new and the JSON version collides. No Markdown file may be left
+    # on the release without its JSON.
+    _write_report(tmp_path / "report")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / f"report-{DAY}-202013Z.json").write_text("another build\n", encoding="utf-8")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"report-{DAY}-202013Z.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 1
+    assert "other bytes" in result.stderr
+    assert not any(line.startswith("gh release upload") for line in _calls(tmp_path))
+
+
+def test_publish_collision_message_says_how_to_recover(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    remote = _remote_versions(tmp_path, "a different build\n")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"report-{DAY}-202013Z.md\nreport-{DAY}-202013Z.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 1
+    assert "Run the report workflow again" in result.stderr
+
+
+def test_publish_downloads_overwrite_an_earlier_check_file(fakes: Path, tmp_path: Path) -> None:
+    # A local rerun finds the files of the first run, and gh refuses to overwrite them.
+    _write_report(tmp_path / "report")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    earlier = add_build(None, valid_report("2026-11-04T10:00:00.000000+00:00"))
+    (remote / f"index-{DAY}.json").write_text(json.dumps(earlier), encoding="utf-8")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"index-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 0, result.stderr
+    downloads = [line for line in _calls(tmp_path) if line.startswith("gh release download")]
+    assert downloads and all("--clobber" in line for line in downloads)

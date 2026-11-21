@@ -282,8 +282,8 @@ def _report_compare(args: argparse.Namespace) -> tuple[object, int]:
 
 
 def _report_index(args: argparse.Namespace) -> tuple[object, int]:
-    builds = write_index(args.report, args.name, args.existing, args.out)
-    return {"out": str(args.out), "builds": builds}, 0
+    builds, file_name = write_index(args.report, args.date.isoformat(), args.existing, args.out)
+    return {"out": str(args.out), "builds": builds, "file": file_name}, 0
 
 
 def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
