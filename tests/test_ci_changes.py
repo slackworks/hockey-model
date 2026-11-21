@@ -128,3 +128,19 @@ def test_a_push_to_main_runs_every_code_job() -> None:
 def test_the_ci_workflow_has_no_path_filter() -> None:
     """A path filter leaves a required check pending, which blocks the merge."""
     assert not re.search(r"^\s*paths(-ignore)?:", CI.read_text(encoding="utf-8"), re.MULTILINE)
+
+
+def test_the_ci_test_job_runs_pytest_in_parallel() -> None:
+    assert "- run: uv run pytest -n auto\n" in _job("test")
+
+
+def test_the_pre_push_coverage_gate_runs_pytest_in_parallel() -> None:
+    hooks = require_path(ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    assert "rm -f coverage.json && uv run pytest -n auto && " in hooks
+
+
+def test_the_default_pytest_options_stay_serial() -> None:
+    """mutmut runs pytest by itself and needs one process, so addopts holds no -n flag."""
+    addopts = re.search(r'addopts = """(.*?)"""', (ROOT / "pyproject.toml").read_text(), re.S)
+    assert addopts is not None
+    assert not re.search(r"(^|\s)(-n|--numprocesses)\b", addopts.group(1))
