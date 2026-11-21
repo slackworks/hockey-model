@@ -39,6 +39,7 @@ Log loss on the validation seasons (lower is better):
 | elo + goalie_gsax | 0.66425 | 0.66339 |
 
 The guess run vetoed `goalie_gsax`.
+A later exploratory rerun on the #66 goalie definition kept the veto. See `2026-11-goalie-guess-rerun.md`.
 Its guess-run loss is higher than the Elo alone, by more than 1e-9.
 The live features are `xg_form` and `rest`.
 The goalie features read no starter, so the actual run and the guess run give the same numbers.

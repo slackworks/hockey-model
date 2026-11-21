@@ -1,0 +1,21 @@
+{
+  "id": "0003-goalie-guess-rerun",
+  "title": "Goalie-guess veto rerun on the #66 goalie definition (exploratory)",
+  "hypothesis": "The guess-mode veto of goalie_gsax still holds after #66 gave a one-sided goalie the neutral form: on the validation seasons 2022-23 and 2023-24, the guess-mode log loss of Elo plus goalie_gsax is above the log loss of Elo alone. This is an exploratory rerun on spent seasons. It is not a confirmation, and it does not count as a look.",
+  "cohort": "exploration",
+  "data_cutoff": "2026-11-03",
+  "primary_metric": "mean_per_game_log_loss",
+  "baseline": {
+    "fit_id": 1,
+    "commit": "fe985f1"
+  },
+  "selection_folds": null,
+  "min_games": 1,
+  "candidate_features": ["xg_form", "goalie_gsax", "rest"],
+  "look_number": 1,
+  "expected_effect": null,
+  "promotion_criterion": "none: an exploration record cannot promote a feature. The veto rule is the one of the original spec: a candidate is vetoed when its guess-mode validation log loss is above the Elo alone by more than 1e-9.",
+  "failure_outcome": "if the veto flips, change no live feature and file an issue for a confirmation look under #38",
+  "status": "registered",
+  "result": null
+}
