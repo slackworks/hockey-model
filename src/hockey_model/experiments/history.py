@@ -11,6 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from hockey_model.experiments.looks import CONFIRMATION
 from hockey_model.experiments.models import (
     IMMUTABLE_FIELDS,
     ExperimentRecord,
@@ -104,15 +105,26 @@ def path_in_history(relative: str, repo_root: Path) -> bool:
     return bool(_git(["log", "--format=%H", "--", relative], repo_root).strip())
 
 
+def history_unavailable_reason(repo_root: Path) -> str | None:
+    """Return why the deletion history cannot be read, or None when it can."""
+    if not _is_work_tree(repo_root):
+        return "not a git work tree"
+    if not _has_head(repo_root):
+        return "the repository has no commit yet"
+    return None
+
+
 def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
-    """Return the IDs of deleted records whose history holds a result.
+    """Return the IDs of deleted records that must stay.
 
     A deleted record that spent its look could hide a negative result, so a record
-    with a committed result stays. A record that never had a result is no loss here
-    (#291 tracks the number it frees). A rename is not a deletion: git follows it, and
-    the changed ``id`` fails the immutability check.
+    with a committed result stays. A confirmation record that never ran stays too when
+    the commit that deleted it held a confirmation record with a higher number: the look
+    budget counts earlier records by number, so the freed number could go to a new record
+    that scores games which a later look already scored (#291). A rename is not a deletion:
+    git follows it, and the changed ``id`` fails the immutability check.
     """
-    if not _is_work_tree(repo_root) or not _has_head(repo_root):
+    if history_unavailable_reason(repo_root) is not None:
         return []
     deleted = _git(
         ["log", "--diff-filter=D", "--name-only", "--format=", "--", f"{REGISTRY_DIR_NAME}/"],
@@ -121,7 +133,53 @@ def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
     deleted += _git(["ls-tree", "--name-only", "HEAD", f"{REGISTRY_DIR_NAME}/"], repo_root).split()
     names = {Path(name).stem for name in deleted if name.endswith(".json")}
     gone = [n for n in names if n not in present and RECORD_STEM.fullmatch(n)]
-    return sorted(n for n in gone if _ever_had_result(n, repo_root))
+    below = _deleted_below_a_confirmation(set(gone), repo_root)
+    return sorted(n for n in gone if n in below or _ever_had_result(n, repo_root))
+
+
+def _deleted_below_a_confirmation(gone: set[str], repo_root: Path) -> set[str]:
+    """Return the deleted confirmation records that a higher confirmation record outlived.
+
+    Each commit that deleted a record is read with its own tree, so a deletion that
+    happened before any higher record existed stays allowed.
+    """
+    log = _git(
+        [
+            "log",
+            "--diff-filter=D",
+            "--name-only",
+            "--format=commit:%H",
+            "--",
+            f"{REGISTRY_DIR_NAME}/",
+        ],
+        repo_root,
+    )
+    found: set[str] = set()
+    commit = ""
+    for line in log.splitlines():
+        if line.startswith("commit:"):
+            commit = line.removeprefix("commit:")
+            continue
+        record_id = Path(line.strip()).stem
+        if record_id in gone and line.strip().endswith(".json"):
+            if _was_outlived(record_id, commit, repo_root):
+                found.add(record_id)
+    return found
+
+
+def _was_outlived(record_id: str, commit: str, repo_root: Path) -> bool:
+    """Return True when ``commit`` deleted a confirmation record that a higher one outlived."""
+    relative = record_relative_path(record_id)
+    if _field_at(f"{commit}^", relative, "cohort", repo_root) != CONFIRMATION:
+        return False
+    names = _git(["ls-tree", "--name-only", commit, f"{REGISTRY_DIR_NAME}/"], repo_root).split()
+    return any(
+        RECORD_STEM.fullmatch(other.stem)
+        and other.stem[:4] > record_id[:4]
+        and _field_at(commit, record_relative_path(other.stem), "cohort", repo_root) == CONFIRMATION
+        for other in map(Path, names)
+        if other.suffix == ".json"
+    )
 
 
 def _ever_had_result(record_id: str, repo_root: Path) -> bool:

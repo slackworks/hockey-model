@@ -90,7 +90,7 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
 CHECK_OUTPUT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
-    "required": ["ok", "records", "errors"],
+    "required": ["ok", "records", "errors", "notes"],
     "properties": {
         "ok": {"type": "boolean"},
         "records": {
@@ -110,5 +110,6 @@ CHECK_OUTPUT_SCHEMA: dict[str, Any] = {
             },
         },
         "errors": {"type": "array", "items": {"type": "string"}},
+        "notes": {"type": "array", "items": {"type": "string"}},
     },
 }

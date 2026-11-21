@@ -55,6 +55,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the backtest runner, the sharded build, the worker units, and the golden check to the mutation run, and kill their survivors with tests. The mutants that no test can kill are listed with their reasons in `docs/design/mutant-survivors.md`. The mutation shards place the four new modules. [test:backtest]
 - Add `docs/design/tla-scope.md`, which says what a TLA+ model of this project may and may not claim. [docs:tla]
 - Add `hockey-model store gaps --live`, which lists each live feed that is a known gap as JSON (`source`, `url`, `gap_since`, `age_hours`, `last_ok`, `over_limit`), and `scripts/check-live-feeds.sh`, which the `daily-report-check` workflow runs. The job fails for a live feed that stays a gap for longer than `LIVE_FEED_MAX_AGE`. [feat:ci]
+- Add a `notes` list to the `experiments check` output. It says `deletion history not checked` and the reason when the check runs outside a git work tree or before the first commit. [feat:experiments]
 
 ### Changed
 
