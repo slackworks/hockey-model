@@ -3,6 +3,7 @@
 The interval comes from the uncertainty of the fitted coefficients, by the delta method on the
 log-odds scale. It does not hold the noise of the Elo rating, the noise of the feature values,
 or the drift between seasons, so a reader must call it "model uncertainty only".
+Design: docs/design/win-interval.md
 """
 
 import math
