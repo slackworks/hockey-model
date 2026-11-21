@@ -40,7 +40,7 @@ def test_workers_give_a_byte_identical_report_and_csv(
     )
     assert parallel == serial
     log = capfd.readouterr().err
-    for unit in ("build actual rows", "build guess rows", "validate elo", "score model_actual"):
+    for unit in ("build actual rows 2", "build guess rows 7", "validate elo", "score model_actual"):
         assert f"backtest: unit {unit} took " in log
     assert "backtest: total " in log
     assert "with 3 worker(s)" in log

@@ -1,7 +1,7 @@
 """Build the feature rows of past games, in start order, with the Elo before each game."""
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -42,15 +42,19 @@ def training_rows(
     burn_in: int = ELO_BURN_IN,
     *,
     names: Sequence[str],
+    elo_start: Mapping[str, float] | None = None,
 ) -> list[TrainingRow]:
     """Return a row for each final game from ``first_season`` through ``last_season``.
 
     The Elo replays from the ``burn_in`` season. Each row uses the ratings before its own game
-    and no data from after its start.
+    and no data from after its start. With ``elo_start``, the replay begins at the first game of
+    ``first_season`` with those ratings, which MUST be the ratings before that game
+    (``season_boundaries``), and the rows are the same as those of a full replay.
     """
-    games = [g for g in final_games_before(conn, LATEST_GAME) if g.season >= burn_in]
+    start_season = burn_in if elo_start is None else first_season
+    games = [g for g in final_games_before(conn, LATEST_GAME) if g.season >= start_season]
     catalog = player_catalog(conn)
-    book = EloBook()
+    book = EloBook(elo_start)
     rows: list[TrainingRow] = []
     for game in games:
         if game.season > last_season:

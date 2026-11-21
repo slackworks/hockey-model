@@ -65,7 +65,7 @@ That replacement is a model change and needs its own issue.
 
 The backtest is a set of named units.
 Each unit logs `backtest: unit NAME took Ns` on stderr, and the run ends with `backtest: total Ns`.
-`backtest --workers N` and `experiments run --workers N` run the two feature builds in up to N worker processes.
+`backtest --workers N` and `experiments run --workers N` build the feature rows one season at a time in up to N worker processes.
 Each worker opens its own read-only connection to the store file, so no worker writes.
 Each worker reads the committed rows of its own snapshot, so no writer may change the store during a backtest.
 `daily-prepare.sh` runs the backtest after the refresh, inside the one concurrency group that serializes writers, and `run_backtest` refuses `workers` above 1 for a connection with uncommitted changes.
@@ -94,12 +94,28 @@ Every fit and every bootstrap run takes a tenth of a second, so a process pool f
 They stay named units and run in the main process.
 The JSON report and the per-game CSV were byte-identical for 1 and for 4 workers on the real store (checked with `cmp`).
 
+### Season shards (#286)
+
+Measured on 2026-11-20 on the same copy of the real store, 4 workers.
+Each season is one unit for each goalie mode, so there are 20 units for the 10 seasons that the backtest builds.
+
+| Unit | Seconds |
+| --- | --- |
+| build actual rows, one season | 84 to 126 |
+| build guess rows, one season | 232 to 350 |
+| total, 4 workers, season shards | 1262 |
+
+The sharded run is 3.5 times faster than the serial run (4454 s), and 2.6 times faster than the run with one worker for each full build (3252 s).
+The report and the per-game CSV were byte-identical to the serial run on the real store (checked with `cmp`).
+The golden test runs the sharded build too, and its canonical hashes match the committed ones.
+
 ### Target
 
-The longest unit bounds the parallel run: the guess build at about 3251 s.
-`PARALLEL_TARGET_S` in `backtest/runner.py` is 3400 s, the guess build plus the merge and a margin.
+With two workers, one for each full build, the longest unit bounds the run: the guess build at about 3251 s.
+The season shards of #286 remove that bound.
+One cheap pass over the results records the Elo ratings before the first game of each season (`season_boundaries`).
+Each season of each goalie mode is then a unit that starts from its boundary ratings, and joining the units in season order gives the rows of the full build (`build_sharded`).
+`PARALLEL_TARGET_S` in `backtest/runner.py` is 1500 s, the sharded run with 4 workers on the real store plus a margin.
 The run prints its total against that target.
-A shorter run needs a smaller longest unit, which means splitting the guess build.
-That split is #286: it records the Elo book state at each season boundary and builds each season from its boundary state.
 #224 changes the cost of every fit unit, but the fits are 0.1 s, so it does not change this table.
 
