@@ -96,6 +96,15 @@ def _pool_failure(units: Sequence[Unit], index: int, exc: BaseException) -> Exce
     return _failure(units[index], exc)
 
 
+def check_workers(workers: int) -> int:
+    """Return ``workers`` when it is 1 or more. Raise a named error otherwise."""
+    if workers < 1:
+        raise HockeyModelError(
+            f"backtest: workers must be at least 1, got {workers}; pass 1 or more"
+        )
+    return workers
+
+
 def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
     """Run ``units`` and return their results in the order of ``units``.
 
@@ -103,10 +112,7 @@ def run_units(units: Sequence[Unit], workers: int) -> list[Any]:
     pool of at most ``workers`` processes runs them at the same time. The first failure stops
     the running workers and raises.
     """
-    if workers < 1:
-        raise HockeyModelError(
-            f"backtest: workers must be at least 1, got {workers}; pass 1 or more"
-        )
+    check_workers(workers)
     if workers == 1 or len(units) <= 1:
         return [_run_here(unit) for unit in units]
     results: list[Any] = [None] * len(units)

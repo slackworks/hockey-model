@@ -84,3 +84,16 @@ def test_the_worker_count_reaches_the_rows_of_fit(
     assert cli.main(["fit", "--features", "rest", *args]) == 2
     assert "stop after the rows" in capsys.readouterr().err
     assert seen == [expected]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["backtest"], ["fit", "--features", "rest"], ["experiments", "run", "0001-x"]],
+    ids=["backtest", "fit", "experiments_run"],
+)
+@pytest.mark.parametrize("workers", ["0", "-3"])
+def test_a_worker_count_below_one_is_a_usage_error(
+    capsys: pytest.CaptureFixture[str], command: list[str], workers: str
+) -> None:
+    assert cli.main([*command, "--workers", workers]) == 2
+    assert "must be 1 or more" in capsys.readouterr().err

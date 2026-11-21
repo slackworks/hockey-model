@@ -116,6 +116,7 @@ fi
 # report. The check runs before any file is replaced, so a skip leaves the day's files in place.
 backtest_json="$store_dir/backtest-$day.json"
 backtest_games="$store_dir/backtest-games-$day.csv"
+workers="${BACKTEST_WORKERS:-4}"
 if [[ -f "$store_dir/prepared-$day" ]]; then
   why=""
   if [[ ! -f "$backtest_json" ]]; then
@@ -147,7 +148,7 @@ shopt -u nullglob
 # The backtest writes beside the final names. The final files and the marker change only after
 # the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
 uv run hockey-model backtest --games-out "$backtest_games.new" \
-  --workers "${BACKTEST_WORKERS:-4}" >"$backtest_json.new"
+  --workers "$workers" >"$backtest_json.new"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.
 if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json.new")"; then
@@ -157,8 +158,7 @@ fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
-uv run hockey-model fit --features "$live_features" --label live \
-  --workers "${BACKTEST_WORKERS:-4}"
+uv run hockey-model fit --features "$live_features" --label live --workers "$workers"
 mv "$backtest_games.new" "$backtest_games"
 mv "$backtest_json.new" "$backtest_json"
 touch "$store_dir/prepared-$day"

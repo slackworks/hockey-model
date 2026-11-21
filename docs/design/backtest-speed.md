@@ -125,8 +125,8 @@ A prepare of a new day takes about 27 minutes with 4 workers: the backtest at 12
 
 ### Target
 
-With two workers, one for each full build, the longest unit bounds the run: the guess build at about 3251 s.
-The season shards of #286 remove that bound.
+The first version of the parallel run used one worker for each full build, and the guess build at about 3251 s bounded it.
+The season shards of #286 removed that bound.
 One cheap pass over the results records the Elo ratings before the first game of each season (`season_boundaries`).
 Each season of each goalie mode is then a unit that starts from its boundary ratings, and joining the units in season order gives the rows of the full build (`build_sharded`).
 `PARALLEL_TARGET_S` in `backtest/runner.py` is 1500 s, the sharded run with 4 workers on the real store plus a margin.

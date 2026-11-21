@@ -51,6 +51,11 @@ def training_rows(
     ``first_season`` with those ratings, which MUST be the ratings before that game
     (``season_boundaries``), and the rows are the same as those of a full replay.
     """
+    if elo_start is not None and first_season < burn_in:
+        raise ValueError(
+            f"training_rows: elo_start with first season {first_season} before the burn-in "
+            f"season {burn_in} would count games twice; start at the burn-in season or later"
+        )
     start_season = burn_in if elo_start is None else first_season
     games = [g for g in final_games_before(conn, LATEST_GAME) if g.season >= start_season]
     catalog = player_catalog(conn)

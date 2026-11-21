@@ -76,7 +76,15 @@ def season_boundaries(games: Iterable[GameRow]) -> dict[int, dict[str, float]]:
     """
     book = EloBook()
     boundaries: dict[int, dict[str, float]] = {}
+    newest = 0
     for game in games:
+        if game.season < newest:
+            raise ValueError(
+                f"season_boundaries: game {game.game_id} of season {game.season} starts after "
+                f"a game of season {newest}; pass final games in start order, with each season "
+                "complete before the next begins"
+            )
+        newest = game.season
         if game.season not in boundaries:
             boundaries[game.season] = book.ratings()
         book.update(game)

@@ -24,7 +24,7 @@ from hockey_model.backtest.metrics import (
     per_game_log_loss,
 )
 from hockey_model.backtest.shards import build_sharded
-from hockey_model.backtest.units import Unit, run_units
+from hockey_model.backtest.units import Unit, check_workers, run_units
 from hockey_model.game_model.features import FEATURES, GOALIE_FEATURE, GoalieMode
 from hockey_model.game_model.imputation import (
     ImputationLimitError,
@@ -59,9 +59,10 @@ MODEL_GUESS = "model_guess"
 RECORDED_RUNS = (ELO, MODEL_ACTUAL, MODEL_GUESS)
 # A feature is vetoed only when it is worse by more than rounding error.
 VETO_TOLERANCE = 1e-9
-# The wall time to meet with 4 workers on the real store: the season shards, about 22 units of
-# up to 350 s each, packed on 4 workers (1262 s measured), plus a margin. Table:
+# The wall time to meet with PARALLEL_TARGET_WORKERS workers on the real store: the season
+# shards, 20 units of up to 350 s each (1262 s measured), plus a margin. Table:
 # docs/design/backtest-speed.md
+PARALLEL_TARGET_WORKERS = 4
 PARALLEL_TARGET_S = 1500
 
 
@@ -445,6 +446,7 @@ def run_backtest(
     each with its own read-only store connection, because the builds take more than 99.9% of
     the time. The report and the records are the same for every worker count.
     """
+    check_workers(workers)
     started = time.monotonic()
     first, last = plan.fit_first, plan.scored[1]
     if workers > 1:
@@ -469,9 +471,10 @@ def run_backtest(
         )
     report = _build_report(conn, plan, candidates, scoring, tested, games)
     elapsed = time.monotonic() - started
-    print(
-        f"backtest: total {elapsed:.1f}s with {workers} worker(s); the target with 4 workers is "
-        f"{PARALLEL_TARGET_S}s on the real store",
-        file=sys.stderr,
+    target = (
+        f"; the target on the real store is {PARALLEL_TARGET_S}s"
+        if workers == PARALLEL_TARGET_WORKERS
+        else ""
     )
+    print(f"backtest: total {elapsed:.1f}s with {workers} worker(s){target}", file=sys.stderr)
     return report, _records(games)
