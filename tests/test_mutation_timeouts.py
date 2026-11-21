@@ -10,6 +10,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from mutation_copy import require_path
+from mutmut.mutation.data import SourceFileMutationData
 from mutmut.stats import status_by_exit_code
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,19 @@ def _load() -> ModuleType:
 
 
 timeouts = _load()
+
+
+def _load_shards() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "mutation_shards", require_path(ROOT / "scripts" / "mutation_shards.py")
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+shards = _load_shards()
 
 
 def _meta(path: Path, codes: dict[str, int | None], estimated: dict[str, float]) -> None:
@@ -132,3 +146,38 @@ def test_the_command_fails_with_the_reason_when_the_input_is_bad(
     assert timeouts.main(argv) == 1
     assert "mutation-timeouts:" in capsys.readouterr().err
     assert not (tmp_path / "out.json").exists()
+
+
+@pytest.mark.parametrize("owner_first", [True, False])
+def test_a_timeout_keeps_its_estimate_through_the_shard_merge(
+    tmp_path: Path, owner_first: bool
+) -> None:
+    """A shard sets the estimate only for the mutants it ran, so the merge must join them."""
+    owner, other = tmp_path / "owner", tmp_path / "other"
+    key = "m.x_f__mutmut_1"
+    hashes = {"hash_by_function_name": {"f": "abc"}}
+    for directory, code, estimate in ((owner, 36, {key: 2.5}), (other, None, {})):
+        path = directory / "src" / "a.py.meta"
+        path.parent.mkdir(parents=True)
+        body = {"exit_code_by_key": {key: code}, "estimated_durations_by_key": estimate, **hashes}
+        path.write_text(json.dumps(body), encoding="utf-8")
+    merged = tmp_path / "merged"
+    shards.merge_meta([owner, other] if owner_first else [other, owner], merged)
+    assert timeouts.collect(merged, 3.0, 1.0) == [
+        {"mutant": key, "estimated_s": 2.5, "limit_s": 21}
+    ]
+
+
+def test_the_list_reads_the_meta_file_that_mutmut_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mutmut's own writer names the fields that the reader uses."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "mutants" / "src").mkdir(parents=True)
+    data = SourceFileMutationData(path="src/a.py")
+    data.exit_code_by_key = {"m.x_f__mutmut_1": 36, "m.x_f__mutmut_2": 1}
+    data.estimated_time_of_tests_by_mutant = {"m.x_f__mutmut_1": 4.0, "m.x_f__mutmut_2": 4.0}
+    data.save()
+    assert timeouts.collect(tmp_path / "mutants", 3.0, 1.0) == [
+        {"mutant": "m.x_f__mutmut_1", "estimated_s": 4.0, "limit_s": 30}
+    ]

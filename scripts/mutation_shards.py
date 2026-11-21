@@ -37,8 +37,15 @@ PACKAGE = "hockey_model"
 # mutmut names every mutant with the package prefix, for example
 # hockey_model.sources.nhl.parse__mutmut_3.
 MUTANT_PREFIX = f"{PACKAGE}."
-# The per-key fields of a .meta file that shards fill in one mutant at a time.
-RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_key")
+# The per-key fields of a .meta file that shards fill in one mutant at a time. The estimate of
+# the test time is one of them, because a shard sets it only for the mutants that it ran, and the
+# timeout limit of a mutant comes from it (#274).
+RESULT_FIELDS = (
+    "exit_code_by_key",
+    "durations_by_key",
+    "type_check_error_by_key",
+    "estimated_durations_by_key",
+)
 # Balanced from the per-mutant durations that CI records in each .meta file, not from the
 # file count. Count is a poor guide: sources.http costs 357s for 190 mutants, and
 # experiments.models costs 3902s for 332 (#155). A surviving mutant runs every selected
