@@ -10,7 +10,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.db import StoreError
-from hockey_model.store.source_reads import abandoned_urls, record_read
+from hockey_model.store.source_reads import abandoned_urls, record_failed_read, record_read
 from hockey_model.types import HockeyModelError
 
 # Errors that a bad source response or a bad stored schedule cause. Other errors are bugs.
@@ -85,7 +85,7 @@ class RefreshRun:
                 record_read(self.conn, source, url, stamp)
         except SOURCE_FAILURES as exc:
             with self.conn:
-                record_read(self.conn, source, url, stamp, error=str(exc))
+                record_failed_read(self.conn, source, url, stamp, exc)
             self.errors.append(exc)
             return False
         self.written[source] += written

@@ -26,6 +26,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(4, "mp_team_games", "attempts_known", False),
     Requirement(5, "source_reads", "fetched_at", True),
     Requirement(5, "model_fits", "created_at", True),
+    Requirement(6, "source_reads", "permanent", False),
 )
 # The shape before the first requirement, which is the first schema this package wrote. A store
 # with no schema_version row is refused before this module runs.

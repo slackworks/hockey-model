@@ -15,11 +15,9 @@ a shape the store does not hold. A stamp that is already ahead of the shape is c
 column probe, and the upgrade reruns every change from version 1.
 """
 
-import argparse
 import re
 import sqlite3
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from stat import S_ISREG
@@ -153,6 +151,9 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "DROP TABLE model_fits",
         "ALTER TABLE model_fits_v5 RENAME TO model_fits",
     ),
+    # A row that an earlier version wrote keeps NULL, which means that the cause of the
+    # failure is unknown. The reader counts it as transient.
+    5: ("ALTER TABLE source_reads ADD COLUMN permanent INTEGER",),
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.
@@ -481,31 +482,3 @@ def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
         return True
     row = conn.execute(_EMPTY_ATTEMPTS_SQL).fetchone()
     return row is not None and int(row[0]) > 0
-
-
-def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
-    """Add the ``store`` command group with its ``upgrade`` subcommand."""
-    group = add_parser("store", help="manage the store file")
-    sub = group.add_subparsers(dest="store_command")
-    upgrade = sub.add_parser(
-        "upgrade", help="move the store to the current schema, keeping every row"
-    )
-    upgrade.add_argument(
-        "--db",
-        default=None,
-        metavar="PATH",
-        help="store file to upgrade; default is HOCKEY_MODEL_DB",
-    )
-    upgrade.add_argument(
-        "--if-missing",
-        choices=("fail", "skip"),
-        default="fail",
-        help="'skip' exits 0 when the store file does not exist; the default 'fail' names it",
-    )
-
-
-def run_store_group(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
-    """Run a ``store`` subcommand and return its JSON payload and exit code."""
-    if args.store_command != "upgrade":
-        raise StoreError("store: name a subcommand, such as `hockey-model store upgrade`")
-    return asdict(upgrade_store(db_path, if_missing=args.if_missing)), 0

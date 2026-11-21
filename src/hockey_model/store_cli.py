@@ -37,8 +37,8 @@ from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, sav
 from hockey_model.store.reads import game_row
 from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
-from hockey_model.store.upgrade import run_store_group
 from hockey_model.store_cli_parsers import CANDIDATE_SETS
+from hockey_model.store_group import run_store_group
 from hockey_model.types import HockeyModelError
 
 STORE_COMMANDS = frozenset(

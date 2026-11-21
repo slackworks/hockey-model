@@ -4,7 +4,7 @@ that a boxscore write leaves listed as missing."""
 import re
 import sqlite3
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, TeamGameRow, goalie_games_url
 from hockey_model.sources.nhl import boxscore_url, score_day_url
-from hockey_model.store import refresh_nhl
+from hockey_model.store import refresh_nhl, refresh_other
 from hockey_model.store.db import connect
 from hockey_model.store.moneypuck_writes import write_team_games
 from hockey_model.store.refresh import refresh, refresh_starters
@@ -468,3 +468,20 @@ def test_every_abandoned_url_is_noted(
         )
     finally:
         store.close()
+
+
+def test_a_hidden_live_feed_failure_keeps_the_errors_of_earlier_reads(
+    conn: sqlite3.Connection,
+) -> None:
+    key, _ = _live_feed("daily_faceoff")
+    _abandon_a_live_feed(conn, "daily_faceoff", key)
+    run = RefreshRun(conn, FakeClient(), NOW)
+    earlier = SourceError("nhl_scores", "https://example.test/day", "HTTP 500")
+    run.errors.append(earlier)
+
+    def failing(stamp: datetime) -> int:
+        raise SourceError("daily_faceoff", key, "HTTP 403")
+
+    refresh_other._attempt_live(run, "daily_faceoff", key, failing)
+    assert run.errors == [earlier]
+    assert any("still failing" in note for note in run.notes)

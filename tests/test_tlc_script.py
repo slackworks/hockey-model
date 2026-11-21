@@ -214,13 +214,14 @@ case "$*" in -version*) echo 'openjdk version "17.0.7" 2023-04-18' >&2; exit 0 ;
 echo "$*" >> "$FAKE_JAVA_LOG"
 case "$*" in
     *daily_prepare_stall.cfg*) exit "${FAKE_STALL_RC:-0}" ;;
+    *daily_prepare_blocked.cfg*) exit "${FAKE_BLOCKED_RC:-0}" ;;
     *) exit "${FAKE_MAIN_RC:-0}" ;;
 esac
 """
 
 
 def _run_with_fake_java(
-    tmp_path: Path, stall_rc: int, main_rc: int
+    tmp_path: Path, stall_rc: int, main_rc: int, blocked_rc: int = 0
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run a copy of tlc.sh whose pinned hash matches a fake jar, and return the java calls."""
     jar_bytes = b"a fake tla tools jar"
@@ -239,7 +240,12 @@ def _run_with_fake_java(
     (jars / "tla2tools-v1.7.4.jar").write_bytes(jar_bytes)
     log = tmp_path / "java.log"
     env = _env_with_fakes(tmp_path, jars, java=_FAKE_JAVA)
-    env.update(FAKE_JAVA_LOG=str(log), FAKE_STALL_RC=str(stall_rc), FAKE_MAIN_RC=str(main_rc))
+    env.update(
+        FAKE_JAVA_LOG=str(log),
+        FAKE_STALL_RC=str(stall_rc),
+        FAKE_BLOCKED_RC=str(blocked_rc),
+        FAKE_MAIN_RC=str(main_rc),
+    )
     result = subprocess.run(
         ["bash", str(root / "scripts" / "tlc.sh")],
         capture_output=True,
@@ -252,26 +258,34 @@ def _run_with_fake_java(
     return result, calls
 
 
-def test_both_configs_pass_and_the_stall_config_runs_first(tmp_path: Path) -> None:
+def test_all_configs_pass_and_the_small_configs_run_first(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0)
     assert result.returncode == 0
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert "-config specs/daily_prepare_stall.cfg" in calls[0]
-    assert "-config specs/daily_prepare.cfg " in calls[1]
+    assert "-config specs/daily_prepare_blocked.cfg" in calls[1]
+    assert "-config specs/daily_prepare.cfg " in calls[2]
     assert all("-workers auto" in call for call in calls)
 
 
-def test_a_failed_first_config_stops_before_the_second(tmp_path: Path) -> None:
+def test_a_failed_first_config_stops_before_the_others(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=12, main_rc=0)
     assert result.returncode == 12
     assert len(calls) == 1
     assert "specs/daily_prepare_stall.cfg failed" in result.stderr
 
 
-def test_a_failed_second_config_returns_its_code(tmp_path: Path) -> None:
-    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
+def test_a_failed_blocked_config_stops_before_the_main_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, blocked_rc=13)
     assert result.returncode == 13
     assert len(calls) == 2
+    assert "specs/daily_prepare_blocked.cfg failed" in result.stderr
+
+
+def test_a_failed_main_config_returns_its_code(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
+    assert result.returncode == 13
+    assert len(calls) == 3
     assert "specs/daily_prepare.cfg failed" in result.stderr
 
 

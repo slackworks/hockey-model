@@ -17,7 +17,13 @@ from hypothesis import strategies as st
 
 import hockey_model.sources.http as http_module
 from hockey_model.sources.errors import SourceError
-from hockey_model.sources.http import HttpClient, _PolicyRedirect, _Refused
+from hockey_model.sources.http import (
+    PERMANENT_STATUSES,
+    HttpClient,
+    _is_retryable_status,
+    _PolicyRedirect,
+    _Refused,
+)
 from hockey_model.sources.policy import HOST_POLICIES, HostPolicy
 
 NHL_URL = "https://api-web.nhle.com/v1/schedule/now"
@@ -151,6 +157,58 @@ def test_get_raises_on_404_without_retry() -> None:
     with pytest.raises(SourceError, match="404"):
         _client(opener, clock).get("nhl", NHL_URL)
     assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("code", sorted(PERMANENT_STATUSES))
+def test_an_error_status_that_a_retry_cannot_change_is_permanent(code: int) -> None:
+    opener = ScriptedOpener([_http_error(code)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is True
+    assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize("code", [404, 408, 425])
+def test_a_status_that_a_later_read_may_change_is_not_permanent(code: int) -> None:
+    opener = ScriptedOpener([_http_error(code)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is False
+
+
+def test_the_permanent_statuses_are_client_errors_that_the_client_does_not_retry() -> None:
+    assert all(400 <= code < 500 and not _is_retryable_status(code) for code in PERMANENT_STATUSES)
+
+
+@pytest.mark.parametrize("permanent", [True, False])
+def test_a_refusal_keeps_its_permanence_in_the_source_error(permanent: bool) -> None:
+    opener = ScriptedOpener([_Refused("refused", permanent=permanent)])
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is permanent
+
+
+def test_a_refusal_is_permanent_by_default() -> None:
+    assert _Refused("redirect").permanent is True
+
+
+def test_a_failure_that_ran_out_of_retries_is_not_permanent() -> None:
+    opener = ScriptedOpener([_http_error(503)] * 4)
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is False
+
+
+def test_a_network_error_is_not_permanent() -> None:
+    opener = ScriptedOpener([OSError("down")] * 4)
+    with pytest.raises(SourceError) as info:
+        _client(opener, FakeClock()).get("nhl", NHL_URL)
+    assert info.value.permanent is False
+
+
+def test_a_source_error_is_transient_unless_it_says_otherwise() -> None:
+    assert SourceError("nhl", NHL_URL, "x").permanent is False
+    assert SourceError("nhl", NHL_URL, "x", permanent=True).permanent is True
 
 
 def test_get_rejects_unknown_host_before_any_request() -> None:

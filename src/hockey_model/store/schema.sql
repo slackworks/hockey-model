@@ -12,7 +12,8 @@ CREATE TABLE source_reads (
     url TEXT,
     fetched_at TEXT NOT NULL,
     ok INTEGER,
-    error TEXT
+    error TEXT,
+    permanent INTEGER
 );
 
 CREATE TABLE games (

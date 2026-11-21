@@ -69,8 +69,10 @@ def test_credit_text() -> None:
     ],
 )
 def test_check_allowed_rejects_other_urls(url: str) -> None:
-    with pytest.raises(SourceError, match="allowed list"):
+    with pytest.raises(SourceError, match="allowed list") as info:
         check_allowed(url)
+    # No retry can add the URL to the list, so the failure is permanent.
+    assert info.value.permanent is True
 
 
 def test_check_allowed_accepts_listed_urls() -> None:

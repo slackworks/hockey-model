@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from hockey_model.game_model.features import ATTEMPT_FEATURES, FEATURES
-from hockey_model.store.upgrade import add_store_group
+from hockey_model.store_group import add_store_group
 
 CANDIDATE_SETS: dict[str, tuple[str, ...]] = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
 

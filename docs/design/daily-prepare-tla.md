@@ -102,12 +102,24 @@ For each game, in this order:
 ### The abandon rule: `store/source_reads.py`, `abandoned_urls()`
 
 A URL is abandoned when at least `ABANDON_AFTER_FAILED_READS` reads failed since its newest good read, and the first and the last of those failures are at least `ABANDON_MIN_SPAN_DAYS` apart.
+The span test does not apply when every failure of the streak is permanent: an HTTP status that a retry cannot change, such as 403 (#279).
+A permanent failure sets `source_reads.permanent` to 1.
+A row that an older store wrote holds NULL, and the rule counts it as transient.
+A streak with one transient or unknown failure keeps the span test.
 An abandoned dated unit is never read again.
 It stays abandoned until `--retry-skipped` reads it once and that read works.
 A live feed is different.
 It has no dated alternative, so a skip would leave it abandoned for ever.
 The three live feeds make the request on every run, and a failed read of an abandoned URL is not an error (#276).
 One good read then clears the gap with nobody involved.
+
+The model gives each URL one kind of failure.
+A URL in `BlockedScore` or `BlockedBox` fails only with a permanent status, and any other URL fails only with a transient one.
+So no streak in the model mixes the two kinds, and `Abandoned` needs no flag per streak.
+The mixed streak is a case of the Python tests (`tests/store/test_permanent_gaps.py`).
+The model holds no property that says a blocked URL needs no span, because the definition of `Abandoned` already says it.
+The value of `specs/daily_prepare_blocked.cfg` is that every property of the main config still holds when a gap forms with no span.
+The main config keeps `Blocked` empty, because a blocked day there raised the count from about 27 million distinct states to more than 50 million (#188).
 
 ### The exit code: `store_cli.py`, `_refresh()`, and `scripts/daily-prepare.sh`
 
@@ -144,6 +156,7 @@ The cache save step has `if: always()`, so the store and the marker are saved to
 | `RETRY_FAILED_AFTER` | `RetryTicks`, in ticks. |
 | Days after the newest closed day | `OpenDays` |
 | A URL that always fails, such as the score day that always returns HTTP 500 | `BrokenScore`, `BrokenBox` |
+| A broken URL whose failure is permanent, such as HTTP 403 | `BlockedScore`, `BlockedBox` |
 | A source after the NHL steps that always fails | `OtherBroken` |
 | `source_reads` rows of one URL | `okRead`, `streak`, `span`, `firstAge`, `lastAge` |
 | The `.backfilled` file | `marker` |
@@ -206,17 +219,20 @@ Abstractions, and the reason for each:
 
 ## Constants
 
-`specs/daily_prepare.cfg` uses: `NWindows = 2`, `DaysPerWindow = 2`, `Budget = 2`, `MaxFails = 1`, `AbandonReads = 2`, `AbandonTicks = 1`, `RetryTicks = 2`, `OpenDays = {4}`, `BrokenScore = {1}`, `BrokenBox = {3}`, `OtherBroken = FALSE`, `ArrivalsCount = FALSE`, `BacklogFirst = FALSE`.
+`specs/daily_prepare.cfg` uses: `NWindows = 2`, `DaysPerWindow = 2`, `Budget = 2`, `MaxFails = 1`, `AbandonReads = 2`, `AbandonTicks = 1`, `RetryTicks = 2`, `OpenDays = {4}`, `BrokenScore = {1}`, `BrokenBox = {3}`, `BlockedScore = {}`, `BlockedBox = {}`, `OtherBroken = FALSE`, `ArrivalsCount = FALSE`, `BacklogFirst = FALSE`.
 Day 1 is the oldest day, so window 1 holds days 3 and 4, and day 4 is open.
 
-`specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, and the other constants as above.
+`specs/daily_prepare_stall.cfg` is a small model with a budget that cannot cover the open day: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, and the other constants as above.
+
+`specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, and the other constants as above.
+TLC finds 11,338 distinct states in it, and every property of the main config holds.
 
 With these values, TLC finds 27,181,712 distinct states in the first model, and 295,722 in the stall model.
 Before the arrival step, the counts were 4,000,218 and 16,050.
 The arrival step, the `arrived` set, and the `backlog` flag multiply the state space.
 The first model took 29 minutes 21 seconds with `-workers auto` on the development machine in the #186 run.
-After #189 removed `noted` from the model, TLC found the same 27,181,712 distinct states in the first model, and it passed every property in 20 minutes 19 seconds.
-The stall model passed in 13 seconds.
+After #189 removed `noted` and #279 added `Blocked`, TLC found the same 27,181,712 distinct states in the first model, and it passed every property in 19 minutes 59 seconds.
+The stall model passed in 12 seconds, and the blocked model passed in 1 second.
 Other checks ran on the same machine during that run, so the figure is an upper bound.
 The `tla` CI job time for the same spec is the cleaner figure.
 The earlier figure, 3 minutes 14 seconds, was on a 10-core Mac, so the two times are not a controlled comparison.
@@ -322,10 +338,10 @@ The first one was a limit of the code. Issue #178 fixed it.
 ## Files to add or change
 
 1. `specs/daily_prepare.tla`: copy the reference spec from the appendix without change.
-2. `specs/daily_prepare.cfg` and `specs/daily_prepare_stall.cfg`: copy the reference `.cfg` files from the appendix without change.
+2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, and `specs/daily_prepare_blocked.cfg`: copy the reference `.cfg` files from the appendix without change.
 3. `scripts/tlc.sh`: the run script below.
 4. `tests/test_tla_constants.py`: the constants test above.
-5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: both configs pass, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
+5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all three configs pass, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
 The Java version checks run against fake `java` output for versions 8, 9, 11, 17, and 21, and for unreadable output.
 A PATH without `sha256sum` and `shasum` exits 1 and names both.
 6. `.github/workflows/tla.yml`: the CI job below.
@@ -356,7 +372,7 @@ Behavior:
    A version line that cannot be read exits 1.
    If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
-   For `specs/daily_prepare_stall.cfg` first and then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
+   For `specs/daily_prepare_stall.cfg`, then `specs/daily_prepare_blocked.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
 8. Exit with the TLC exit code.
    TLC exits 0 when every property holds, 12 for a violated invariant, and 13 for a violated action or temporal property.
@@ -468,7 +484,7 @@ The catalog lives in the nbl-dev plugin, outside this repo, so a catalog entry i
 ## Appendix: reference spec
 
 TLC 1.7.4 checked this spec and these `.cfg` files with no violation.
-Copy all three files byte for byte.
+Copy all four files byte for byte.
 
 ### `specs/daily_prepare.tla`
 
@@ -489,6 +505,8 @@ CONSTANTS
     OpenDays,       \* days that are not closed at the start; a tick closes them one by one
     BrokenScore,    \* score days whose every read fails
     BrokenBox,      \* days whose boxscore read always fails
+    BlockedScore,   \* broken score days whose failure is permanent, such as HTTP 403
+    BlockedBox,     \* broken boxscore days whose failure is permanent
     OtherBroken,    \* TRUE when a source after the NHL steps always fails
     ArrivalsCount,  \* TRUE: a day that closed since the last run counts as progress (old rule)
     BacklogFirst    \* TRUE: read the oldest window first, so the backlog comes before the open days
@@ -502,6 +520,7 @@ Box(d) == [kind |-> "box", day |-> d]
 ASSUME /\ NWindows >= 1 /\ DaysPerWindow >= 1 /\ Budget >= 1 /\ MaxFails >= 1
        /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1
        /\ OpenDays \subseteq Days /\ BrokenScore \subseteq Days /\ BrokenBox \subseteq Days
+       /\ BlockedScore \subseteq BrokenScore /\ BlockedBox \subseteq BrokenBox
        /\ OtherBroken \in BOOLEAN /\ ArrivalsCount \in BOOLEAN /\ BacklogFirst \in BOOLEAN
 
 \* TRUE when a run can read every day that is open at the start and still have budget for one
@@ -542,8 +561,12 @@ store == <<okRead, streak, span, firstAge, lastAge, marker, open, arrived>>
 run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
+Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
-Abandoned(u) == streak[u] >= AbandonReads /\ span[u]
+\* A permanent failure needs no span. The model gives each URL one kind of failure: a URL in
+\* Blocked fails only with a permanent status, and any other URL fails only with a transient
+\* one. A streak that mixes the two kinds is a case of tests/store/test_permanent_gaps.py.
+Abandoned(u) == streak[u] >= AbandonReads /\ (span[u] \/ Blocked(u))
 \* _day_complete(): a good read after the day closed.
 Complete(d) == okRead[Score(d)] /\ d \notin open
 \* games_missing_boxscore(): the score read found a final game with no boxscore.
@@ -822,6 +845,8 @@ CONSTANTS
     OpenDays = {4}
     BrokenScore = {1}
     BrokenBox = {3}
+    BlockedScore = {}
+    BlockedBox = {}
     OtherBroken = FALSE
     ArrivalsCount = FALSE
     BacklogFirst = FALSE
@@ -853,6 +878,8 @@ CONSTANTS
     OpenDays = {2}
     BrokenScore = {}
     BrokenBox = {}
+    BlockedScore = {}
+    BlockedBox = {}
     OtherBroken = FALSE
     ArrivalsCount = FALSE
     BacklogFirst = FALSE
@@ -867,4 +894,37 @@ PROPERTIES
     StallExitsOne
     BacklogStallExitsOne
     FinishesOrFails
+```
+
+### `specs/daily_prepare_blocked.cfg`
+
+```text
+SPECIFICATION Spec
+CONSTANTS
+    NWindows = 2
+    DaysPerWindow = 1
+    Budget = 2
+    MaxFails = 1
+    AbandonReads = 2
+    AbandonTicks = 1
+    RetryTicks = 2
+    OpenDays = {2}
+    BrokenScore = {1}
+    BrokenBox = {2}
+    BlockedScore = {1}
+    BlockedBox = {2}
+    OtherBroken = FALSE
+    ArrivalsCount = FALSE
+    BacklogFirst = FALSE
+INVARIANTS
+    TypeOK
+PROPERTIES
+    MarkerOnlyWhenComplete
+    DoneStaysDone
+    NoRereadOfCompleteDay
+    StoppedNeverMarks
+    ExitCodeRule
+    StallExitsOne
+    BacklogStallExitsOne
+    BackfillFinishes
 ```

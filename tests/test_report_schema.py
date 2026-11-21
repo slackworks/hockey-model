@@ -41,11 +41,11 @@ from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.report_schema import (
     REPORT_SCHEMA_FILE,
     SCHEMA_VERSION,
-    _schema,
     add_build,
     check_index,
     check_report,
     index_entry,
+    packaged_schema,
     version_file,
     write_index,
 )
@@ -176,19 +176,19 @@ def test_a_wrong_value_fails(built: dict[str, Any], path: tuple, value: object) 
 
 
 def test_the_missing_kinds_in_the_schema_match_the_code() -> None:
-    kinds = _schema(REPORT_SCHEMA_FILE)["$defs"]["missing_kind"]["enum"]
+    kinds = packaged_schema(REPORT_SCHEMA_FILE)["$defs"]["missing_kind"]["enum"]
     assert sorted(kinds) == sorted(kind.value for kind in MissingKind)
 
 
 def test_the_training_memberships_in_the_schema_match_the_code() -> None:
-    training = _schema(REPORT_SCHEMA_FILE)["$defs"]["game"]["properties"]["training"]
+    training = packaged_schema(REPORT_SCHEMA_FILE)["$defs"]["game"]["properties"]["training"]
     assert sorted(training["properties"]["membership"]["enum"]) == sorted(
         member.value for member in TrainingMembership
     )
 
 
 def test_the_schema_lists_the_fields_the_report_writes(built: dict[str, Any]) -> None:
-    schema = _schema(REPORT_SCHEMA_FILE)
+    schema = packaged_schema(REPORT_SCHEMA_FILE)
     assert sorted(schema["required"]) == sorted(built) == sorted(TOP_FIELDS)
     assert sorted(schema["$defs"]["game"]["required"]) == sorted(built["games"][0])
 
@@ -301,7 +301,7 @@ def test_an_index_with_no_build_fails(built: dict[str, Any]) -> None:
 
 def test_a_missing_schema_file_names_the_file_and_the_fix() -> None:
     with pytest.raises(HockeyModelError, match=r"nope\.schema\.json.*reinstall the hockey-model"):
-        _schema("nope.schema.json")
+        packaged_schema("nope.schema.json")
 
 
 def _write(path: Path, payload: object) -> Path:

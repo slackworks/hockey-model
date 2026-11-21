@@ -12,7 +12,11 @@ from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
 from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, ABANDON_MIN_SPAN_DAYS
 
 ROOT = Path(__file__).resolve().parents[1]
-CFGS = (ROOT / "specs" / "daily_prepare.cfg", ROOT / "specs" / "daily_prepare_stall.cfg")
+CFGS = (
+    ROOT / "specs" / "daily_prepare.cfg",
+    ROOT / "specs" / "daily_prepare_stall.cfg",
+    ROOT / "specs" / "daily_prepare_blocked.cfg",
+)
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")
 _BLOCK_ENDS = {"INVARIANTS", "PROPERTIES", "SPECIFICATION"}
