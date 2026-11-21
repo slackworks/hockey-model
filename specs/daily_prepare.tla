@@ -57,14 +57,14 @@ VARIABLES
     open,                                     \* days that are not closed yet
     arrived,                                  \* days that closed since the last run ended
     calm,                                     \* TRUE: every read that is not broken works
-    phase, pc, gaps, noted, due, fails, reads,
+    phase, pc, gaps, due, fails, reads,
     progress,  \* what the code counts: a finished unit, as ArrivalsCount sets it
     backlog,   \* ground truth: a finished unit that is not an arrival
     clean, stopped, errors,  \* one run
     exitCode
 
 store == <<okRead, streak, span, firstAge, lastAge, marker, open, arrived>>
-run == <<phase, pc, gaps, noted, due, fails, reads, progress, backlog, clean, stopped, errors>>
+run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
@@ -98,7 +98,7 @@ Init == /\ okRead = [u \in Urls |-> FALSE]
         /\ open = OpenDays
         /\ arrived = {}
         /\ calm = FALSE
-        /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ noted = {} /\ due = {}
+        /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ due = {}
         /\ fails = 0 /\ reads = 0 /\ progress = FALSE /\ backlog = FALSE
         /\ clean = TRUE /\ stopped = FALSE /\ errors = FALSE
         /\ exitCode = 0
@@ -113,7 +113,7 @@ TypeOK ==
     /\ open \subseteq Days /\ arrived \subseteq Days
     /\ phase \in {"idle", "nhl", "other", "finish"}
     /\ pc \in 1..(Steps + 1)
-    /\ gaps \subseteq Urls /\ noted \subseteq Urls /\ due \subseteq Days
+    /\ gaps \subseteq Urls /\ due \subseteq Days
     /\ fails \in 0..MaxFails /\ reads \in 0..Budget
     /\ progress \in BOOLEAN /\ backlog \in BOOLEAN
     /\ clean \in BOOLEAN /\ stopped \in BOOLEAN /\ errors \in BOOLEAN
@@ -139,12 +139,12 @@ GoCalm ==
     /\ UNCHANGED <<store, run, exitCode>>
 
 (* daily-prepare.sh runs a backfill only while the marker is missing. score_gaps() and
-   read_boxscores() read the gaps before any read of this run, and note them. *)
+   read_boxscores() read the gaps before any read of this run. The report note comes from the
+   same gap set in the code, so the model keeps no copy of it. *)
 StartRun ==
     /\ phase = "idle" /\ ~marker
     /\ phase' = "nhl"
     /\ gaps' = {u \in Urls : Abandoned(u)}
-    /\ noted' = {u \in Urls : Abandoned(u)}
     \* In calm weather a re-read resolves every game, so no day is due again.
     /\ \E D \in SUBSET {d \in Days : okRead[Score(d)]} : due' = IF calm THEN {} ELSE D
     /\ UNCHANGED <<store, calm, pc, fails, reads, progress, backlog, clean, stopped, errors,
@@ -247,14 +247,14 @@ BoxStep ==
 NhlStep ==
     /\ phase = "nhl" /\ pc <= Steps
     /\ IF KindAt(pc) = "score" THEN ScoreStep ELSE BoxStep
-    /\ UNCHANGED <<calm, phase, gaps, noted, due, exitCode>>
+    /\ UNCHANGED <<calm, phase, gaps, due, exitCode>>
 
 \* nhl() adds an error when the budget stopped the run before it finished one unit.
 EndNhl ==
     /\ phase = "nhl" /\ pc = Steps + 1
     /\ phase' = "other"
     /\ errors' = (errors \/ (stopped /\ ~progress /\ reads >= Budget))
-    /\ UNCHANGED <<store, calm, pc, gaps, noted, due, fails, reads, progress, backlog, clean,
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
                    stopped, exitCode>>
 
 \* MoneyPuck, ESPN, and Daily Faceoff run after the NHL steps. A failure sets refresh exit 1.
@@ -266,7 +266,7 @@ OtherSources ==
                  ELSE IF OtherBroken THEN {TRUE} ELSE BOOLEAN) :
           errors' = (errors \/ e)
     /\ phase' = "finish"
-    /\ UNCHANGED <<store, calm, pc, gaps, noted, due, fails, reads, progress, backlog, clean,
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
                    stopped, exitCode>>
 
 \* The backfill branch of daily-prepare.sh: refresh_rc, then backfill_complete.
@@ -276,7 +276,7 @@ Finish ==
     /\ exitCode' = IF errors THEN 1 ELSE IF clean THEN 0 ELSE 75
     /\ marker' = (~errors /\ clean)
     /\ arrived' = {}
-    /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ noted' = {} /\ due' = {}
+    /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ due' = {}
     /\ fails' = 0 /\ reads' = 0 /\ progress' = FALSE /\ backlog' = FALSE
     /\ clean' = TRUE /\ stopped' = FALSE /\ errors' = FALSE
     /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, calm>>
@@ -297,8 +297,6 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 \* boxscores (the non-backfill branch of nhl() reads every missing boxscore), so the model does
 \* not require them in a later state.
 MarkerOnlyWhenComplete == [][(~marker /\ marker') => \A k \in 1..NWindows : WindowDone(k)]_vars
-
-AbandonedIsNoted == phase /= "idle" => gaps \subseteq noted
 
 DoneStaysDone == [][\A u \in Urls : Done(u) => Done(u)']_vars
 

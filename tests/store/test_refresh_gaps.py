@@ -1,6 +1,7 @@
 """Refresh and the known gaps: retry a skipped unit, stop MoneyPuck on the budget, name a game
 that a boxscore write leaves listed as missing."""
 
+import re
 import sqlite3
 from collections.abc import Iterator
 from datetime import date, timedelta
@@ -24,6 +25,7 @@ from hockey_model.sources.daily_faceoff import STARTERS_URL
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, TeamGameRow, goalie_games_url
+from hockey_model.sources.nhl import boxscore_url, score_day_url
 from hockey_model.store import refresh_nhl
 from hockey_model.store.db import connect
 from hockey_model.store.moneypuck_writes import write_team_games
@@ -430,3 +432,39 @@ def test_a_starters_only_refresh_does_not_note_moneypuck_rows(conn: sqlite3.Conn
     )
     report = refresh_starters(conn, FakeClient(), now=NOW)
     assert not any(n.startswith("moneypuck:") for n in report.notes)
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    offsets=st.sets(st.integers(0, 30), max_size=9),
+    games=st.sets(st.integers(1, 99), max_size=6),
+)
+def test_every_abandoned_url_is_noted(
+    tmp_path_factory: pytest.TempPathFactory, offsets: set[int], games: set[int]
+) -> None:
+    """The note and the skip set come from one call, so no gap goes without a note (#189)."""
+    store = connect(tmp_path_factory.mktemp("s") / "store.db")
+    try:
+        days = sorted(date(2026, 1, 1) + timedelta(days=offset) for offset in offsets)
+        for day in days:
+            _abandon_a_live_feed(store, refresh_nhl.SCORES, score_day_url(day))
+        for game_id in games:
+            _abandon_a_live_feed(store, refresh_nhl.BOXSCORES, boxscore_url(game_id))
+        run = RefreshRun(store, FakeClient(), NOW)
+        assert refresh_nhl.score_gaps(run) == set(days)
+        refresh_nhl._boxscore_worklist(run, sorted(games))
+        score_notes = [n for n in run.notes if n.startswith(f"{refresh_nhl.SCORES}: skipped")]
+        box_notes = [n for n in run.notes if "games skipped, because every read failed" in n]
+        assert len(score_notes) == (1 if days else 0)
+        for note in score_notes:
+            named = re.findall(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", note)
+            more = re.search(r"and ([0-9]+) more", note)
+            assert named == [d.isoformat() for d in days[:5]]
+            assert len(named) + (int(more.group(1)) if more else 0) == len(days)
+        assert box_notes == (
+            [f"{refresh_nhl.BOXSCORES}: {len(games)} games skipped, because every read failed"]
+            if games
+            else []
+        )
+    finally:
+        store.close()
