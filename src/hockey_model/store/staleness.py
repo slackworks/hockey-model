@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from hockey_model.game_day import game_day_of
-from hockey_model.game_model.seasons import SCORED, season_of, season_start_year
+from hockey_model.game_model.seasons import (
+    SCORED,
+    previous_season,
+    season_code,
+    season_of,
+    season_start_year,
+)
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, goalie_games_url
 from hockey_model.store.source_reads import (
     ACTIVE_FAILURE_WINDOW,
@@ -84,29 +90,57 @@ def _age_limit(source: str, url: str, as_of: datetime) -> timedelta | None:
     return None
 
 
+# The most that a gap of up to a week, two seasons before the current one, moved the Elo win
+# chance of a game of the current season, in percentage points. It was measured on the real
+# store (docs/design/elo-gap-effect.md).
+OLD_GAP_MEASURED_SHIFT_PP = 0.34
+_BOXSCORE_URL = re.compile(r"/gamecenter/([0-9]{10})/boxscore\Z")
+_GOALIES_URL = re.compile(r"/goalies/([0-9]{4})\.zip\Z")
+# An NHL game id is the season start year, the game type, and a four digit number.
+_GAME_NUMBERS_PER_SEASON = 1_000_000
 _DATED_URL = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 
-def _changes_prediction(url: str, as_of: datetime) -> bool:
-    """Return whether a gap in the dated ``url`` is in a season the report scores.
+def _season_of_url(url: str) -> int | None:
+    """Return the season that a dated resource belongs to, or ``None`` for any other URL.
 
-    A dated URL is in scope when its day is in a scored season or in the current season.
-    A URL with no date has no day to test, so it always counts.
+    A score day names its day. A boxscore names its game, and the first four digits of an NHL
+    game id are the start year of its season. A MoneyPuck goalie file names the start year.
     """
-    # Training-day games also feed the Elo replay, so such a gap can move a rating. This rule
-    # follows the owner decision in #194. It does not measure that effect.
     found = _DATED_URL.search(url)
-    if found is None:
+    if found is not None:
+        try:
+            return season_of(date.fromisoformat(found.group()))
+        except ValueError as error:
+            raise ValueError(f"cannot read the day in the source URL {url}: {error}") from error
+    box = _BOXSCORE_URL.search(url)
+    if box is not None:
+        return season_code(int(box.group(1)) // _GAME_NUMBERS_PER_SEASON)
+    goalies = _GOALIES_URL.search(url)
+    if goalies is not None:
+        return season_code(int(goalies.group(1)))
+    return None
+
+
+def _changes_prediction(url: str, as_of: datetime) -> bool:
+    """Return whether a gap in the dated ``url`` is in a season that can move a prediction.
+
+    A dated URL is in scope when its season is a scored season, the current season, or the
+    season before it. A URL with no season to read, such as the MoneyPuck team file, always
+    counts.
+    """
+    # Training-day games also feed the Elo replay, so such a gap can move a rating. A gap in
+    # the season before the current one moves a win chance by up to a few points. An older gap
+    # moved it by at most OLD_GAP_MEASURED_SHIFT_PP in the one measured case
+    # (docs/design/elo-gap-effect.md, #220).
+    season = _season_of_url(url)
+    if season is None:
         return True
-    try:
-        day = date.fromisoformat(found.group())
-    except ValueError as error:
-        raise ValueError(f"cannot read the day in the source URL {url}: {error}") from error
-    season = season_of(day)
     # The current season is the one that holds the Eastern game day, as the MoneyPuck URLs
     # already use. Between 00:00 and 04:00 UTC the UTC date is the earlier day, and near the
     # season boundary it is the earlier season.
-    return SCORED[0] <= season <= SCORED[1] or season == season_of(game_day_of(as_of))
+    current = season_of(game_day_of(as_of))
+    return SCORED[0] <= season <= SCORED[1] or season in (current, previous_season(current))
 
 
 def _hours(span: timedelta) -> str:
@@ -120,8 +154,8 @@ def _url_problem(
     limit = _age_limit(source, url, as_of)
     if not last.attempt_ok:
         # A current feed always counts. A dated resource that a refresh gave up on counts only
-        # in a scored or current season; older gaps go in the footer (see training_gaps). Any
-        # other failed dated resource counts while its failure is recent.
+        # in a scored, current, or previous season; older gaps go in the footer (see
+        # training_gaps). Any other failed dated resource counts while its failure is recent.
         if limit is not None:
             counts = True
         elif url in abandoned:
@@ -180,7 +214,7 @@ def stale_sources(conn: sqlite3.Connection, as_of: datetime) -> list[tuple[str, 
 
 
 def training_gaps(conn: sqlite3.Connection, as_of: datetime) -> list[str]:
-    """Return one line per abandoned URL whose day is outside the scored and current seasons.
+    """Return one line per abandoned URL whose day is older than the previous season.
 
     These gaps are not on any game row. The daily report lists them once, in its footer.
     """
@@ -190,6 +224,6 @@ def training_gaps(conn: sqlite3.Connection, as_of: datetime) -> list[str]:
             if not _changes_prediction(url, as_of):
                 gaps.append(
                     f"{source}: {url} failed in every read; "
-                    "its day is outside the scored and current seasons"
+                    "its season is outside the scored, current, and previous seasons"
                 )
     return gaps

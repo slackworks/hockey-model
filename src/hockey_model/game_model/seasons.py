@@ -70,6 +70,16 @@ def season_code(start_year: int) -> int:
     return start_year * 10000 + start_year + 1
 
 
+def previous_season(season: int) -> int:
+    """Return the id of the season before ``season``, such as 20242025 for 20252026."""
+    if season % 10000 != season // 10000 + 1:
+        raise ValueError(
+            f"season id {season} is not two consecutive years, such as 20252026; "
+            "pass an id from season_code or season_of"
+        )
+    return season_code(season // 10000 - 1)
+
+
 def season_of(day: date) -> int:
     """Return the NHL season id that a date falls in."""
     return season_code(season_start_year(day))

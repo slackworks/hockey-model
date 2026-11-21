@@ -77,6 +77,17 @@ def newest_read(conn: sqlite3.Connection, source: str, url: str) -> datetime | N
     return None if row[0] is None else parse_iso_utc(row[0])
 
 
+def newest_read_of_source(conn: sqlite3.Connection, source: str) -> datetime | None:
+    """Return the time of the newest read of any URL of ``source``, or ``None``.
+
+    A failed read counts, because the question is whether a run still reads the source.
+    """
+    row = conn.execute(
+        "SELECT MAX(fetched_at) FROM source_reads WHERE source = ?", (source,)
+    ).fetchone()
+    return None if row[0] is None else parse_iso_utc(row[0])
+
+
 def failed_since(conn: sqlite3.Connection, source: str, url: str, since: datetime) -> bool:
     """Return True when the newest read of ``url`` failed and came after ``since``.
 

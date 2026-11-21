@@ -11,7 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from hockey_model.json_schema import validate_json
-from hockey_model.live_gaps import SCHEMA_FILE, live_gap_report
+from hockey_model.live_gaps import FUTURE_READ_TOLERANCE, SCHEMA_FILE, live_gap_report
 from hockey_model.report_schema import packaged_schema
 from hockey_model.sources.errors import SourceError
 from hockey_model.store.db import connect
@@ -48,11 +48,41 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection.close()
 
 
-def test_an_empty_store_has_no_gap(conn: sqlite3.Connection) -> None:
-    assert live_gap_report(conn, NOW) == {
-        "limit_hours": LIVE_FEED_MAX_AGE.total_seconds() / 3600,
-        "gaps": [],
+def test_an_empty_store_has_no_gap_and_no_feed_read(conn: sqlite3.Connection) -> None:
+    report = live_gap_report(conn, NOW)
+    assert report["limit_hours"] == LIVE_FEED_MAX_AGE.total_seconds() / 3600
+    assert report["gaps"] == []
+    assert report["feeds"] == [
+        {"source": source, "newest_read": None, "age_hours": None, "over_limit": True}
+        for source in LIVE_FEEDS
+    ]
+
+
+def test_a_feed_is_over_the_limit_only_when_its_newest_read_is_older(
+    conn: sqlite3.Connection,
+) -> None:
+    record_read(conn, "espn_starters", URL, NOW - LIVE_FEED_MAX_AGE)
+    record_read(conn, "espn_injuries", URL, NOW - LIVE_FEED_MAX_AGE - timedelta(minutes=1))
+    record_failed_read(conn, "daily_faceoff", URL, NOW - timedelta(hours=2), _blocked())
+    conn.commit()
+    feeds = {f["source"]: f for f in live_gap_report(conn, NOW)["feeds"]}
+    assert feeds["espn_starters"]["over_limit"] is False
+    assert feeds["espn_injuries"]["over_limit"] is True
+    # A failed read counts: the run still reads the feed.
+    assert feeds["daily_faceoff"] == {
+        "source": "daily_faceoff",
+        "newest_read": iso_utc(NOW - timedelta(hours=2)),
+        "age_hours": 2.0,
+        "over_limit": False,
     }
+
+
+def test_the_newest_read_of_any_url_of_a_feed_counts(conn: sqlite3.Connection) -> None:
+    record_read(conn, "espn_starters", URL + "1", NOW - timedelta(days=5))
+    record_read(conn, "espn_starters", URL + "2", NOW - timedelta(hours=3))
+    conn.commit()
+    [feed] = [f for f in live_gap_report(conn, NOW)["feeds"] if f["source"] == "espn_starters"]
+    assert feed["age_hours"] == 3.0
 
 
 def test_a_gap_younger_than_the_limit_is_listed_and_not_over(conn: sqlite3.Connection) -> None:
@@ -162,6 +192,59 @@ def test_the_command_does_not_create_a_missing_store(tmp_path: Path) -> None:
     with pytest.raises(HockeyModelError, match="no store file at .*absent.db"):
         run_store_command(_args(absent))
     assert not absent.exists()
+
+
+def test_every_live_feed_is_listed_once_in_order(conn: sqlite3.Connection) -> None:
+    assert [f["source"] for f in live_gap_report(conn, NOW)["feeds"]] == list(LIVE_FEEDS)
+
+
+def test_the_schema_names_exactly_the_live_feeds() -> None:
+    schema = packaged_schema(SCHEMA_FILE)
+    gap_sources = schema["properties"]["gaps"]["items"]["properties"]["source"]["enum"]
+    feed_sources = schema["properties"]["feeds"]["items"]["properties"]["source"]["enum"]
+    assert gap_sources == list(LIVE_FEEDS)
+    assert feed_sources == list(LIVE_FEEDS)
+
+
+def test_a_newest_read_far_in_the_future_is_refused(conn: sqlite3.Connection) -> None:
+    record_read(conn, SOURCE, URL, NOW + FUTURE_READ_TOLERANCE + timedelta(minutes=1))
+    conn.commit()
+    with pytest.raises(HockeyModelError, match=f"newest read of {SOURCE}.*after the time"):
+        live_gap_report(conn, NOW)
+
+
+def test_a_newest_read_a_little_in_the_future_has_no_age(conn: sqlite3.Connection) -> None:
+    record_read(conn, SOURCE, URL, NOW + FUTURE_READ_TOLERANCE)
+    conn.commit()
+    [feed] = [f for f in live_gap_report(conn, NOW)["feeds"] if f["source"] == SOURCE]
+    assert (feed["age_hours"], feed["over_limit"]) == (0.0, False)
+
+
+def test_a_fetched_at_that_is_not_a_time_fails_in_the_feed_list(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO source_reads (source, url, fetched_at, ok) VALUES (?, ?, 'not a time', 1)",
+        (SOURCE, URL),
+    )
+    conn.commit()
+    with pytest.raises(HockeyModelError, match=f"newest read of {SOURCE}.*not a time"):
+        live_gap_report(conn, NOW)
+
+
+@settings(max_examples=40, deadline=None)
+@given(minutes=st.integers(0, 24 * 60 * 5))
+def test_a_feed_is_over_the_limit_exactly_when_its_newest_read_is_older(
+    tmp_path_factory: pytest.TempPathFactory, minutes: int
+) -> None:
+    store = connect(tmp_path_factory.mktemp("store") / "store.db")
+    try:
+        age = timedelta(minutes=minutes)
+        record_read(store, SOURCE, URL, NOW - age)
+        store.commit()
+        [feed] = [f for f in live_gap_report(store, NOW)["feeds"] if f["source"] == SOURCE]
+        assert feed["over_limit"] is (age > LIVE_FEED_MAX_AGE)
+        assert feed["age_hours"] == round(age.total_seconds() / 3600, 2)
+    finally:
+        store.close()
 
 
 def test_a_gap_that_starts_after_now_has_no_age(conn: sqlite3.Connection) -> None:
