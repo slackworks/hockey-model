@@ -6,7 +6,6 @@ The design is `docs/design/consumer-api.md`.
 """
 
 import sqlite3
-import urllib.parse
 from collections.abc import Sequence
 from datetime import date, datetime
 from importlib.metadata import version
@@ -40,7 +39,7 @@ from hockey_model.game_day import game_day_window
 from hockey_model.game_model.goalies import resolve_goalie
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.sources.nhl import FINAL_STATES
-from hockey_model.store.db import SCHEMA_VERSION
+from hockey_model.store.db import SCHEMA_VERSION, read_only_uri
 from hockey_model.store.fits import FitArtifact, FitRef, load_fit
 from hockey_model.store.shape import earned_version
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
@@ -91,9 +90,8 @@ def open_store(path: Path, *, fit: FitRef) -> ConsumerStore:
 
 def _connect_read_only(path: Path) -> sqlite3.Connection:
     """Open ``path`` for reading only. Never create the file."""
-    target = f"file:{urllib.parse.quote(str(path))}?mode=ro"
     try:
-        return sqlite3.connect(target, uri=True, autocommit=False)
+        return sqlite3.connect(read_only_uri(path), uri=True, autocommit=False)
     except sqlite3.Error as exc:
         raise StoreVersionError(_open_failure_fix(path, exc)) from exc
 

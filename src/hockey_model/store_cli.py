@@ -308,7 +308,9 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
 def _backtest(args: argparse.Namespace) -> tuple[object, int]:
     conn = connect(db_path_from_env(os.environ))
     try:
-        report, records = run_backtest(conn, candidates=CANDIDATE_SETS[args.candidates])
+        report, records = run_backtest(
+            conn, candidates=CANDIDATE_SETS[args.candidates], workers=args.workers
+        )
     finally:
         conn.close()
     if args.games_out is not None:
@@ -329,7 +331,7 @@ def _experiments(args: argparse.Namespace) -> tuple[object, int]:
         try:
             from hockey_model.experiments.check import run_experiment
 
-            result, _ = run_experiment(args.record_id, conn, args.games_out)
+            result, _ = run_experiment(args.record_id, conn, args.games_out, workers=args.workers)
             return result, 0
         finally:
             conn.close()

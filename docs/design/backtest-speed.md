@@ -7,7 +7,7 @@ The JSON report and the per-game CSV MUST stay byte-identical for the same store
 
 ## Step 1: the golden check
 
-Build this before any speed change, in its own pull request.
+Build this before any speed change, in its own pull request. The script and the fixture do not exist yet; #287 builds them.
 
 1. `scripts/backtest_golden.py --db PATH --out DIR` runs `hockey-model backtest --games-out` and writes `report.json`, `games.csv`, and their SHA-256 hashes.
 2. A test runs the same backtest on the seeded store (`tests/seeding.py`) and compares the hashes with the values committed in `tests/fixtures/backtest_golden.json`. A change that moves a hash fails the test.
@@ -60,3 +60,46 @@ That replacement is a model change and needs its own issue.
 
 - The golden hash check comes first, so no speed change can merge without proof of the same output.
 - The NumPy bootstrap keeps the standard-library draws, so the block starts stay the same.
+
+## Parallel units (#283)
+
+The backtest is a set of named units.
+Each unit logs `backtest: unit NAME took Ns` on stderr, and the run ends with `backtest: total Ns`.
+`backtest --workers N` and `experiments run --workers N` run the two feature builds in up to N worker processes.
+Each worker opens its own read-only connection to the store file, so no worker writes.
+Each worker reads the committed rows of its own snapshot, so no writer may change the store during a backtest.
+`daily-prepare.sh` runs the backtest after the refresh, inside the one concurrency group that serializes writers, and `run_backtest` refuses `workers` above 1 for a connection with uncommitted changes.
+A failed unit stops the running workers at once, so a bad row in one build does not wait for the other build to finish.
+An error of this package keeps its type and gets the unit name in its message.
+The merge of the results has one fixed order: season, then game start, then game ID (`merge_scored`), because the block bootstrap depends on the order of its input.
+
+### Measured units
+
+Measured on 2026-11-20 on a copy of the real store (`~/.cache/hockey-model/real.db`, upgraded), one Mac, 4 workers for the parallel run.
+
+| Unit | Seconds |
+| --- | --- |
+| build actual rows | 1214 |
+| build guess rows | 3239 |
+| validate elo, elo+xg_form, elo+goalie_gsax, elo+rest (each) | 0.1 |
+| walk-forward fit before 2024-25 and before 2025-26 (each) | 0.1 |
+| score home_rate, elo, model_actual, model_guess incl. bootstrap (each) | 0.1 |
+| final `fit` (builds the actual rows again) | 1213 |
+| total, 1 worker | 4454 |
+| total, 4 workers | 3252 |
+
+The two feature builds are more than 99.9% of the time of the backtest.
+The final `fit` that follows in `daily-prepare.sh` builds the actual rows again, which costs as much as the first build; #289 tracks that.
+Every fit and every bootstrap run takes a tenth of a second, so a process pool for them costs more than it saves.
+They stay named units and run in the main process.
+The JSON report and the per-game CSV were byte-identical for 1 and for 4 workers on the real store (checked with `cmp`).
+
+### Target
+
+The longest unit bounds the parallel run: the guess build at about 3251 s.
+`PARALLEL_TARGET_S` in `backtest/runner.py` is 3400 s, the guess build plus the merge and a margin.
+The run prints its total against that target.
+A shorter run needs a smaller longest unit, which means splitting the guess build.
+That split is #286: it records the Elo book state at each season boundary and builds each season from its boundary state.
+#224 changes the cost of every fit unit, but the fits are 0.1 s, so it does not change this table.
+
