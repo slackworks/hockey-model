@@ -90,6 +90,9 @@ _TICK_WINDOWS = (
     ("RetryTicks", "RETRY_FAILED_AFTER", RETRY_FAILED_AFTER),
     ("CutoffTicks", "BACKLOG_BEFORE", BACKLOG_BEFORE),
 )
+# The main config cuts the cutoff short. A longer cutoff multiplies its states (#188), and the
+# other configs check the full cutoff. The short cutoff may be any length up to the code cutoff.
+SHORT_CUTOFF = (ROOT / "specs" / "daily_prepare.cfg", "CutoffTicks")
 
 
 @cfgs
@@ -98,7 +101,14 @@ def test_ticks_match_the_code_window(
     cfg: Path, name: str, constant: str, window: timedelta
 ) -> None:
     values, source = _load(cfg)
-    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, name, source)
+    ticks = _integer(values, name, source)
+    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * ticks
+    if (cfg, name) == SHORT_CUTOFF:
+        assert 1 <= ticks and span <= window, (
+            f"{name} in {source} is {ticks}; it must be 1 or more, and "
+            f"{name} * ABANDON_MIN_SPAN_DAYS ({span}) must not pass {constant} ({window})"
+        )
+        return
     assert span == window, (
         f"{name} * ABANDON_MIN_SPAN_DAYS is {span}, but {constant} is {window}; "
         f"update {name} in {source}"
