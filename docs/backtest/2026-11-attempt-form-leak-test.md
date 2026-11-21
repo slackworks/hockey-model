@@ -38,7 +38,7 @@ The CI is reported next to it and does not change the call.
 
 ## Not in scope
 
-- Fenwick counts (`unblockedShotAttemptsFor` and `unblockedShotAttemptsAgainst`) are stored, but no feature uses them in this run.
+- Fenwick counts (`unblockedShotAttemptsFor` and `unblockedShotAttemptsAgainst`) were stored when the run was made, but no feature used them. Schema version 8 (#92) dropped them, and `retired_mp_unblocked` holds the stored values.
 - `goalie_gsax` still uses MoneyPuck expected goals. A collapse therefore cannot be read as the whole leak, because that feature may carry the same leak.
 - The Vince comparison against the DraftKings no-vig line runs outside this repository.
 

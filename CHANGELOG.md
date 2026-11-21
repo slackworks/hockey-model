@@ -71,7 +71,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Move the publish decision of the report gate into Python (`hockey-model report-decide`), so `scripts/report-gate.sh` only reads the schedule and the release. [chore:report]
 - Read `data_cutoff` of a confirmation record as "data through this day", so games of the cutoff Eastern game day are no longer in the cohort. [fix:experiments]
 - Predict a game that is over in the daily report, from the inputs known at its puck drop, so a late first report is full. A postponed game still gets no prediction. [feat:report]
-- The attempt-form and expected-goals reads skip a MoneyPuck team game with a missing value, instead of failing on it. The 10-game window reaches one game further back in that case. [fix:store]
+- The MoneyPuck form reads fail with the game named when a stored team game or goalie game has no expected goals. A skip would move the form window further back with no word. The reread flag writes the row again. [fix:store]
 - The daily report run logs the seconds of each step and fails once it passes the limit in `REPORT_BUDGET_S`. The build job fails on a store cache miss. [chore:ci]
 
 - Record the DraftKings comparison in the README, the backtest report, and the run report. The model is level with the line in 2024-25 and worse in 2025-26, and it fails the blend gate. [docs:backtest]

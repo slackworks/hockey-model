@@ -17,7 +17,7 @@ They need no new request and no new source approval, because the files are the s
 ## Scope
 
 - Parse and store the columns below for every situation.
-- Keep `mp_team_games` and `mp_goalie_games` as they are. The live model reads them, and its results MUST NOT change.
+- Keep `mp_team_games` and `mp_goalie_games` as they are, except that the unblocked counts left `mp_team_games` (#92). The live model reads them, and its results MUST NOT change.
 - No feature reads the new tables in this pull request.
 
 ## Columns

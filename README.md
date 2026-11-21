@@ -286,7 +286,7 @@ The 90% interval (5th to 95th percentile) of the difference is -0.0144 to -0.008
 The live features are expected-goals form and rest.
 The guess run vetoed goalie goals saved above expected.
 MoneyPuck's expected-goals model may have trained on the scored games, so the gain may look larger than it was.
-Issue #77 tests this with a form built from shot-attempt counts.
+Issue #77 tested this with a form built from shot-attempt counts. The form is gone, and `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that holds it.
 A reviewer then scored the model against the last pre-game DraftKings line on matched regular season games.
 The model is level with the line in 2024-25 (0.6633 against 0.6604) and worse in 2025-26 (0.6911 against 0.6826, interval +0.0035 to +0.0140).
 The model does not pass the blend gate for betting.
