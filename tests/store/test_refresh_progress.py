@@ -2,14 +2,17 @@
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from refresh_support import NOW, FakeClient, minute_clock
 
 from hockey_model.store.db import connect
 from hockey_model.store.refresh import refresh
+from hockey_model.store.refresh_context import RefreshRun
 
 
 @pytest.fixture
@@ -77,3 +80,70 @@ def test_a_refresh_is_silent_when_no_handler_is_installed(
     refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
+
+
+def test_the_moneypuck_files_run_in_a_counted_step(
+    conn: sqlite3.Connection, progress_lines: list[str]
+) -> None:
+    refresh(conn, FakeClient(), now=NOW)
+    ends = _of(progress_lines, "moneypuck", "end")
+    assert len(ends) == 1 and "moneypuck[goalie-files] end" in ends[0]
+    done, total = ends[0].split(" done=")[1].split()[0].split("/")
+    assert done == total and int(total) > 1
+
+
+def test_a_budget_stop_of_the_moneypuck_files_names_its_reason(
+    conn: sqlite3.Connection, progress_lines: list[str]
+) -> None:
+    refresh(conn, FakeClient(), now=NOW, clock=minute_clock(), budget=timedelta(minutes=2))
+    stops = _of(progress_lines, "moneypuck", "stop")
+    assert len(stops) == 1
+    assert "reason=moneypuck: stopped before the goalie file of season" in stops[0]
+    assert "because the time ran out" in stops[0]
+
+
+_MEMORY = sqlite3.connect(":memory:")
+
+
+def _run(deadline: datetime | None, last_stamp: datetime | None) -> RefreshRun:
+    run = RefreshRun(_MEMORY, FakeClient(), NOW, deadline=deadline)
+    run.last_stamp = last_stamp
+    return run
+
+
+_TIMES = st.datetimes(
+    min_value=datetime(2026, 1, 1), max_value=datetime(2026, 12, 31), timezones=st.just(UTC)
+)
+
+
+@given(deadline=st.one_of(st.none(), _TIMES), stamp=st.one_of(st.none(), _TIMES))
+def test_the_seconds_left_follow_the_deadline_and_the_last_stamp(
+    deadline: datetime | None, stamp: datetime | None
+) -> None:
+    left = _run(deadline, stamp).seconds_left()
+    if deadline is None:
+        assert left is None
+        return
+    assert left is not None and left >= 0.0
+    assert left == max(0.0, (deadline - (stamp or NOW)).total_seconds())
+
+
+@given(deadline=_TIMES, first=_TIMES, gap=st.integers(min_value=0, max_value=10_000))
+def test_the_seconds_left_never_grow_when_the_stamp_moves_later(
+    deadline: datetime, first: datetime, gap: int
+) -> None:
+    earlier = _run(deadline, first).seconds_left()
+    later = _run(deadline, first + timedelta(seconds=gap)).seconds_left()
+    assert earlier is not None and later is not None and later <= earlier
+
+
+def test_the_seconds_left_do_not_read_the_clock() -> None:
+    reads: list[int] = []
+
+    def clock() -> datetime:
+        reads.append(1)
+        return NOW
+
+    run = RefreshRun(_MEMORY, FakeClient(), NOW, clock=clock, deadline=NOW + timedelta(hours=1))
+    assert run.seconds_left() == 3600.0
+    assert reads == []

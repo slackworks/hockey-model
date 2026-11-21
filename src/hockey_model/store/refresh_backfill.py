@@ -9,7 +9,6 @@ from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import (
     BACKLOG_BEFORE,
     SCHEDULE_DAYS_AHEAD,
-    counted_step,
     note_unresolved,
     plan_unresolved,
     read_boxscores,
@@ -65,7 +64,7 @@ def nhl(run: RefreshRun) -> None:
     if run.backfill_from is None:
         score_days(run)
         waiting = games_missing_boxscore(run.conn)
-        with counted_step(run, "boxscores", "missing", len(waiting)):
+        with run.step("boxscores", "missing", len(waiting)):
             read_boxscores(run, waiting)
         return
     last_day = game_day_of(run.now) + timedelta(days=SCHEDULE_DAYS_AHEAD)
@@ -84,10 +83,10 @@ def nhl(run: RefreshRun) -> None:
         days = {start + timedelta(days=n) for n in range((end - start).days + 1)}
         window_due = [day for day in due if start <= day <= end]
         worklist = sorted(days | set(window_due))
-        with counted_step(run, "score-days", f"{start}..{end}", len(worklist)):
+        with run.step("score-days", f"{start}..{end}", len(worklist)):
             days_read = read_days(run, worklist, gaps, window_due, cutoff)
         missing = games_missing_boxscore(run.conn, start, end)
-        with counted_step(run, "boxscores", f"{start}..{end}", len(missing)):
+        with run.step("boxscores", f"{start}..{end}", len(missing)):
             boxes = read_boxscores(run, missing, _recent_games(run, start, end, cutoff))
         complete = complete and days_read.clean and boxes.clean
         progress += days_read.progress + boxes.progress
