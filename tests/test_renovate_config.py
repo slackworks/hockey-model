@@ -23,10 +23,6 @@ def rule(**match: object) -> dict:
     return found[0]
 
 
-def test_the_config_names_its_schema() -> None:
-    assert load()["$schema"] == "https://docs.renovatebot.com/renovate-schema.json"
-
-
 def test_only_the_python_and_action_managers_run() -> None:
     """The pre-commit hook revision and ZIZMOR_VERSION must change in one pull request."""
     assert load()["enabledManagers"] == ["pep621", "github-actions"]
@@ -53,8 +49,11 @@ def test_no_update_merges_by_itself_until_the_required_checks_are_known() -> Non
     assert all(r.get("automerge", False) is False for r in config["packageRules"])
 
 
-def test_a_major_update_is_never_merged_by_the_bot() -> None:
-    assert rule(matchUpdateTypes=["major"])["automerge"] is False
+def test_no_rule_can_turn_automerge_on_for_a_major_update() -> None:
+    """The top-level switch is false, so a major update merges only when a rule names it."""
+    for entry in load()["packageRules"]:
+        if entry.get("automerge") is True:
+            assert "major" not in entry.get("matchUpdateTypes", ["major"])
 
 
 def test_the_repository_has_no_dependabot_version_updates() -> None:

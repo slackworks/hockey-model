@@ -31,7 +31,7 @@ The age gives the community time to report a bad release before this repository 
 
 ## Major updates
 
-A major update never merges by itself.
+A major update never merges by itself, because the top-level `automerge` is `false` and no rule turns it on for a major.
 Renovate opens the pull request, and a person reviews it.
 This holds for the dev dependencies as well.
 
