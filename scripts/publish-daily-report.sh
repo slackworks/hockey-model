@@ -13,6 +13,8 @@
 # inputs_sha256, schema_version). A rebuild adds its entry and drops none. The report-index
 # command checks the report and the index against their schemas first, so a report that does not
 # match stops the script before any upload.
+# The release notes open with one line for each game: the favorite, its win chance, and the range
+# of that win chance (report-summary). The range is model uncertainty only.
 set -euo pipefail
 
 day=""
@@ -131,8 +133,14 @@ version_md="$report_dir/$build.md"
 cp "$md" "$version_md"
 cp "$json" "$version_json"
 latest=("$md" "$json" "$backtest" "$backtest_games" "$index")
+# The command checks the report again and prints the opening lines, one for each game.
+if ! summary="$(uv run hockey-model report-summary --report "$json" | jq -er '.summary[]')"; then
+  echo "publish-daily-report: cannot build the summary of $json; its error is above. Nothing was published." >&2
+  exit 1
+fi
 notes="$report_dir/release-notes-$day.md"
 {
+  printf '%s\n\n' "$summary"
   echo "Every build's report is kept. Each report-$day-HHMMSSZ file set is one build, named by its"
   echo "generated_at time (UTC). The report-$day files and the backtest files are the newest build."
   echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC, $build."

@@ -25,6 +25,7 @@ from hockey_model.game_model.training import (
 )
 from hockey_model.report_gate import compare_inputs, decide, warning
 from hockey_model.report_schema import write_index
+from hockey_model.report_summary import summarize_file
 from hockey_model.report_trigger import (
     first_puck_drop,
     prep_blocks_report,
@@ -52,6 +53,7 @@ STORE_COMMANDS = frozenset(
         "report-decide",
         "report-compare",
         "report-index",
+        "report-summary",
         "store",
     }
 )
@@ -280,6 +282,10 @@ def _report_compare(args: argparse.Namespace) -> tuple[object, int]:
     return compare_inputs(args.built, args.published), 0
 
 
+def _report_summary(args: argparse.Namespace) -> tuple[object, int]:
+    return {"summary": summarize_file(args.report)}, 0
+
+
 def _report_index(args: argparse.Namespace) -> tuple[object, int]:
     builds, file_name = write_index(args.report, args.date.isoformat(), args.existing, args.out)
     return {"out": str(args.out), "builds": builds, "file": file_name}, 0
@@ -346,6 +352,7 @@ _HANDLERS = {
     "report-decide": _report_decide,
     "report-compare": _report_compare,
     "report-index": _report_index,
+    "report-summary": _report_summary,
     "store": _store,
 }
 
