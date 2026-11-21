@@ -100,7 +100,11 @@ class TestCheckAll:
         bad.save(registry_dir / f"{bad.id}.json")
         result = check_all(repo_root=registry_dir.parent)
         assert result["ok"] is False
-        assert "not in" in result["errors"][0]
+        assert result["errors"][0] == (
+            "0001-valid: $.status in EXPERIMENT_SCHEMA: 'invalid_status' is not one of "
+            "['registered', 'rejected', 'inconclusive', 'promoted'] (rule 'enum'); "
+            "change the value to match the schema"
+        )
 
     def test_check_all_fails_when_a_result_csv_is_missing(self, registry_dir: Path):
         """A result that names a CSV the repository does not hold is an error."""

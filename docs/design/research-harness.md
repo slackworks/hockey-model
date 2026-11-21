@@ -12,7 +12,7 @@ Four parts of the code stop that work today:
 1. `game_model/features.py` holds a closed list of four features (`ALL_FEATURE_NAMES`). A new feature must edit that module, which is near its line cap.
 2. `run_backtest` scores a candidate against the Elo only. A research feature must show value beyond the live model (`xg_form`, `rest`), not beyond the Elo.
 3. The registry and the backtest score the home win only. Goal and player experiments have no scorer.
-4. The package has no runtime dependency, so each method would be written by hand.
+4. The package has one runtime dependency, `jsonschema` (#119), so each other method would be written by hand.
 
 ## H1. Dependencies
 

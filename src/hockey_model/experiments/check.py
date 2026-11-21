@@ -125,7 +125,7 @@ def check_all(repo_root: Path | None = None) -> CheckOutput:
             results.append({"id": record_id, "valid": False, "error": str(exc)})
 
     output: CheckOutput = {"ok": len(errors) == 0, "records": results, "errors": errors}
-    validate_against_schema(output, CHECK_OUTPUT_SCHEMA)
+    validate_against_schema(output, CHECK_OUTPUT_SCHEMA, "CHECK_OUTPUT_SCHEMA")
     return output
 
 
@@ -148,7 +148,7 @@ def run_experiment(
     """
     root = repo_root or Path.cwd()
     record = get_record(record_id, root)
-    validate_against_schema(record, EXPERIMENT_SCHEMA)
+    validate_against_schema(record, EXPERIMENT_SCHEMA, "EXPERIMENT_SCHEMA")
 
     cohort_games = 0
     plan_notes: list[str] = []
@@ -217,7 +217,7 @@ def _check_one(record_id: str, repo_root: Path) -> CheckEntry:
             f"the file is named {record_id!r} but the record id is {record.id!r}; "
             "rename the file or restore the id"
         )
-    validate_against_schema(record, EXPERIMENT_SCHEMA)
+    validate_against_schema(record, EXPERIMENT_SCHEMA, "EXPERIMENT_SCHEMA")
     _check_look(record, repo_root)
     _check_features_known(record)
     _check_status_matches_result(record)

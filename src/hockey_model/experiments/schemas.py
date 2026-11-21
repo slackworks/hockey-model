@@ -4,8 +4,9 @@ The schemas are Python constants, not files on disk. The checker then works
 whatever the working directory is, and a test does not need a copy of the
 registry directory. Records still live in ``experiments/`` in the repository.
 
-The validator in ``models.py`` supports only the keywords listed in
-``_SCHEMA_KEYWORDS``, so these schemas use no other keyword.
+The schemas follow JSON Schema Draft 2020-12, and ``models.py`` checks them with jsonschema.
+The validator matches a ``pattern`` against the whole string and refuses a keyword or a format
+that it would skip.
 """
 
 from __future__ import annotations
@@ -13,6 +14,11 @@ from __future__ import annotations
 from typing import Any
 
 from hockey_model.experiments.looks import MAX_LOOKS
+
+# A record id is a four-digit number and a slug. The number is the record's slot in the registry.
+RECORD_ID_PATTERN = "^[0-9]{4}-[a-z0-9][a-z0-9-]*$"
+# fromisoformat also reads 20261031 and 2026-W44-6, which are not the registered form.
+DATE_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 
 EXPERIMENT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -33,11 +39,15 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
         "status",
     ],
     "properties": {
-        "id": {"type": "string", "pattern": "^[0-9]{4}-[a-z0-9][a-z0-9-]*$"},
+        "id": {"type": "string", "pattern": RECORD_ID_PATTERN},
         "title": {"type": "string"},
         "hypothesis": {"type": "string"},
         "cohort": {"type": "string", "enum": ["exploration", "confirmation"]},
-        "data_cutoff": {"type": "string", "format": "date"},
+        "data_cutoff": {
+            "type": "string",
+            "format": "date",
+            "pattern": DATE_PATTERN,
+        },
         "primary_metric": {"type": "string"},
         "baseline": {
             "type": "object",

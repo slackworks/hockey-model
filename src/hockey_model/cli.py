@@ -103,10 +103,12 @@ def _player(data: object) -> Player:
     if not isinstance(data, dict):
         raise ValueError("each roster player must be a JSON object")
     raw_eligible = data.get("eligible")
-    if isinstance(raw_eligible, list) and all(isinstance(value, str) for value in raw_eligible):
-        eligible: frozenset[Slot] | None = frozenset(Slot(value) for value in raw_eligible)
-    else:
-        eligible = None
+    if not isinstance(raw_eligible, list) or not all(isinstance(v, str) for v in raw_eligible):
+        who = data.get("canonical_id")
+        raise ValueError(
+            f"player {who!r}: eligible must be a list of slot strings, got {raw_eligible!r}"
+        )
+    eligible = frozenset(Slot(value) for value in raw_eligible)
     return Player(
         canonical_id=_required_string(data, "canonical_id"),
         yahoo_id=_optional_string(data, "yahoo_id"),

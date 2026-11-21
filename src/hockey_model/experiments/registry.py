@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.experiments.schemas import RECORD_ID_PATTERN
 from hockey_model.types import HockeyModelError
 
 # The registry is repository data, not package data, so every call names the
@@ -20,9 +21,8 @@ REGISTRY_DIR_NAME = "experiments"
 # file other people can read.
 RESULTS_DIR_NAME = "results"
 
-# A record id is a four-digit number and a slug. The number is the record's slot
-# in the registry, so two records cannot share it.
-RECORD_STEM = re.compile(r"^[0-9]{4}-[a-z0-9][a-z0-9-]*$")
+# The number of a record id is the record's slot in the registry, so two records cannot share it.
+RECORD_STEM = re.compile(RECORD_ID_PATTERN)
 
 
 def registry_dir(repo_root: Path) -> Path:
