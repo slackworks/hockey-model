@@ -373,3 +373,42 @@ def test_attempt_candidates_do_not_read_expected_goals(store: sqlite3.Connection
 def test_an_unknown_feature_name_is_refused(store: sqlite3.Connection) -> None:
     with pytest.raises(ValueError, match="unknown feature 'nope'"):
         features(store, names=("nope",))
+
+
+def test_a_zero_total_game_is_left_out_of_the_share_and_named(store: sqlite3.Connection) -> None:
+    history(store)
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 0.0)
+    row = features(store)
+    assert row.values["xg_form"] == pytest.approx(0.75 - 0.25)
+    notes = [m for m in row.missing if m.kind is MissingKind.XG_FORM]
+    assert [(m.team, m.note) for m in notes] == [
+        (HOME, "1 of 4 MoneyPuck games have a zero total and are left out")
+    ]
+    assert row.uses_moneypuck
+    assert "xg_form" not in [d.feature for d in row.imputed]
+
+
+def test_a_team_whose_every_game_has_a_zero_total_makes_the_form_neutral(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 0.0)
+    add_game(store, 401, "2026-01-16T00:00", home="MTL", away=AWAY)
+    add_team_form(store, 401, AWAY, 3.0, 1.0)
+    row = features(store)
+    assert row.values["xg_form"] == NEUTRAL_FORM
+    notes = [(m.team, m.note) for m in row.missing if m.kind is MissingKind.XG_FORM]
+    assert notes == [(HOME, "every one of 1 MoneyPuck games before this game has a zero total")]
+    degraded = {d.feature: d.teams for d in row.imputed}
+    assert degraded["xg_form"] == (HOME,)
+
+
+def test_a_measured_zero_share_is_valid_and_has_no_note(store: sqlite3.Connection) -> None:
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 2.0)
+    add_game(store, 401, "2026-01-16T00:00", home="MTL", away=AWAY)
+    add_team_form(store, 401, AWAY, 1.0, 3.0)
+    row = features(store)
+    assert row.values["xg_form"] == pytest.approx(0.0 - 0.25)
+    assert [m for m in row.missing if m.kind is MissingKind.XG_FORM] == []
