@@ -84,23 +84,22 @@ def test_abandon_ticks_is_one(cfg: Path) -> None:
     assert _integer(values, "AbandonTicks", source) == 1
 
 
-@cfgs
-def test_retry_ticks_match_retry_window(cfg: Path) -> None:
-    values, source = _load(cfg)
-    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, "RetryTicks", source)
-    assert span == RETRY_FAILED_AFTER, (
-        f"RetryTicks * ABANDON_MIN_SPAN_DAYS is {span}, but RETRY_FAILED_AFTER is "
-        f"{RETRY_FAILED_AFTER}; update RetryTicks in {source}"
-    )
+_TICK_WINDOWS = (
+    ("RetryTicks", "RETRY_FAILED_AFTER", RETRY_FAILED_AFTER),
+    ("CutoffTicks", "BACKLOG_BEFORE", BACKLOG_BEFORE),
+)
 
 
 @cfgs
-def test_cutoff_ticks_match_backlog_cutoff(cfg: Path) -> None:
+@pytest.mark.parametrize(("name", "constant", "window"), _TICK_WINDOWS, ids=("retry", "cutoff"))
+def test_ticks_match_the_code_window(
+    cfg: Path, name: str, constant: str, window: timedelta
+) -> None:
     values, source = _load(cfg)
-    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, "CutoffTicks", source)
-    assert span == BACKLOG_BEFORE, (
-        f"CutoffTicks * ABANDON_MIN_SPAN_DAYS is {span}, but BACKLOG_BEFORE is "
-        f"{BACKLOG_BEFORE}; update CutoffTicks in {source}"
+    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, name, source)
+    assert span == window, (
+        f"{name} * ABANDON_MIN_SPAN_DAYS is {span}, but {constant} is {window}; "
+        f"update {name} in {source}"
     )
 
 
