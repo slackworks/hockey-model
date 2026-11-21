@@ -162,6 +162,19 @@ def test_malformed_roster_fields_exit_two(
     assert "invalid roster fields" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("eligible", ["C", ["C", 3], None])
+def test_a_bad_eligible_value_names_the_player_and_the_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], eligible: object
+) -> None:
+    player = {"canonical_id": "p-bad", "full_name": "x", "eligible": eligible}
+    path = tmp_path / "bad-eligible.json"
+    path.write_text(json.dumps({"name": "bad", "players": [player], "slots": None}))
+    assert cli.main(["team", "goals", str(path)], _runtime((_player("p-a"),))) == 2
+    err = capsys.readouterr().err
+    assert "player 'p-bad': eligible must be a list of slot strings" in err
+    assert repr(eligible) in err
+
+
 def test_roster_property_parses_valid_dicts(tmp_path: Path) -> None:
     for name, cid, fname in [
         ("team-a", "p-1", "Player One"),
