@@ -15,9 +15,6 @@
 # change, because a diff that lists nothing cannot show that the change is docs only.
 set -euo pipefail
 
-# Paths under .md that a test reads. A change to one of them runs the tests.
-TESTED_DOCS=("docs/design/daily-prepare-tla.md")
-
 usage() {
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
 }
@@ -34,21 +31,16 @@ case "${1:-}" in
   ;;
 esac
 
-is_docs() {
-  local path="$1" tested
-  for tested in "${TESTED_DOCS[@]}"; do
-    [[ "$path" == "$tested" ]] && return 1
-  done
-  [[ "$path" == *.md ]]
-}
-
 seen=0
 while IFS= read -r path || [[ -n "$path" ]]; do
   [[ -z "$path" ]] && continue
   seen=1
-  if ! is_docs "$path"; then
+  # tests/test_tla_appendix.py reads the TLA design note, so a change to it is a code change.
+  if [[ "$path" != *.md || "$path" == "docs/design/daily-prepare-tla.md" ]]; then
     echo "ci-changes.sh: $path is not a docs path, so the code jobs run" >&2
     echo "code=true"
+    # The writer of the pipe gets SIGPIPE and fails the step when the input stays unread.
+    cat >/dev/null
     exit 0
   fi
 done

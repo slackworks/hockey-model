@@ -5,9 +5,10 @@ import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from mutation_copy import require_path
 
@@ -244,3 +245,31 @@ def test_the_result_job_runs_after_a_failure_and_reads_every_code_job() -> None:
     for variable in ("CHANGES_RESULT", "CODE", "VALIDATION_RESULT", "TEST_RESULT"):
         assert f"{variable}: ${{{{ needs." in job
     assert "run: bash scripts/ci-gate.sh" in job
+
+
+_PATHS = st.one_of(
+    st.sampled_from(["README.md", "docs/a.md", "docs/design/daily-prepare-tla.md", "src/x.py"]),
+    st.builds(lambda stem, ext: stem + ext, _NAMES, st.sampled_from([".md", ".py", ".yml"])),
+)
+
+
+@settings(max_examples=60, deadline=None)
+@given(paths=st.lists(_PATHS, max_size=8), order=st.randoms(use_true_random=False))
+def test_the_answer_is_docs_only_when_every_path_is_markdown_and_none_is_tested(
+    paths: list[str], order: Any
+) -> None:
+    shuffled = list(paths)
+    order.shuffle(shuffled)
+    docs_only = bool(paths) and all(
+        p.endswith(".md") and p != "docs/design/daily-prepare-tla.md" for p in paths
+    )
+    expected = "code=false\n" if docs_only else "code=true\n"
+    assert decide(paths).stdout == expected
+    assert decide(shuffled).stdout == expected
+
+
+def test_a_long_list_that_ends_early_does_not_break_the_writer_of_the_pipe() -> None:
+    """The script reads the whole input, so `git diff` never gets SIGPIPE under pipefail."""
+    script = f'set -o pipefail; seq 1 200000 | sed "s/^/src\\//" | bash "{SCRIPT}"'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert (result.returncode, result.stdout) == (0, "code=true\n")
