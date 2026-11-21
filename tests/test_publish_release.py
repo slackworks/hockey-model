@@ -29,7 +29,8 @@ def publish(
     fakes: Path, tmp_path: Path, *extra: str, **env: str
 ) -> subprocess.CompletedProcess[str]:
     dist = tmp_path / "dist"
-    args = ("--tag", TAG, "--dist", str(dist), "--notes", str(tmp_path / "notes.md"), *extra)
+    args = ("--tag", TAG, "--dist", str(dist), "--notes", str(tmp_path / "notes.md"))
+    args += extra or ("--prerelease", "false")
     return _run("publish-release.sh", _env(fakes, tmp_path, **env), *args)
 
 
@@ -49,7 +50,7 @@ def test_a_new_tag_gets_a_release_with_both_files_and_the_notes(
 
 def test_a_prerelease_flag_reaches_the_release(fakes: Path, tmp_path: Path) -> None:
     build(tmp_path)
-    result = publish(fakes, tmp_path, "--prerelease")
+    result = publish(fakes, tmp_path, "--prerelease", "true")
     assert result.returncode == 0, result.stderr
     create = [c for c in _calls(tmp_path) if c.startswith("gh release create")]
     assert "--prerelease" in create[0]
@@ -148,6 +149,7 @@ def test_a_token_that_cannot_see_the_repository_creates_nothing(
 def test_a_tag_that_is_not_a_release_tag_exits_2(fakes: Path, tmp_path: Path, tag: str) -> None:
     build(tmp_path)
     args = ("--tag", tag, "--dist", str(tmp_path / "dist"), "--notes", str(tmp_path / "notes.md"))
+    args += ("--prerelease", "false")
     result = _run("publish-release.sh", _env(fakes, tmp_path), *args)
     assert result.returncode == 2
     assert "is not a release tag" in result.stderr
@@ -229,3 +231,41 @@ def test_the_publish_job_runs_the_publish_script_and_no_package_index() -> None:
     publish_job = _job("publish")
     assert "scripts/publish-release.sh" in publish_job
     assert "pypi" not in RELEASE.read_text(encoding="utf-8").lower()
+
+
+def test_the_verify_job_refuses_a_tag_on_a_commit_that_is_not_on_main() -> None:
+    job = _job("verify")
+    assert "fetch-depth: 0" in job
+    assert 'git merge-base --is-ancestor "$SHA" origin/main' in job
+    assert "SHA: ${{ github.sha }}" in job
+
+
+def test_the_gate_step_fails_when_the_check_fails() -> None:
+    """A pipe into tee takes the exit code of tee, unless pipefail is set."""
+    step = _job("verify")
+    assert "set -o pipefail" in step
+    assert step.index("set -o pipefail") < step.index("check_release.py")
+
+
+def test_the_publish_step_passes_the_prerelease_value_from_the_gate() -> None:
+    job = _job("publish")
+    assert "PRERELEASE: ${{ needs.verify.outputs.prerelease }}" in job
+    assert '--prerelease "$PRERELEASE"' in job
+
+
+@pytest.mark.parametrize("value", ["", "yes", "1", "True"])
+def test_a_prerelease_value_that_is_not_true_or_false_exits_2(
+    fakes: Path, tmp_path: Path, value: str
+) -> None:
+    build(tmp_path)
+    result = publish(fakes, tmp_path, "--prerelease", value)
+    assert result.returncode == 2
+    assert "is not true or false" in result.stderr
+    assert not any(c.startswith("gh release") for c in _calls(tmp_path))
+
+
+def test_a_missing_prerelease_option_exits_2(fakes: Path, tmp_path: Path) -> None:
+    build(tmp_path)
+    args = ("--tag", TAG, "--dist", str(tmp_path / "dist"), "--notes", str(tmp_path / "notes.md"))
+    result = _run("publish-release.sh", _env(fakes, tmp_path), *args)
+    assert result.returncode == 2

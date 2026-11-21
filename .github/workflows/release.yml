@@ -24,15 +24,28 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
+      # The ancestor check needs the history of main, so the checkout takes every branch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # A tag on a commit that never reached main would publish unreviewed code.
+      - name: The tagged commit is on main
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "commit $SHA is not on main; merge it, then tag the merge commit" >&2
+            exit 1
+          fi
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --locked
       - id: check
         env:
           TAG: ${{ github.ref_name }}
-        run: uv run python3 scripts/check_release.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
+        run: |
+          set -o pipefail
+          uv run python3 scripts/check_release.py --tag "$TAG" | tee -a "$GITHUB_OUTPUT"
 
   # Builds the files, checks that they name the version, and runs the installed-wheel smoke test.
   build:
@@ -83,8 +96,5 @@ jobs:
           TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
         run: |
-          flags=()
-          if [ "$PRERELEASE" = true ]; then
-            flags+=(--prerelease)
-          fi
-          bash scripts/publish-release.sh --tag "$TAG" --dist dist --notes notes.md "${flags[@]}"
+          bash scripts/publish-release.sh --tag "$TAG" --dist dist --notes notes.md \
+            --prerelease "$PRERELEASE"

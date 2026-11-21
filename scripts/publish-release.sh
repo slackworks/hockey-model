@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Attach the built files of a release to the GitHub release of a tag (#99).
 #
-# Usage: publish-release.sh --tag TAG --dist DIR --notes FILE [--prerelease]
+# Usage: publish-release.sh --tag TAG --dist DIR --notes FILE --prerelease true|false
 #        publish-release.sh --help
 #
 # DIR holds the wheel and the source archive. FILE holds the release notes. The command needs
@@ -32,7 +32,7 @@ fail() {
 tag=""
 dist=""
 notes=""
-prerelease=0
+prerelease=""
 while (($# > 0)); do
   case "$1" in
   --tag)
@@ -47,7 +47,10 @@ while (($# > 0)); do
     notes="${2:-}"
     shift "$(($# >= 2 ? 2 : 1))"
     ;;
-  --prerelease) prerelease=1 && shift ;;
+  --prerelease)
+    prerelease="${2:-}"
+    shift "$(($# >= 2 ? 2 : 1))"
+    ;;
   -h | --help)
     usage
     exit 0
@@ -59,6 +62,8 @@ done
 # Shape: a tag is "v" and a digit first. check_release.py checks the meaning.
 [[ "$tag" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]] || fail "--tag '$tag' is not a release tag such as v0.1.0" 2
 [[ -d "$dist" ]] || fail "--dist '$dist' is not a directory; build with uv build --out-dir" 2
+[[ "$prerelease" == "true" || "$prerelease" == "false" ]] ||
+  fail "--prerelease '$prerelease' is not true or false; read it from check_release.py" 2
 [[ -f "$notes" ]] || fail "--notes '$notes' is not a file; write the changelog section there" 2
 
 shopt -s nullglob
@@ -73,7 +78,7 @@ esac
 
 if [[ "$answer" == "missing" ]]; then
   flags=(--verify-tag --title "$tag" --notes-file "$notes")
-  if ((prerelease)); then
+  if [[ "$prerelease" == "true" ]]; then
     flags+=(--prerelease)
   fi
   gh release create "$tag" "${files[@]}" "${flags[@]}"
