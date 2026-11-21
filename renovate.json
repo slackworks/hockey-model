@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["pep621", "github-actions"],
+  "minimumReleaseAge": "5 days",
+  "internalChecksFilter": "strict",
+  "automerge": false,
+  "packageRules": [
+    {
+      "description": "Pin each action to a commit digest. Renovate keeps the version comment.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Non-major updates qualify for automerge. The switch stays false until #104 shows the required checks and repository auto-merge is on (docs/design/dependency-updates.md).",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "automerge": false
+    },
+    {
+      "description": "A major update always waits for a person.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
