@@ -80,6 +80,41 @@ def test_a_job_that_has_not_started_names_now(fakes: Path, tmp_path: Path) -> No
     assert _ISO.match(result.stdout), result.stdout
 
 
+def test_a_gate_job_that_started_early_does_not_move_the_window(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The gate job starts at once, and the prepare job waits for the group (#285)."""
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"name": "gate", "started_at": "2026-11-04T06:00:00Z"},
+                {"name": "prepare", "started_at": _STARTED},
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    assert (result.returncode, result.stdout) == (0, _STARTED)
+
+
+def test_a_prepare_job_that_waits_for_the_group_names_now_not_the_gate_start(
+    fakes: Path, tmp_path: Path
+) -> None:
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {"name": "gate", "started_at": "2026-11-04T06:00:00Z"},
+                {"name": "prepare", "started_at": None},
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout != "2026-11-04T06:00:00Z"
+    assert _ISO.match(result.stdout), result.stdout
+
+
 def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
     # The earlier start holds the group first, so it is the one that the report waits behind.
     earlier = "2026-11-04T08:00:00Z"
@@ -88,7 +123,12 @@ def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
         tmp_path,
         FAKE_RUNS_JSON_IN_PROGRESS=_runs((_PREPARE, "2026-11-04T09:30:00Z"), (_PREPARE, earlier)),
         FAKE_JOBS_JSON=json.dumps(
-            {"jobs": [{"started_at": "2026-11-04T09:30:00Z"}, {"started_at": earlier}]}
+            {
+                "jobs": [
+                    {"name": "prepare", "started_at": "2026-11-04T09:30:00Z"},
+                    {"name": "prepare", "started_at": earlier},
+                ]
+            }
         ),
     )
     result = _run("prep-running.sh", env)

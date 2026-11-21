@@ -56,6 +56,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add `docs/design/tla-scope.md`, which says what a TLA+ model of this project may and may not claim. [docs:tla]
 - Add `hockey-model store gaps --live`, which lists each live feed that is a known gap as JSON (`source`, `url`, `gap_since`, `age_hours`, `last_ok`, `over_limit`), and `scripts/check-live-feeds.sh`, which the `daily-report-check` workflow runs. The job fails for a live feed that stays a gap for longer than `LIVE_FEED_MAX_AGE`. [feat:ci]
 - Add a `notes` list to the `experiments check` output. It says `deletion history not checked` and the reason when the check runs outside a git work tree or before the first commit. [feat:experiments]
+- Add `scripts/manual-prepare-pending.sh` and a `gate` job to `daily-prepare`. A scheduled run stands aside while a manual run waits or runs, so it no longer cancels a waiting forced prepare. The store group moves from the workflow to the `prepare` job, and `prep-running.sh` reads only the start of the `prepare` job. [fix:ci]
 
 ### Changed
 
