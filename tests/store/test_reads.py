@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import timedelta
 
+import pytest
 from seeding import (
     add_game,
     add_goalie,
@@ -26,7 +27,7 @@ from hockey_model.store.reads import (
     starter_reads_before,
     team_games_before,
 )
-from hockey_model.types import Slot
+from hockey_model.types import HockeyModelError, Slot
 
 
 def ids(games) -> list[int]:
@@ -181,3 +182,31 @@ def test_an_empty_injury_list_clears_the_earlier_one(store: sqlite3.Connection) 
     assert [i.player_name for i in injury_reads_before(store, utc("2026-01-01T12:00"))] == [
         "Hurt Player"
     ]
+
+
+def test_a_stored_team_game_without_expected_goals_fails_the_read_and_names_the_game(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 1, "2026-01-01T00:00")
+    add_team_form(store, 1, "TOR", 1.0, 0.5)
+    store.execute("UPDATE mp_team_games SET xg_against = NULL WHERE game_id = 1")
+    with pytest.raises(HockeyModelError, match="team expected goals of TOR: game 1 has no value"):
+        mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 5)
+
+
+def test_a_stored_goalie_game_without_expected_goals_fails_the_read_and_names_the_game(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 2, "2026-01-02T00:00")
+    add_goalie_form(store, 2, 11, 2.0, 1)
+    store.execute("UPDATE mp_goalie_games SET xg_against = NULL WHERE game_id = 2")
+    with pytest.raises(HockeyModelError, match="goalie expected goals of 11: game 2 has no value"):
+        mp_goalie_form_before(store, 11, utc("2026-02-01T00:00"), 5)
+
+
+def test_a_null_row_outside_the_window_does_not_fail_the_read(store: sqlite3.Connection) -> None:
+    for number in (1, 2):
+        add_game(store, number, f"2026-01-0{number}T00:00")
+        add_team_form(store, number, "TOR", float(number), 0.5)
+    store.execute("UPDATE mp_team_games SET xg_for = NULL WHERE game_id = 1")
+    assert mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(2.0, 0.5)]
