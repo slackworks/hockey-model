@@ -1,20 +1,26 @@
 """Tests for the as-of reads."""
 
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import (
+    FETCHED,
     add_game,
     add_goalie,
     add_goalie_form,
     add_injury,
     add_starter_read,
     add_team_form,
+    fresh_store,
     record_injury_snapshot,
     utc,
 )
 
+from hockey_model.sources.moneypuck import TeamGameRow
+from hockey_model.store.moneypuck_writes import write_team_games
 from hockey_model.store.reads import (
     RESULT_DELAY,
     final_games_before,
@@ -210,3 +216,43 @@ def test_a_null_row_outside_the_window_does_not_fail_the_read(store: sqlite3.Con
         add_team_form(store, number, "TOR", float(number), 0.5)
     store.execute("UPDATE mp_team_games SET xg_for = NULL WHERE game_id = 1")
     assert mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(2.0, 0.5)]
+
+
+_DAY0 = datetime(2026, 1, 1, tzinfo=FETCHED.tzinfo)
+
+
+@settings(max_examples=50, deadline=None)
+@given(
+    start_days=st.lists(
+        st.integers(min_value=1, max_value=30), min_size=1, max_size=8, unique=True
+    ),
+    forms=st.lists(
+        st.lists(st.sampled_from([0.5, 1.0, 2.5, 3.0]), max_size=2), min_size=8, max_size=8
+    ),
+    cutoff_day=st.integers(min_value=0, max_value=31),
+    limit=st.integers(min_value=1, max_value=10),
+)
+def test_mp_team_form_is_the_newest_read_of_the_newest_games_that_were_over(
+    tmp_path_factory: pytest.TempPathFactory,
+    start_days: list[int],
+    forms: list[list[float]],
+    cutoff_day: int,
+    limit: int,
+) -> None:
+    """Game numbers run against start order, so the read must sort by start, not by number.
+
+    A game keeps its form in a list of reads, oldest first. An empty list means no stored row.
+    """
+    expected: list[tuple[int, float]] = []
+    with fresh_store(tmp_path_factory.mktemp("form")) as store:
+        for number, (day, reads) in enumerate(zip(start_days, forms, strict=False), start=1):
+            add_game(store, number, f"2026-01-{day:02d}T00:00")
+            for age, xg_for in enumerate(reads):
+                row = TeamGameRow(number, "TOR", "2026-01-01", xg_for, 0.5, 50, 50)
+                write_team_games(store, [row], FETCHED + timedelta(days=age))
+            if reads and _DAY0 + timedelta(days=day - 1) <= _DAY0 + timedelta(days=cutoff_day):
+                expected.append((day, reads[-1]))
+        before = _DAY0 + timedelta(days=cutoff_day) + RESULT_DELAY
+        found = mp_team_form_before(store, "TOR", before, limit)
+    newest_first = sorted(expected, reverse=True)[:limit]
+    assert found == [(xg_for, 0.5) for _, xg_for in newest_first]

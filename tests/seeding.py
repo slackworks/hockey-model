@@ -1,11 +1,15 @@
 """Helpers that put small, known rows into a test store."""
 
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.sources.moneypuck import GoalieGameRow, TeamGameRow
 from hockey_model.sources.nhl import BoxscoreRows, GameRow, GoalieRow, PlayerRow
+from hockey_model.store.db import connect
 from hockey_model.store.fits import FitArtifact
 from hockey_model.store.migrations import mp_team_games_ddl
 from hockey_model.store.moneypuck_writes import write_goalie_games, write_team_games
@@ -29,6 +33,16 @@ def artifact(
     the fit to a game, or ``None`` to let ``created_at`` be the bound.
     """
     return FitArtifact(1, fit, through, ARTIFACT_TIME, trained_through=trained_through)
+
+
+@contextmanager
+def fresh_store(directory: Path) -> Generator[sqlite3.Connection]:
+    """Yield an empty store in ``directory``. A Hypothesis example needs its own store."""
+    connection = connect(directory / "store.db")
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def utc(text: str) -> datetime:
