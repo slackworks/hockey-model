@@ -2,9 +2,10 @@
 
 One file holds one goalie mode and one feature list of one season, and its name carries the key
 of the season (``season_key``). The newest key replaces the older file of the same mode, season,
-and feature list, and the files of another feature list stay. A file that is damaged, or whose
-games differ from the games of the store, is a miss, and the next build writes it again. A file
-that cannot be written is a warning, because the run does not need the cache to finish.
+and feature list. The files of the newest feature lists of that mode and season stay, and the
+files of older lists go. A file that is damaged, or whose games differ from the games of the
+store, is a miss, and the next build writes it again. A file that cannot be written is a warning,
+because the run does not need the cache to finish.
 Design: docs/design/backtest-speed.md
 """
 
@@ -23,6 +24,10 @@ from hockey_model.game_model.training import TrainingRow
 from hockey_model.types import HockeyModelError
 
 CACHE_DIR_NAME = "season-rows"
+# A season keeps the files of this many feature lists for each goalie mode, the newest by
+# file time. The daily prepare uses the list of the backtest and the list of the fit, and the
+# other places leave room for the lists of an experiment.
+KEEP_FEATURE_LISTS = 4
 
 
 def cache_dir(database: Path) -> Path:
@@ -95,7 +100,17 @@ class SeasonFile:
                 "written again"
             )
             return None
+        self._mark_used()
         return rows
+
+    def _mark_used(self) -> None:
+        """Set the file time to now, so the lists that a run reads outlast the lists it does not."""
+        try:
+            os.utime(self.path)
+        except OSError as exc:
+            _warn(
+                f"cannot mark the cached rows {str(self.path)!r} as used ({exc}); check the owner"
+            )
 
     def _matches(self, rows: list[TrainingRow], game_ids: Sequence[int]) -> bool:
         return [r.game.game_id for r in rows] == list(game_ids) and all(
@@ -125,6 +140,7 @@ class SeasonFile:
             )
             return
         self._remove_older()
+        self._remove_other_lists()
 
     def _write(self, text: str) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -139,6 +155,29 @@ class SeasonFile:
             Path(name).unlink(missing_ok=True)
             raise
 
+    def _remove_other_lists(self) -> None:
+        """Remove the files of the older feature lists of this mode and season.
+
+        The list of this file counts as the newest, and the other lists rank by file time.
+        """
+        newest: dict[str, float] = {}
+        paths: dict[str, list[Path]] = {}
+        for path in self.directory.glob(f"{self.mode.value}-{self.season}-*-*.json"):
+            tag = path.name.split("-")[2]
+            newest[tag] = max(newest.get(tag, 0.0), path.stat().st_mtime)
+            paths.setdefault(tag, []).append(path)
+        own = self._slot.split("-")[2]
+        ranked = sorted(newest, key=lambda tag: (tag != own, -newest[tag]))
+        for tag in ranked[KEEP_FEATURE_LISTS:]:
+            for old in paths[tag]:
+                self._remove(old)
+
+    def _remove(self, old: Path) -> None:
+        try:
+            old.unlink(missing_ok=True)
+        except OSError as exc:
+            _warn(f"cannot remove the old cached rows {str(old)!r} ({exc}); remove it")
+
     def _remove_older(self) -> None:
         """Remove the files of the same slot under another key, and the temporary files."""
         for pattern in (f"{self._slot}-*.json", f".{self._slot}-*.tmp"):
@@ -146,7 +185,4 @@ class SeasonFile:
                 # A temporary file of this exact name belongs to a writer that is still at work.
                 if old == self.path or old.name.startswith(f".{self.path.name}."):
                     continue
-                try:
-                    old.unlink(missing_ok=True)
-                except OSError as exc:
-                    _warn(f"cannot remove the old cached rows {str(old)!r} ({exc}); remove it")
+                self._remove(old)

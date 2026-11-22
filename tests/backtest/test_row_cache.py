@@ -1,5 +1,6 @@
 """The season row files: a complete file or none, a bad file is a miss, a failed write warns."""
 
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 from test_runner_store import PLAN, seed
 
-from hockey_model.backtest.row_cache import SeasonFile, cache_dir
+from hockey_model.backtest.row_cache import KEEP_FEATURE_LISTS, SeasonFile, cache_dir
+from hockey_model.backtest.row_codec import encode_rows
 from hockey_model.game_model.features import FEATURES, FeatureRow, GoalieMode
 from hockey_model.game_model.training import TrainingRow, training_rows
 
@@ -265,3 +267,101 @@ def test_a_game_with_a_naive_start_is_a_warning_and_not_a_crash(
     naive = replace(first.game, start=datetime(2020, 1, 1))  # noqa: DTZ001 the case under test
     _file(tmp_path / "cache").save([replace(first, game=naive)])
     assert "cannot encode the rows" in capsys.readouterr().err
+
+
+def _aged(file: SeasonFile, age: int) -> None:
+    """Set the file time ``age`` seconds before a fixed moment, so the order is exact."""
+    moment = 1_700_000_000 - age
+    os.utime(file.path, (moment, moment))
+
+
+def _lists(directory: Path, count: int, rows: list[TrainingRow]) -> list[SeasonFile]:
+    """Put ``count`` feature lists in the directory, the first one the oldest.
+
+    The files are written without a save, so no save removes one while the test sets them up.
+    """
+    directory.mkdir(exist_ok=True)
+    files = [_file(directory, names=(f"list{i}",)) for i in range(count)]
+    for age, file in zip(range(count, 0, -1), files, strict=True):
+        file.path.write_text(encode_rows(rows))
+        _aged(file, age)
+    return files
+
+
+def test_the_files_of_the_newest_feature_lists_stay_and_the_older_ones_go(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    files = _lists(tmp_path, KEEP_FEATURE_LISTS + 2, rows)
+    newcomer = _file(tmp_path, names=("newcomer",))
+    newcomer.save(rows)
+    survivors = [f for f in [*files, newcomer] if f.path.exists()]
+    assert survivors == [*files[-(KEEP_FEATURE_LISTS - 1) :], newcomer]
+
+
+def test_a_feature_list_that_was_read_stays_over_one_that_was_not(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    files = _lists(tmp_path, KEEP_FEATURE_LISTS, rows)
+    oldest = files[0]
+    assert oldest.load(_ids(rows)) == rows
+    _file(tmp_path, names=("newcomer",)).save(rows)
+    assert oldest.path.exists()
+    assert not files[1].path.exists()
+
+
+def test_another_season_or_mode_keeps_all_of_its_feature_lists(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    others = [replace(f, season=4) for f in _lists(tmp_path, KEEP_FEATURE_LISTS + 2, rows)]
+    others.append(replace(_file(tmp_path, names=("g",)), mode=GoalieMode.GUESS))
+    for other in others:
+        other.path.write_text(encode_rows(rows))
+    _file(tmp_path, names=("newcomer",)).save(rows)
+    assert all(other.path.exists() for other in others)
+
+
+def test_a_file_that_cannot_be_removed_is_a_warning_and_the_save_stands(
+    tmp_path: Path,
+    rows: list[TrainingRow],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _lists(tmp_path, KEEP_FEATURE_LISTS, rows)
+
+    def refuse(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError(13, "no", str(self))
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    newcomer = _file(tmp_path, names=("newcomer",))
+    newcomer.save(rows)
+    assert "cannot remove the old cached rows" in capsys.readouterr().err
+    assert newcomer.path.exists()
+
+
+def test_a_hit_on_a_file_that_cannot_be_marked_is_still_a_hit_with_a_warning(
+    tmp_path: Path,
+    rows: list[TrainingRow],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file = _file(tmp_path)
+    file.save(rows)
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "no")
+
+    monkeypatch.setattr(os, "utime", refuse)
+    assert file.load(_ids(rows)) == rows
+    assert "as used" in capsys.readouterr().err
+
+
+def test_the_list_that_was_just_saved_stays_even_when_other_files_look_newer(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    files = _lists(tmp_path, KEEP_FEATURE_LISTS, rows)
+    for file in files:
+        # A file time in the future, as a clock that moved back would leave.
+        os.utime(file.path, (4_000_000_000, 4_000_000_000))
+    newcomer = _file(tmp_path, names=("newcomer",))
+    newcomer.save(rows)
+    assert newcomer.path.exists()
