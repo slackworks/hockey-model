@@ -135,11 +135,14 @@ def test_every_live_feed_is_listed_in_source_order(conn: sqlite3.Connection) -> 
     assert [g["source"] for g in live_gap_report(conn, NOW)["gaps"]] == list(LIVE_FEEDS)
 
 
-def test_a_fetched_at_that_is_not_a_time_fails_with_context(conn: sqlite3.Connection) -> None:
+@pytest.mark.parametrize("stored", ["not a time", "2026-01-01T00:00:00"])
+def test_a_fetched_at_that_is_not_a_time_fails_with_context(
+    conn: sqlite3.Connection, stored: str
+) -> None:
     conn.executemany(
         "INSERT INTO source_reads (source, url, fetched_at, ok, error, permanent)"
         " VALUES (?, ?, ?, 0, 'HTTP 403', 1)",
-        [(SOURCE, URL, "not a time"), (SOURCE, URL, "not a time either")],
+        [(SOURCE, URL, stored), (SOURCE, URL, stored)],
     )
     conn.commit()
     with pytest.raises(HockeyModelError, match=f"read the gaps of {SOURCE}.*not a time"):

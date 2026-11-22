@@ -43,7 +43,8 @@ def live_gap_report(conn: sqlite3.Connection, now: datetime) -> dict[str, Any]:
         try:
             found = known_gaps(conn, source)
             good = {url: last_ok_read(conn, source, url) for url in found}
-        except ValueError as exc:
+        # parse_iso_utc raises HockeyModelError for a time with no zone, and ValueError for text.
+        except (ValueError, HockeyModelError) as exc:
             raise HockeyModelError(
                 f"read the gaps of {source}: a fetched_at value is not a time: {exc}; "
                 "inspect the source_reads rows of that source"
