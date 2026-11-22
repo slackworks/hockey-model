@@ -164,7 +164,7 @@ jobs:
       # earlier cache entry holds the store that the backup copied.
       - if: always()
         name: Drop the upgrade backup
-        run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak
+        run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak*
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:

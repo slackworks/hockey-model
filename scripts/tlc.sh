@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run TLC on the daily prepare spec. The jar is pinned by SHA-256, and the copy that runs is the
-# one that the checksum covered.
+# Run TLC on the spec and the config of each shard of specs/shards.json. The jar is pinned by
+# SHA-256, and the copy that runs is the one that the checksum covered.
 #
 # Usage: bash scripts/tlc.sh [--help | --list | --shard NAME]
 #   --help        Print this usage and exit 0.

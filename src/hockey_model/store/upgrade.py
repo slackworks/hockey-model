@@ -132,27 +132,41 @@ def _last_backup(conn: sqlite3.Connection, path: Path) -> str | None:
     return None if row is None else str(row[0])
 
 
+def _backup_to(path: Path, target: Path) -> None:
+    """Copy the store at ``path`` to ``target`` with SQLite's backup API."""
+    source = dest = None
+    try:
+        source = sqlite3.connect(path)
+        dest = sqlite3.connect(target)
+        source.backup(dest)
+    finally:
+        for conn in (source, dest):
+            if conn is not None:
+                conn.close()
+
+
 def _backup(path: Path, version: int) -> Path:
-    """Copy the store with SQLite's backup API. Remove a partial copy when the copy fails."""
+    """Copy the store under a temporary name, then rename it, so a named backup is complete.
+
+    A run that dies in the copy leaves only the temporary file. The write lock is held, so no
+    other upgrade writes a copy, and a temporary file that exists is the leftover of such a run.
+    """
     target = path.with_name(f"{path.name}.v{version}.bak")
     if target.exists():
         raise StoreError(
             f"upgrade store {str(path)!r}: backup {str(target)!r} already exists; move it aside "
             "so the earlier backup is kept, then run the upgrade again"
         )
-    source = sqlite3.connect(path)
-    dest = sqlite3.connect(target)
+    partial = target.with_name(f"{target.name}.tmp")
     try:
-        source.backup(dest)
-    except sqlite3.Error as exc:
-        dest.close()
-        target.unlink(missing_ok=True)
+        partial.unlink(missing_ok=True)
+        _backup_to(path, partial)
+        partial.replace(target)
+    except (sqlite3.Error, OSError) as exc:
+        partial.unlink(missing_ok=True)
         raise StoreError(
             f"upgrade store {str(path)!r}: backup failed: {exc}; the store is unchanged"
         ) from exc
-    finally:
-        source.close()
-        dest.close()
     return target
 
 

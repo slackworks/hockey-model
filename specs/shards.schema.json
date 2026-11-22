@@ -13,7 +13,7 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "covers": {
-      "description": "Paths of the code that every shard models.",
+      "description": "Paths of the code that a shard models, unless the shard names its own covers.",
       "type": "array",
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 }
@@ -30,8 +30,13 @@
           "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
           "spec": { "type": "string", "minLength": 1 },
           "config": { "type": "string", "minLength": 1 },
+          "covers": {
+            "description": "Paths of the code that this shard models. They replace the shared covers.",
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
           "paths": {
-            "description": "Paths that only this shard covers, in addition to covers.",
+            "description": "Paths that only this shard covers, in addition to its covers.",
             "type": "array",
             "items": { "type": "string", "minLength": 1 }
           }

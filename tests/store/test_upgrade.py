@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from hypothesis import given, settings
@@ -204,6 +204,74 @@ def test_an_existing_backup_is_never_overwritten(v1: Path) -> None:
     with pytest.raises(StoreError, match="already exists"):
         upgrade_store(v1)
     assert (v1.parent / "store.db.v1.bak").read_text(encoding="utf-8") == "keep me"
+    assert version_of(v1) == 1
+
+
+def test_a_copy_that_a_killed_run_left_does_not_block_the_next_upgrade(v1: Path) -> None:
+    leftover = v1.parent / "store.db.v1.bak.tmp"
+    leftover.write_text("half a copy", encoding="utf-8")
+    report = upgrade_store(v1)
+    assert report.backup_path == str(v1.parent / "store.db.v1.bak")
+    assert version_of(Path(report.backup_path)) == 1
+    assert not leftover.exists()
+
+
+def test_the_copy_is_written_under_another_name_and_renamed_when_it_is_complete(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[str]] = []
+    real = upgrade._backup_to
+
+    def spy(path: Path, target: Path) -> None:
+        real(path, target)
+        seen.append(sorted(p.name for p in path.parent.iterdir() if ".bak" in p.name))
+
+    monkeypatch.setattr(upgrade, "_backup_to", spy)
+    upgrade_store(v1)
+    assert seen == [["store.db.v1.bak.tmp"]]
+    assert sorted(p.name for p in v1.parent.iterdir() if ".bak" in p.name) == ["store.db.v1.bak"]
+
+
+def test_a_failed_copy_leaves_no_file_and_the_store_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(path: Path, target: Path) -> None:
+        target.write_text("half a copy", encoding="utf-8")
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(upgrade, "_backup_to", broken)
+    with pytest.raises(StoreError, match="backup failed: disk full"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_that_cannot_be_renamed_is_a_named_error_and_the_store_is_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: Path, target: Path) -> Path:
+        raise PermissionError(13, "no rename here", str(self))
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    with pytest.raises(StoreError, match="backup failed: .*no rename here"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_to_a_directory_that_cannot_be_written_is_a_named_error(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = sqlite3.connect
+
+    def connect(target: Path, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if str(target).endswith(".tmp"):
+            raise sqlite3.OperationalError("unable to open database file")
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(upgrade.sqlite3, "connect", connect)
+    with pytest.raises(StoreError, match="backup failed: unable to open database file"):
+        upgrade_store(v1)
     assert version_of(v1) == 1
 
 

@@ -1,6 +1,7 @@
 {
   "always": [
-    "specs/**",
+    "specs/shards.json",
+    "specs/shards.schema.json",
     "scripts/tlc.sh",
     "scripts/tlc_shards.py",
     "scripts/tlc-plan.sh",
@@ -14,6 +15,18 @@
     "src/hockey_model/store_cli_refresh.py"
   ],
   "shards": [
+    {
+      "name": "upgrade",
+      "spec": "specs/store_upgrade.tla",
+      "config": "specs/store_upgrade.cfg",
+      "covers": [
+        "src/hockey_model/store/upgrade.py",
+        "src/hockey_model/store/db.py",
+        "src/hockey_model/store/migrations.py",
+        "src/hockey_model/store/shape.py",
+        "src/hockey_model/store/schema.sql"
+      ]
+    },
     {
       "name": "stall",
       "spec": "specs/daily_prepare.tla",

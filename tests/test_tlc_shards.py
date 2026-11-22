@@ -74,12 +74,41 @@ def test_a_change_of_the_fit_command_selects_no_shard() -> None:
     assert shards.plan(DATA, ["src/hockey_model/store_cli_parsers.py"]) == []
 
 
-def test_a_change_of_the_refresh_command_selects_every_shard() -> None:
-    assert shards.plan(DATA, ["src/hockey_model/store_cli_refresh.py"]) == NAMES
+DAILY = [s["name"] for s in DATA["shards"] if s["spec"] == "specs/daily_prepare.tla"]
+UPGRADE = [s["name"] for s in DATA["shards"] if s["spec"] == "specs/store_upgrade.tla"]
+
+
+def test_a_change_of_the_refresh_command_selects_the_daily_prepare_shards() -> None:
+    assert shards.plan(DATA, ["src/hockey_model/store_cli_refresh.py"]) == DAILY
+
+
+def test_a_change_of_the_upgrade_code_selects_the_upgrade_shard_only() -> None:
+    for path in ("src/hockey_model/store/upgrade.py", "src/hockey_model/store/db.py"):
+        assert shards.plan(DATA, [path]) == UPGRADE
+
+
+def test_a_change_of_a_spec_selects_the_shards_that_run_it_and_a_config_selects_its_shard() -> None:
+    assert shards.plan(DATA, ["specs/daily_prepare.tla"]) == DAILY
+    assert shards.plan(DATA, ["specs/store_upgrade.tla"]) == UPGRADE
+    assert shards.plan(DATA, ["specs/daily_prepare_recent.cfg"]) == ["recent"]
+
+
+def test_a_shard_with_its_own_covers_ignores_the_shared_covers() -> None:
+    data = {
+        "always": ["a/**"],
+        "covers": ["shared.py"],
+        "shards": [
+            {"name": "one", "spec": "s1", "config": "c1"},
+            {"name": "two", "spec": "s2", "config": "c2", "covers": ["own.py"]},
+        ],
+    }
+    assert shards.plan(data, ["shared.py"]) == ["one"]
+    assert shards.plan(data, ["own.py"]) == ["two"]
+    assert shards.plan(data, ["a/x"]) == ["one", "two"]
 
 
 @pytest.mark.parametrize(
-    "path", ["specs/daily_prepare.tla", "scripts/tlc.sh", ".github/workflows/tla.yml"]
+    "path", ["scripts/tlc.sh", ".github/workflows/tla.yml", "specs/shards.json"]
 )
 def test_a_change_of_an_always_path_selects_every_shard(path: str) -> None:
     assert shards.plan(DATA, [path, "README.md"]) == NAMES
@@ -115,7 +144,7 @@ def test_list_prints_one_json_object_per_shard() -> None:
     rows = [json.loads(line) for line in result.stdout.splitlines()]
     assert [row["name"] for row in rows] == NAMES
     assert all({"name", "spec", "config", "paths"} <= set(row) for row in rows)
-    assert all("specs/**" in row["paths"] for row in rows)
+    assert all(row["spec"] in row["paths"] and row["config"] in row["paths"] for row in rows)
 
 
 def test_rows_prints_name_spec_and_config_in_run_order() -> None:
@@ -142,7 +171,7 @@ def test_an_unknown_shard_exits_two_and_names_the_shards() -> None:
 
 def test_plan_reads_the_changed_paths_from_stdin() -> None:
     assert json.loads(_run("plan", stdin="README.md\n").stdout) == []
-    assert json.loads(_run("plan", stdin="specs/daily_prepare.tla\n").stdout) == NAMES
+    assert json.loads(_run("plan", stdin="specs/daily_prepare.tla\n").stdout) == DAILY
 
 
 def test_plan_all_selects_every_shard_without_input() -> None:

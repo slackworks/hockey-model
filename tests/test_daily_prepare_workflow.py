@@ -21,7 +21,7 @@ def test_prepare_has_one_hourly_cron() -> None:
 def test_the_saved_cache_keeps_no_upgrade_backup(workflow: Path) -> None:
     """The cache saves the store even after a failure, so a backup must not enter it."""
     text = workflow.read_text(encoding="utf-8")
-    drop = text.find('rm -f "$RUNNER_TEMP"/hockey-model/*.bak')
+    drop = text.find('rm -f "$RUNNER_TEMP"/hockey-model/*.bak*')
     save = text.find("actions/cache/save")
     assert drop != -1, "the workflow must drop the upgrade backup before it saves the cache"
     assert save != -1 and drop < save, "the backup drop must run before the cache save"
