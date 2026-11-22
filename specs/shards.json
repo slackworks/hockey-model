@@ -28,6 +28,14 @@
       ]
     },
     {
+      "name": "registry",
+      "spec": "specs/experiment_registry.tla",
+      "config": "specs/experiment_registry.cfg",
+      "covers": [
+        "src/hockey_model/experiments/*.py"
+      ]
+    },
+    {
       "name": "stall",
       "spec": "specs/daily_prepare.tla",
       "config": "specs/daily_prepare_stall.cfg"

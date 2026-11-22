@@ -335,7 +335,9 @@ hockey-model experiments run 0002-v1-forward-test --games-out games.csv
 The per-game CSV of a confirmation run is committed under
 `experiments/results/`, and the record stores its path relative to the repository root and its SHA-256 hash.
 `experiments check` also fails when a record that holds a result is deleted or renamed, when a record that never ran is deleted while a higher confirmation record exists, when its status disagrees with its result, when a committed result was removed or replaced, and when two records share a number.
-It reads the git history, so a shallow clone stops with a message that asks for the full history.
+It reads the git history of each record path, so a shallow clone stops with a message that asks for the full history.
+A record that moves to another name is a deleted record and a new record, because git pairs a removed file with an added file by how alike the two are.
+A TLA+ model of these rules is in `specs/experiment_registry.tla` (design in `docs/design/experiment-registry-tla.md`).
 Outside a git work tree, and before the first commit, it cannot read the history. The output then has a `notes` entry, `deletion history not checked: ...`, so the missing check is not read as a pass.
 
 ## Consumer API
