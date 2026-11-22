@@ -29,26 +29,21 @@ PASSING_CFGS=(
   specs/daily_prepare_stall.cfg
   specs/daily_prepare_blocked.cfg
   specs/daily_prepare_cutoff.cfg
+  specs/daily_prepare_recent.cfg
   specs/daily_prepare.cfg
 )
-# This config must violate the property. The code has the bug that the property finds (#302).
-KNOWN_CFG=specs/daily_prepare_false_stall.cfg
-KNOWN_PROPERTY=StallOnlyForBacklog
 
 usage() {
   cat <<EOF
 Usage: bash scripts/tlc.sh [--help]
 Run TLC on $SPEC with each of these configs. TLC must find no violation:
 $(printf '  %s\n' "${PASSING_CFGS[@]}")
-Then run TLC with $KNOWN_CFG.
-TLC must violate the property $KNOWN_PROPERTY there.
   --help  Print this usage and exit 0.
 Environment:
   TLA_TOOLS_DIR  Directory for the jar. Default: \$HOME/.cache/hockey-model/tla.
 Exit codes: 0 when every property holds. 12 for a violated invariant. 13 for a violated
 action or temporal property. 11 for a deadlock. 2 for an unknown argument. 1 for a setup
-failure in this script, for a JVM crash, or when the known-failure config passes. Other codes
-come from TLC.
+failure in this script, or for a JVM crash. Other codes come from TLC.
 EOF
 }
 
@@ -152,33 +147,6 @@ for cfg in "${PASSING_CFGS[@]}"; do
     break
   fi
 done
-
-# TLC stops at the first counterexample of the known failure. The script checks the property
-# name and not the trace, so any counterexample of that property counts.
-if ((rc == 0)); then
-  echo "tlc.sh: checking $SPEC with $KNOWN_CFG (expects a violation)"
-  mkdir -p "$tmp/states/known_failure"
-  known_log="$tmp/known_failure.log"
-  known_rc=0
-  java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto \
-    -metadir "$tmp/states/known_failure" -config "$KNOWN_CFG" "$SPEC" \
-    >"$known_log" 2>&1 || known_rc=$?
-  if ((known_rc == 13)) && grep -q "property $KNOWN_PROPERTY is violated" "$known_log"; then
-    head -n 40 "$known_log"
-    echo "tlc.sh: $KNOWN_CFG found the expected violation of $KNOWN_PROPERTY."
-  else
-    # The cause of a crash is at the end of the log, so a failure prints all of it.
-    cat "$known_log" >&2
-    rc=$known_rc
-    if ((known_rc == 0)); then
-      echo "tlc.sh: $KNOWN_CFG passed, so $KNOWN_PROPERTY holds now." >&2
-      echo "  Add $KNOWN_CFG to PASSING_CFGS, and delete this known-failure block." >&2
-      rc=1
-    else
-      echo "tlc.sh: $KNOWN_CFG ended with exit $known_rc, not a violation of $KNOWN_PROPERTY." >&2
-    fi
-  fi
-fi
 
 case "$rc" in
 0) ;;

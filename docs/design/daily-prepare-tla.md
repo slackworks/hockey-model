@@ -62,10 +62,16 @@ The prose names constants and does not repeat their values, because the values l
    An open day and a due day do not count, because the next run reads them again.
    A day that closed since the last run does not count, because a daily run completes one such day first.
    Without this rule, that day would count as progress, and a run that the budget stops would exit 75 and never fail.
-6. After the loop, `nhl()` adds an error when the first read that stopped the loop timed out, and no unit was finished.
+6. After the loop, `nhl()` adds an error when the first read that stopped the loop timed out and no old unit was finished, and either no unit of any age was finished or `old_work_left()` is true.
+   `read_days()` and `read_boxscores()` return `finished`, the count of units of any age that they finished for good.
+   `old_work_left()` is in `store/refresh_old_work.py`.
+   It is true when a score day or a boxscore older than the cutoff still waits for a read.
+   A known gap, a boxscore that this run read, and a boxscore that failed a short time ago do not wait.
    The error names `--budget-seconds`, so the refresh exits 1 and not 75 (#178).
-   A due day whose re-read resolves its game counts as zero, so a run that spends its budget on due days gets the error once (#302).
-   The next run continues, so this is a single false exit 1 and not a loop.
+   A run that finished a recent day, with no old work left, adds no error, so it exits 75, and the next run continues (#302).
+   A run that finished no unit adds the error, because the next run with the same budget stops at the same place.
+   A due day whose re-read resolves its game counts as zero, so a run that spends its budget on due days gets the error once.
+   The next run continues, so this is a single false exit 1 and not a loop (#303).
 
 ### Score days: `store/refresh_nhl.py`, `read_days()`
 
@@ -132,6 +138,7 @@ The main config keeps `Blocked` empty, because a blocked day there raised the co
    So a stop after `MAX_UNIT_FAILURES` failures exits 1, not 75.
 3. With exit 0 from refresh, the script writes the marker when `backfill_complete` is true, and exits 75 when it is false.
    Exit 75 happens for a budget stop or a boxscore retry skip, with no error from any source.
+   A budget stop adds the stall error when `nhl()` finished no older unit, and either finished no unit at all or leaves old work unread (see item 6 of the loop above).
    A budget stop can also happen in the MoneyPuck step (#136).
    The MoneyPuck step tries its first stale file in each run, whatever the time. When that file is the team file, the run reads no goalie file after a spent budget, and the next run reads them, because the team file is then fresh.
    The TLA+ model does not include this stop.
@@ -161,8 +168,10 @@ The cache save step has `if: always()`, so the store and the marker are saved to
 | A source after the NHL steps that always fails | `OtherBroken` |
 | `source_reads` rows of one URL | `okRead`, `streak`, `span`, `firstAge`, `lastAge` |
 | The `.backfilled` file | `marker` |
-| A unit that a run finished for good and that the code counts as progress | `progress`, which follows `ArrivalsCount` |
-| A unit that a run finished for good and that is not recent (ground truth) | `backlog` |
+| What a run finished for good | `finished`: 0 for no unit, 1 for recent units only, 2 for an old unit |
+| What the code counts as progress | `Progress`: an old unit, and a recent unit when `ArrivalsCount` is `TRUE` |
+| An old unit finished (ground truth) | `Backlog` |
+| Any unit finished, so the next run starts after it | `Headway` |
 | A day that is not closed yet | `open`, which starts as `OpenDays` and shrinks by one at each tick |
 | Ticks since each day closed, up to the cutoff | `age`. An open day has age 0. |
 | The old rule, where a recent day counts as progress | `ArrivalsCount = TRUE` |
@@ -199,10 +208,10 @@ Abstractions, and the reason for each:
    The main config sets one tick, as a reduction of its state space (see the counts under Constants).
    The model counts whole ticks, and the code compares game days, so the two cutoffs agree on the rule and not on every boundary.
    A second run in the same tick, such as a retry after exit 75, sees the same ages as the first run, as it does in the code.
-7. `progress` is what the code counts, and it follows `ArrivalsCount`.
-   `backlog` is the ground truth: a finished unit that is not recent.
-   The code chooses the exit code from `progress`.
-   The property `BacklogStallExitsOne` uses `backlog`.
+7. `Progress` is what the code counts, and it follows `ArrivalsCount`.
+   `Backlog` is the ground truth: a finished unit that is not recent.
+   The code chooses the stall error from `progress`, from `finished`, and from `old_work_left()` (item 12).
+   The property `BacklogStallExitsOne` uses `Backlog`.
 8. `BacklogFirst` reads the oldest window first, so the backlog comes before the open days.
    This is the reorder fix from #186.
 9. After the marker, the plain refresh reads every missing boxscore (the non-backfill branch of `nhl()`).
@@ -214,12 +223,18 @@ Abstractions, and the reason for each:
     `streak` and the ages reset on any good read, as in `source_reads`.
     `WindowDone` does not require an open day to be complete.
     A failed or skipped read of an open day leaves the run unclean, so no marker follows.
-11. `BacklogStallExitsOne` is the same check as `StallExitsOne` when `ArrivalsCount` is `FALSE`, because `progress` and `backlog` are equal then.
+11. `BacklogStallExitsOne` is the same check as `StallExitsOne` when `ArrivalsCount` is `FALSE`, because `Progress` and `Backlog` are equal then.
     It exists as the target of the `ArrivalsCount` mutation, and it is not an independent check.
-12. `StallOnlyForBacklog` is a known failure (finding 8).
-    `BacklogUnread` is true when an old day is not fully read.
-    The property says that the stall error needs such a day, when no source failed and no day is due.
-    It has its own config, and `scripts/tlc.sh` expects TLC to violate it.
+12. `BacklogUnread` is true when an old day is not fully read, as `old_work_left()` is.
+    A boxscore that failed a short time ago does not wait, as in the code.
+    `StallError` is the stall condition: the budget stopped a run with no progress, and either `BacklogUnread` holds or no unit finished (`Headway` is false).
+    `EndNhl` raises the error when `StallError` holds.
+    `StallNeedsBacklogOrNoHeadway` checks that rule, and `StallExitsOne` and `BacklogStallExitsOne` use it in their condition.
+    The model cannot reach a run that finishes nothing while no old work waits: its budget is fixed, and no tick opens a new day.
+    The code can reach it after a change of the budget, or when a new open day arrives each day, so `tests/store/test_refresh_stall.py` covers that case, and the model keeps the same condition.
+    At the hourly cadence of `daily-prepare`, a second run on one day finishes nothing, so it raises the error and the stall is loud.
+    `StallNeedsBacklogOrNoHeadway`, `StallExitsOne`, and `BacklogStallExitsOne` restate `StallError` for the step that uses it.
+    They fail when an edit of `EndNhl` changes the rule, as the break tests show, and they do not check the code.
 
 ## Constants
 
@@ -234,26 +249,27 @@ The other configs use the code cutoff.
 `specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, `CutoffTicks = 4`, and the other constants as above.
 TLC finds 31,586 distinct states in it, and every property of the main config holds.
 
-`specs/daily_prepare_false_stall.cfg` is a small model where both days are open at the start: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 3`, `OpenDays = {1, 2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
-It names `StallOnlyForBacklog` and not the properties of the main config.
-TLC violates the property in it (finding 8), so `scripts/tlc.sh` runs it last and expects the violation.
+`specs/daily_prepare_recent.cfg` is a small model where both days are open at the start, so both are recent when a run reads them: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 3`, `OpenDays = {1, 2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
+It has the properties of the main config and `StallNeedsBacklogOrNoHeadway`.
+The budget covers three of the four reads, so a run finishes recent days, stops, and exits 75 (finding 8).
 
-`specs/daily_prepare_cutoff.cfg` has the properties of the main config and `StallOnlyForBacklog`, at the code cutoff: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
+`specs/daily_prepare_cutoff.cfg` has the properties of the main config and `StallNeedsBacklogOrNoHeadway`, at the code cutoff: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
 The main config cuts the cutoff, so this config keeps every property under the full cutoff.
-`StallOnlyForBacklog` holds in it, so the property is not empty: it fails only when no old day waits.
+The recent config checks the case that the stall error must not catch.
 
-With these values, TLC finds 27,285,528 distinct states in the first model, and 692,896 in the stall model.
+With these values, TLC finds 27,288,524 distinct states in the first model, and 699,690 in the stall model.
 Before the age model (#191), the counts were 27,181,712 and 295,722.
 Before the arrival step, they were 4,000,218 and 16,050.
-The arrival step, the `backlog` flag, and then the age of each day multiply the state space.
+The arrival step, the ground-truth flag, and then the age of each day multiply the state space.
 The first model passed every property in 20 minutes 21 seconds with `-workers auto` on an idle development machine: the search took 11 minutes 25 seconds, and the liveness check took the rest.
-The stall model passed in 24 seconds, and the blocked model passed in 1 second.
+That run was before the stall rule had `BacklogUnread` and `Headway` (#302). With them, the first model passed in 29 minutes 12 seconds while other work ran on the same machine.
+The stall model passed in 24 seconds, the recent model passed in 23 seconds with 652,228 states, and the blocked model passed in 1 second.
 With `CutoffTicks = 4` in the first model, TLC found 62,897,214 distinct states and passed every property in 53 minutes 6 seconds, while other work ran on the same machine.
 The search of the 27 million state model took 29 minutes on a runner, so 2.3 times the states would pass the 60 minute limit of the `tla` job.
 So the first model keeps the one-tick cutoff.
 `specs/daily_prepare_cutoff.cfg` checks every property of the first model at the code cutoff, in a model of 2 windows with 1 day each.
-TLC finds 30,434 distinct states in it, and it passes in 2 seconds.
-The stall model, the blocked model, and the known-failure model check the code cutoff.
+TLC finds 30,434 distinct states in it, and it passes in 1 second.
+The stall model, the blocked model, and the recent model check the code cutoff.
 The cut is a reduction of the state space and not a proof that a longer cutoff changes no result: #188 owns the preservation argument.
 After #189 removed `noted` and #279 added `Blocked`, the first model took 19 minutes 59 seconds for 27,181,712 states.
 Other checks ran on the same machine during some of these runs, so a figure is an upper bound.
@@ -283,10 +299,10 @@ The two middle rows are from before the age model (#191) and were not run again.
 
 | Config | Distinct states | Time |
 | --- | --- | --- |
-| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`, with the age model) | 692,896 | 24 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`, with the age model) | 699,690 | 24 s |
 | `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 10,982 | 1 s |
 | `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,504,428 | 1 min 35 s |
-| Full `.cfg` (`CutoffTicks = 1`) | 27,285,528 | 20 min 21 s |
+| Full `.cfg` (`CutoffTicks = 1`) | 27,288,524 | 29 min 12 s (loaded machine) |
 | Full `.cfg` with `CutoffTicks = 4` | 62,897,214 | 53 min 6 s (upper bound) |
 
 Every config in the sweep passes.
@@ -306,9 +322,9 @@ The break tests ran against the reference spec, and each one failed as listed.
 | `NoRereadOfCompleteDay` | Action property | A run reads a complete day again only when it is due. | In `ScoreStep`, replace `Complete(u.day)` with `FALSE`. | Action property violated |
 | `StoppedNeverMarks` | Action property | A run that stopped or had an error writes no marker. | On a stop, keep `clean` unchanged. Run with `MarkerOnlyWhenComplete` out of the `.cfg`, because that invariant fails first. | Action property violated |
 | `ExitCodeRule` | Action property | Exit 1 if and only if a source failed or the budget stalled. Exit 75 only with no marker. Exit 0 only with the marker. | In `Finish`, test `clean` before `errors`. | Action property violated |
-| `StallExitsOne` | Action property | A run that the budget stops with no finished unit exits 1. | In `EndNhl`, set `errors' = errors`. | Action property violated |
-| `BacklogStallExitsOne` | Action property | A run that the budget stops with no finished backlog unit exits 1. An arrival does not count. | With `ArrivalsCount = TRUE` in the stall `.cfg`: the arrival counts as progress, so the run exits 75 and the property fails. | Action property violated (the daily-cadence stall, #186) |
-| `StallOnlyForBacklog` | Action property | The step that raises the stall error, in a run with no source failure and no due day, finds an old day that is not fully read. | Set `Recent(d) == FALSE`: no day is recent, so the property holds and `tlc.sh` fails with "holds now". Remove the cap in `Tick`: `TypeOK` fails. | Action property violated in `specs/daily_prepare_false_stall.cfg`. Known failure. |
+| `StallExitsOne` | Action property | A run that the budget stops with no finished unit, while old work is unread, exits 1. | In `EndNhl`, set `errors' = errors`. | Action property violated |
+| `BacklogStallExitsOne` | Action property | A run that the budget stops with no finished backlog unit, while old work is unread, exits 1. An arrival does not count. | With `ArrivalsCount = TRUE` in the stall `.cfg`: the arrival counts as progress, so the run exits 75 and the property fails. | Action property violated (the daily-cadence stall, #186) |
+| `StallNeedsBacklogOrNoHeadway` | Action property | The step that raises the stall error finds an old day that is not fully read, or a run that finished no unit. | In `StallError`, drop both tests: with the recent `.cfg`, a run that finished recent days raises the error. Remove the cap in `Tick`: `TypeOK` fails. | Action property violated (#302) |
 | `BackfillFinishes` | Liveness | The marker appears eventually, when the budget covers the open days (`BudgetCovers`). | In `ScoreStep`, do not skip gaps. | Temporal property violated |
 | `BackfillFinishes` | Liveness | Same | In the `.cfg`, set `OtherBroken = TRUE`. | Temporal property violated |
 | `FinishesOrFails` | Liveness | Between runs, again and again, the marker exists or the last run exited 1. A budget that is too small ends in exit 1 in every run. | In `EndNhl`, set `errors' = errors`. Run with the stall `.cfg`, and with `StallExitsOne` out of the `.cfg`, because that property fails first. | Temporal property violated |
@@ -363,29 +379,24 @@ The first one was a limit of the code. Issue #178 fixed it.
    The code covers this with the plain refresh after the marker, so the invariant now checks the step that writes the marker.
 8. A false exit 1 from the cutoff (#191, #302).
    The model keeps the age of each day, so a day is recent for `CutoffTicks` ticks, as `BACKLOG_BEFORE` makes it in the code.
-   `StallOnlyForBacklog` says that the step that raises the stall error finds an old day that is not fully read, when no source failed and no day is due.
-   TLC violates it in `specs/daily_prepare_false_stall.cfg`.
-   Both days close, and both are recent. The budget is 3, and the work is 4 reads.
+   With the first form of the stall rule, TLC showed a run with only recent days left that exits 1.
+   Both days close, so both are recent. The budget covers three of the four reads.
    The run reads the score and the boxscore of day 2 and the score of day 1, and the budget stops it before the boxscore of day 1.
-   Each read is of a recent day, so the run counts no progress, and it exits 1 with the message about the budget.
-   No backlog exists, and the next run finishes the last read, so the exit 1 is false.
-   `nhl()` counts only units older than the cutoff, which is the cause.
-   A run needs a budget that cannot cover the recent days to reach this, so the risk is low.
-   #302 tracks the code fix.
-   The property covers a run with no source failure, because a failed read makes exit 1 correct.
-   It covers a run with no due day, because the weather picks the due set, and the budget can be too small for the due reads.
-   The config stays as a known failure.
-   `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 must move the config to the list of passing configs.
-   The script checks the name of the property and not the trace, so any counterexample of that property counts.
-   A pinned trace length would break at every edit of the spec.
+   Each read is of a recent day, so the run counted no progress, and it exited 1 with the message about the budget, though no backlog waited and the next run finished.
+   Old work alone cannot decide the error: with no old work left, a budget below the cost of the open days gives exit 75 in every run (#178).
+   So `nhl()` adds the stall error when no older unit finished and either `old_work_left()` is true or the run finished no unit of any age.
+   `EndNhl` has the same condition (`StallError`).
+   `specs/daily_prepare_recent.cfg` holds the case of a run that finished recent days, and `StallNeedsBacklogOrNoHeadway` checks the rule.
+   The property covers a run with no source failure, because a failed read makes exit 1 correct, and it is an action property of `EndNhl`, where only the stall raises an error.
+   A run that spends its budget on due days still gets the error once, as before (#303).
 
 ## Files to add or change
 
 1. `specs/daily_prepare.tla`: copy the reference spec from the appendix without change.
-2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, and `specs/daily_prepare_false_stall.cfg`: copy the reference `.cfg` files from the appendix without change.
+2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, and `specs/daily_prepare_recent.cfg`: copy the reference `.cfg` files from the appendix without change.
 3. `scripts/tlc.sh`: the run script below.
 4. `tests/test_tla_constants.py`: the constants test above.
-5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all five configs run, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The known-failure config must exit 13 and name `StallOnlyForBacklog`: a pass, another exit code, or another property fails the run. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
+5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all five configs run, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. Every config in `specs/` must appear once in the usage text. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
 The Java version checks run against fake `java` output for versions 8, 9, 11, 17, and 21, and for unreadable output.
 A PATH without `sha256sum` and `shasum` exits 1 and names both.
 6. `.github/workflows/tla.yml`: the CI job below.
@@ -416,9 +427,7 @@ Behavior:
    A version line that cannot be read exits 1.
    If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
-   For `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
-   Then run `specs/daily_prepare_false_stall.cfg`, with its output in a file. TLC must exit 13 and the output must say `property StallOnlyForBacklog is violated`. The script prints the head of the output.
-   A pass of that config exits 1 and says that the property holds now. Any other exit code is returned.
+   For `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, `specs/daily_prepare_recent.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
 8. Exit with the TLC exit code.
    TLC exits 0 when every property holds, 12 for a violated invariant, and 13 for a violated action or temporal property.
@@ -599,13 +608,12 @@ VARIABLES
     age,                                      \* ticks since each day closed, up to CutoffTicks
     calm,                                     \* TRUE: every read that is not broken works
     phase, pc, gaps, due, fails, reads,
-    progress,  \* what the code counts: a finished unit, as ArrivalsCount sets it
-    backlog,   \* ground truth: a finished unit that is not an arrival
+    finished,  \* 0: no unit finished, 1: recent units only, 2: an old unit finished
     clean, stopped, errors,  \* one run
     exitCode
 
 store == <<okRead, streak, span, firstAge, lastAge, marker, open, age>>
-run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
+run == <<phase, pc, gaps, due, fails, reads, finished, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
 \* cutoff = game_day_of(now) - BACKLOG_BEFORE: a day that closed less than that long ago is
@@ -630,6 +638,20 @@ Done(u) == okRead[u] \/ Abandoned(u)
 ScoreDone(d) == Done(Score(d))
 \* A box is needed only for a final game, and the score read finds the game.
 BoxDone(d) == ~WantBox(d) \/ Abandoned(Box(d))
+\* What the code counts as progress: an old unit, or any unit with the old rule.
+Progress == finished = 2 \/ (ArrivalsCount /\ finished >= 1)
+\* Ground truth: an old unit finished.
+Backlog == finished = 2
+\* Any unit finished, recent or old. The next run starts after it.
+Headway == finished >= 1
+\* old_work_left(): a day older than the cutoff that is not fully read. A recent day is not
+\* backlog, because the next run finishes it. A boxscore that failed a short time ago does not
+\* wait: the run skips it.
+BoxWaits(d) == ~BoxDone(d) /\ ~RecentFail(Box(d))
+BacklogUnread == \E d \in Days : ~Recent(d) /\ (~ScoreDone(d) \/ BoxWaits(d))
+\* nhl() adds the stall error when the budget stopped a run that counted no progress, and
+\* either old work is unread or no unit finished at all (#178, #302).
+StallError == stopped /\ ~Progress /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
 WindowDays(k) == {d \in Days : (NWindows - k) * DaysPerWindow < d
                                 /\ d <= (NWindows - k + 1) * DaysPerWindow}
 \* A day that is still open is not required to be complete: the model does not record a good
@@ -648,7 +670,7 @@ Init == /\ okRead = [u \in Urls |-> FALSE]
         /\ age = [d \in Days |-> IF d \in OpenDays THEN 0 ELSE CutoffTicks]
         /\ calm = FALSE
         /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ due = {}
-        /\ fails = 0 /\ reads = 0 /\ progress = FALSE /\ backlog = FALSE
+        /\ fails = 0 /\ reads = 0 /\ finished = 0
         /\ clean = TRUE /\ stopped = FALSE /\ errors = FALSE
         /\ exitCode = 0
 
@@ -664,7 +686,7 @@ TypeOK ==
     /\ pc \in 1..(Steps + 1)
     /\ gaps \subseteq Urls /\ due \subseteq Days
     /\ fails \in 0..MaxFails /\ reads \in 0..Budget
-    /\ progress \in BOOLEAN /\ backlog \in BOOLEAN
+    /\ finished \in 0..2
     /\ clean \in BOOLEAN /\ stopped \in BOOLEAN /\ errors \in BOOLEAN
     /\ exitCode \in {0, 1, 75}
 
@@ -696,22 +718,21 @@ StartRun ==
     /\ gaps' = {u \in Urls : Abandoned(u)}
     \* In calm weather a re-read resolves every game, so no day is due again.
     /\ \E D \in SUBSET {d \in Days : okRead[Score(d)]} : due' = IF calm THEN {} ELSE D
-    /\ UNCHANGED <<store, calm, pc, fails, reads, progress, backlog, clean, stopped, errors,
+    /\ UNCHANGED <<store, calm, pc, fails, reads, finished, clean, stopped, errors,
                    exitCode>>
 
 \* A finished unit that the run counts. A recent day is not backlog, so the old rule
 \* (ArrivalsCount) is the only case where a recent day counts as progress.
 Finished(u, ok) == ok /\ ~okRead[u] /\ u.day \notin open
-CountsAsProgress(u, ok) == Finished(u, ok) /\ (ArrivalsCount \/ ~Recent(u.day))
-CountsAsBacklog(u, ok) == Finished(u, ok) /\ ~Recent(u.day)
+Max(a, b) == IF a > b THEN a ELSE b
 
 \* run.attempt(): one read in one transaction. It records the result in source_reads.
 \* A read finishes a unit for good when it works and the unit had no good read before.
 \* An open day never finishes, because the next run reads it again.
 Attempt(u, ok) ==
     /\ reads' = reads + 1
-    /\ progress' = (progress \/ CountsAsProgress(u, ok))
-    /\ backlog' = (backlog \/ CountsAsBacklog(u, ok))
+    /\ finished' = IF Finished(u, ok)
+                  THEN Max(finished, IF Recent(u.day) THEN 1 ELSE 2) ELSE finished
     \* A good read of a day that is still open does not complete it (day_is_complete needs a
     \* read after the close). streak and the ages still reset, as in source_reads.
     /\ okRead' = [okRead EXCEPT ![u] = @ \/ (ok /\ u.day \notin open)]
@@ -744,17 +765,17 @@ ScoreStep ==
     IN \/ /\ f >= MaxFails
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ u \in gaps \/ (u.day \notin due /\ Complete(u.day))
           /\ Advance(FALSE, 0)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads < Budget
@@ -771,18 +792,18 @@ BoxStep ==
         f == IF StageStart(pc) THEN 0 ELSE fails
     IN \/ /\ ~WantBox(u.day) \/ u \in gaps
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f >= MaxFails \/ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ RecentFail(u)
           /\ clean' = FALSE
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ ~RecentFail(u)
@@ -798,12 +819,13 @@ NhlStep ==
     /\ IF KindAt(pc) = "score" THEN ScoreStep ELSE BoxStep
     /\ UNCHANGED <<calm, phase, gaps, due, exitCode>>
 
-\* nhl() adds an error when the budget stopped the run before it finished one unit.
+\* nhl() adds the stall error (see StallError). A run that finished a recent day, with no old
+\* work unread, exits 75, and the next run goes on from there (#302).
 EndNhl ==
     /\ phase = "nhl" /\ pc = Steps + 1
     /\ phase' = "other"
-    /\ errors' = (errors \/ (stopped /\ ~progress /\ reads >= Budget))
-    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
+    /\ errors' = (errors \/ StallError)
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* MoneyPuck, ESPN, and Daily Faceoff run after the NHL steps. A failure sets refresh exit 1.
@@ -815,7 +837,7 @@ OtherSources ==
                  ELSE IF OtherBroken THEN {TRUE} ELSE BOOLEAN) :
           errors' = (errors \/ e)
     /\ phase' = "finish"
-    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* The backfill branch of daily-prepare.sh: refresh_rc, then backfill_complete.
@@ -825,7 +847,7 @@ Finish ==
     /\ exitCode' = IF errors THEN 1 ELSE IF clean THEN 0 ELSE 75
     /\ marker' = (~errors /\ clean)
     /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ due' = {}
-    /\ fails' = 0 /\ reads' = 0 /\ progress' = FALSE /\ backlog' = FALSE
+    /\ fails' = 0 /\ reads' = 0 /\ finished' = 0
     /\ clean' = TRUE /\ stopped' = FALSE /\ errors' = FALSE
     /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, age, calm>>
 
@@ -857,30 +879,24 @@ ExitCodeRule == [][Finishing => /\ (exitCode' = 1 <=> errors)
                                  /\ (exitCode' = 75 => ~marker' /\ ~clean)
                                  /\ (exitCode' = 0 => marker')]_vars
 
-\* A run that the budget stops with no finished unit exits 1, not 75.
-StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
-                     => exitCode' = 1]_vars
+\* A run that the budget stops with no counted unit exits 1, not 75, while old work is unread or
+\* no unit finished.
+StallExitsOne == [][Finishing /\ StallError => exitCode' = 1]_vars
 
 \* The same rule, judged on the backlog alone. An arrival does not count here. With
 \* ArrivalsCount TRUE, a run can count an arrival as progress and still exit 75 with no
 \* backlog unit finished. This property fails then, and StallExitsOne does not. With
 \* ArrivalsCount FALSE, progress and backlog are equal, so this property is the same check as
 \* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
-BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
-                              => exitCode' = 1]_vars
+BacklogStallExitsOne ==
+    [][Finishing /\ stopped /\ ~Backlog /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
+       => exitCode' = 1]_vars
 
-\* The budget stall error is justified only when backlog work was left unread. The code counts
-\* progress on backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or
-\* none, and stops on the budget raises the stall error while the backlog is already done. When no
-\* source failed, that error is the only cause of exit 1, and the exit 1 is false: more budget is
-\* not needed for the backlog. A run with due days is left out, because the weather picks the due
-\* set and the budget may be too small for the due reads. This property is expected to fail
-\* (#191, #302). Its config is specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check
-\* that must fail.
-BacklogUnread == \E d \in Days : ~Recent(d) /\ ~(ScoreDone(d) /\ BoxDone(d))
-StallOnlyForBacklog ==
-    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ due = {}
-        /\ stopped /\ ~progress /\ reads >= Budget) => BacklogUnread]_vars
+\* The stall error needs old work that is still unread, or a run that finished no unit. With a
+\* recent day finished and no old work unread, the run exits 75, and the next run finishes them
+\* (#302).
+StallNeedsBacklogOrNoHeadway ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ errors') => (BacklogUnread \/ ~Headway)]_vars
 
 \* Liveness
 
@@ -924,6 +940,7 @@ PROPERTIES
     ExitCodeRule
     StallExitsOne
     BacklogStallExitsOne
+    StallNeedsBacklogOrNoHeadway
     BackfillFinishes
 ```
 
@@ -958,6 +975,7 @@ PROPERTIES
     ExitCodeRule
     StallExitsOne
     BacklogStallExitsOne
+    StallNeedsBacklogOrNoHeadway
     FinishesOrFails
 ```
 
@@ -992,6 +1010,7 @@ PROPERTIES
     ExitCodeRule
     StallExitsOne
     BacklogStallExitsOne
+    StallNeedsBacklogOrNoHeadway
     BackfillFinishes
 ```
 
@@ -1026,11 +1045,11 @@ PROPERTIES
     ExitCodeRule
     StallExitsOne
     BacklogStallExitsOne
-    StallOnlyForBacklog
+    StallNeedsBacklogOrNoHeadway
     BackfillFinishes
 ```
 
-### `specs/daily_prepare_false_stall.cfg`
+### `specs/daily_prepare_recent.cfg`
 
 ```
 SPECIFICATION Spec
@@ -1054,5 +1073,13 @@ CONSTANTS
 INVARIANTS
     TypeOK
 PROPERTIES
-    StallOnlyForBacklog
+    MarkerOnlyWhenComplete
+    DoneStaysDone
+    NoRereadOfCompleteDay
+    StoppedNeverMarks
+    ExitCodeRule
+    StallExitsOne
+    BacklogStallExitsOne
+    StallNeedsBacklogOrNoHeadway
+    BackfillFinishes
 ```

@@ -62,13 +62,12 @@ VARIABLES
     age,                                      \* ticks since each day closed, up to CutoffTicks
     calm,                                     \* TRUE: every read that is not broken works
     phase, pc, gaps, due, fails, reads,
-    progress,  \* what the code counts: a finished unit, as ArrivalsCount sets it
-    backlog,   \* ground truth: a finished unit that is not an arrival
+    finished,  \* 0: no unit finished, 1: recent units only, 2: an old unit finished
     clean, stopped, errors,  \* one run
     exitCode
 
 store == <<okRead, streak, span, firstAge, lastAge, marker, open, age>>
-run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
+run == <<phase, pc, gaps, due, fails, reads, finished, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
 \* cutoff = game_day_of(now) - BACKLOG_BEFORE: a day that closed less than that long ago is
@@ -93,6 +92,20 @@ Done(u) == okRead[u] \/ Abandoned(u)
 ScoreDone(d) == Done(Score(d))
 \* A box is needed only for a final game, and the score read finds the game.
 BoxDone(d) == ~WantBox(d) \/ Abandoned(Box(d))
+\* What the code counts as progress: an old unit, or any unit with the old rule.
+Progress == finished = 2 \/ (ArrivalsCount /\ finished >= 1)
+\* Ground truth: an old unit finished.
+Backlog == finished = 2
+\* Any unit finished, recent or old. The next run starts after it.
+Headway == finished >= 1
+\* old_work_left(): a day older than the cutoff that is not fully read. A recent day is not
+\* backlog, because the next run finishes it. A boxscore that failed a short time ago does not
+\* wait: the run skips it.
+BoxWaits(d) == ~BoxDone(d) /\ ~RecentFail(Box(d))
+BacklogUnread == \E d \in Days : ~Recent(d) /\ (~ScoreDone(d) \/ BoxWaits(d))
+\* nhl() adds the stall error when the budget stopped a run that counted no progress, and
+\* either old work is unread or no unit finished at all (#178, #302).
+StallError == stopped /\ ~Progress /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
 WindowDays(k) == {d \in Days : (NWindows - k) * DaysPerWindow < d
                                 /\ d <= (NWindows - k + 1) * DaysPerWindow}
 \* A day that is still open is not required to be complete: the model does not record a good
@@ -111,7 +124,7 @@ Init == /\ okRead = [u \in Urls |-> FALSE]
         /\ age = [d \in Days |-> IF d \in OpenDays THEN 0 ELSE CutoffTicks]
         /\ calm = FALSE
         /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ due = {}
-        /\ fails = 0 /\ reads = 0 /\ progress = FALSE /\ backlog = FALSE
+        /\ fails = 0 /\ reads = 0 /\ finished = 0
         /\ clean = TRUE /\ stopped = FALSE /\ errors = FALSE
         /\ exitCode = 0
 
@@ -127,7 +140,7 @@ TypeOK ==
     /\ pc \in 1..(Steps + 1)
     /\ gaps \subseteq Urls /\ due \subseteq Days
     /\ fails \in 0..MaxFails /\ reads \in 0..Budget
-    /\ progress \in BOOLEAN /\ backlog \in BOOLEAN
+    /\ finished \in 0..2
     /\ clean \in BOOLEAN /\ stopped \in BOOLEAN /\ errors \in BOOLEAN
     /\ exitCode \in {0, 1, 75}
 
@@ -159,22 +172,21 @@ StartRun ==
     /\ gaps' = {u \in Urls : Abandoned(u)}
     \* In calm weather a re-read resolves every game, so no day is due again.
     /\ \E D \in SUBSET {d \in Days : okRead[Score(d)]} : due' = IF calm THEN {} ELSE D
-    /\ UNCHANGED <<store, calm, pc, fails, reads, progress, backlog, clean, stopped, errors,
+    /\ UNCHANGED <<store, calm, pc, fails, reads, finished, clean, stopped, errors,
                    exitCode>>
 
 \* A finished unit that the run counts. A recent day is not backlog, so the old rule
 \* (ArrivalsCount) is the only case where a recent day counts as progress.
 Finished(u, ok) == ok /\ ~okRead[u] /\ u.day \notin open
-CountsAsProgress(u, ok) == Finished(u, ok) /\ (ArrivalsCount \/ ~Recent(u.day))
-CountsAsBacklog(u, ok) == Finished(u, ok) /\ ~Recent(u.day)
+Max(a, b) == IF a > b THEN a ELSE b
 
 \* run.attempt(): one read in one transaction. It records the result in source_reads.
 \* A read finishes a unit for good when it works and the unit had no good read before.
 \* An open day never finishes, because the next run reads it again.
 Attempt(u, ok) ==
     /\ reads' = reads + 1
-    /\ progress' = (progress \/ CountsAsProgress(u, ok))
-    /\ backlog' = (backlog \/ CountsAsBacklog(u, ok))
+    /\ finished' = IF Finished(u, ok)
+                  THEN Max(finished, IF Recent(u.day) THEN 1 ELSE 2) ELSE finished
     \* A good read of a day that is still open does not complete it (day_is_complete needs a
     \* read after the close). streak and the ages still reset, as in source_reads.
     /\ okRead' = [okRead EXCEPT ![u] = @ \/ (ok /\ u.day \notin open)]
@@ -207,17 +219,17 @@ ScoreStep ==
     IN \/ /\ f >= MaxFails
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ u \in gaps \/ (u.day \notin due /\ Complete(u.day))
           /\ Advance(FALSE, 0)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads < Budget
@@ -234,18 +246,18 @@ BoxStep ==
         f == IF StageStart(pc) THEN 0 ELSE fails
     IN \/ /\ ~WantBox(u.day) \/ u \in gaps
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f >= MaxFails \/ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ RecentFail(u)
           /\ clean' = FALSE
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ ~RecentFail(u)
@@ -261,12 +273,13 @@ NhlStep ==
     /\ IF KindAt(pc) = "score" THEN ScoreStep ELSE BoxStep
     /\ UNCHANGED <<calm, phase, gaps, due, exitCode>>
 
-\* nhl() adds an error when the budget stopped the run before it finished one unit.
+\* nhl() adds the stall error (see StallError). A run that finished a recent day, with no old
+\* work unread, exits 75, and the next run goes on from there (#302).
 EndNhl ==
     /\ phase = "nhl" /\ pc = Steps + 1
     /\ phase' = "other"
-    /\ errors' = (errors \/ (stopped /\ ~progress /\ reads >= Budget))
-    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
+    /\ errors' = (errors \/ StallError)
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* MoneyPuck, ESPN, and Daily Faceoff run after the NHL steps. A failure sets refresh exit 1.
@@ -278,7 +291,7 @@ OtherSources ==
                  ELSE IF OtherBroken THEN {TRUE} ELSE BOOLEAN) :
           errors' = (errors \/ e)
     /\ phase' = "finish"
-    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, progress, backlog, clean,
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* The backfill branch of daily-prepare.sh: refresh_rc, then backfill_complete.
@@ -288,7 +301,7 @@ Finish ==
     /\ exitCode' = IF errors THEN 1 ELSE IF clean THEN 0 ELSE 75
     /\ marker' = (~errors /\ clean)
     /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ due' = {}
-    /\ fails' = 0 /\ reads' = 0 /\ progress' = FALSE /\ backlog' = FALSE
+    /\ fails' = 0 /\ reads' = 0 /\ finished' = 0
     /\ clean' = TRUE /\ stopped' = FALSE /\ errors' = FALSE
     /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, age, calm>>
 
@@ -320,30 +333,24 @@ ExitCodeRule == [][Finishing => /\ (exitCode' = 1 <=> errors)
                                  /\ (exitCode' = 75 => ~marker' /\ ~clean)
                                  /\ (exitCode' = 0 => marker')]_vars
 
-\* A run that the budget stops with no finished unit exits 1, not 75.
-StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
-                     => exitCode' = 1]_vars
+\* A run that the budget stops with no counted unit exits 1, not 75, while old work is unread or
+\* no unit finished.
+StallExitsOne == [][Finishing /\ StallError => exitCode' = 1]_vars
 
 \* The same rule, judged on the backlog alone. An arrival does not count here. With
 \* ArrivalsCount TRUE, a run can count an arrival as progress and still exit 75 with no
 \* backlog unit finished. This property fails then, and StallExitsOne does not. With
 \* ArrivalsCount FALSE, progress and backlog are equal, so this property is the same check as
 \* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
-BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
-                              => exitCode' = 1]_vars
+BacklogStallExitsOne ==
+    [][Finishing /\ stopped /\ ~Backlog /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
+       => exitCode' = 1]_vars
 
-\* The budget stall error is justified only when backlog work was left unread. The code counts
-\* progress on backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or
-\* none, and stops on the budget raises the stall error while the backlog is already done. When no
-\* source failed, that error is the only cause of exit 1, and the exit 1 is false: more budget is
-\* not needed for the backlog. A run with due days is left out, because the weather picks the due
-\* set and the budget may be too small for the due reads. This property is expected to fail
-\* (#191, #302). Its config is specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check
-\* that must fail.
-BacklogUnread == \E d \in Days : ~Recent(d) /\ ~(ScoreDone(d) /\ BoxDone(d))
-StallOnlyForBacklog ==
-    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ due = {}
-        /\ stopped /\ ~progress /\ reads >= Budget) => BacklogUnread]_vars
+\* The stall error needs old work that is still unread, or a run that finished no unit. With a
+\* recent day finished and no old work unread, the run exits 75, and the next run finishes them
+\* (#302).
+StallNeedsBacklogOrNoHeadway ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ errors') => (BacklogUnread \/ ~Headway)]_vars
 
 \* Liveness
 

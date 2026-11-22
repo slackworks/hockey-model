@@ -18,7 +18,7 @@ FILES = (
     "specs/daily_prepare_stall.cfg",
     "specs/daily_prepare_blocked.cfg",
     "specs/daily_prepare_cutoff.cfg",
-    "specs/daily_prepare_false_stall.cfg",
+    "specs/daily_prepare_recent.cfg",
 )
 for _name in FILES:
     require_path(ROOT / _name)

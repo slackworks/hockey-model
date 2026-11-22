@@ -18,7 +18,7 @@ CFGS = (
     ROOT / "specs" / "daily_prepare.cfg",
     ROOT / "specs" / "daily_prepare_stall.cfg",
     ROOT / "specs" / "daily_prepare_blocked.cfg",
-    ROOT / "specs" / "daily_prepare_false_stall.cfg",
+    ROOT / "specs" / "daily_prepare_recent.cfg",
     ROOT / "specs" / "daily_prepare_cutoff.cfg",
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
