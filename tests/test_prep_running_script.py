@@ -268,6 +268,22 @@ def test_a_payload_that_jq_cannot_read_is_not_an_empty_answer(fakes: Path, tmp_p
     assert "cannot read the workflow run list" in result.stderr
 
 
+@pytest.mark.parametrize("started", ["not-a-time", "2026-13-45T99:99:99Z"])
+def test_a_start_that_no_clock_read_can_use_names_its_run_and_its_job(
+    fakes: Path, tmp_path: Path, started: str
+) -> None:
+    """A stop with no message sends the reader to look for a cause that is not named."""
+    env = _env_for(
+        fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_JSON=_jobs(started)
+    )
+    result = _lookup(env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "cannot add" in result.stderr
+    assert started in result.stderr
+    assert "1000" in result.stderr
+
+
 def test_a_run_with_no_path_is_skipped_not_fatal(fakes: Path, tmp_path: Path) -> None:
     """One odd row must not stop the lookup, because a stop publishes no report."""
     payload = json.dumps(

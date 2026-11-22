@@ -128,7 +128,10 @@ job_holds() {
     echo "prep-running: cannot read the jobs of run ${run_id}: $answer" >&2
     return 1
   fi
-  names="$(printf '%s\n' "${!TIMEOUTS[@]}" | jq -R . | jq -cs .)" || return 1
+  if ! names="$(printf '%s\n' "${!TIMEOUTS[@]}" | jq -R . | jq -cs . 2>&1)"; then
+    echo "prep-running: cannot build the list of job names: $names" >&2
+    return 1
+  fi
   if ! answer="$(jq -rs --argjson names "$names" '
     .[].jobs[]
     | select(.conclusion != "skipped")
@@ -154,8 +157,12 @@ run_answer() {
     if [[ -z "$start" ]]; then
       start="$now"
     fi
-    end="$(jq -rn --arg start "$start" --argjson m "${TIMEOUTS[$job]}" \
-      '$start | fromdateiso8601 + ($m * 60) | todateiso8601')" || return 1
+    if ! end="$(jq -rn --arg start "$start" --argjson m "${TIMEOUTS[$job]}" \
+      '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1)"; then
+      echo "prep-running: cannot add ${TIMEOUTS[$job]} minutes to '${start}', which run" \
+        "${run_id} gave as the start of job ${job}: $end" >&2
+      return 1
+    fi
     if [[ -z "$latest_end" || "$end" > "$latest_end" ]]; then
       latest_end="$end"
       latest_minutes="${TIMEOUTS[$job]}"
@@ -191,13 +198,18 @@ status_answer() {
         latest_minutes="${TIMEOUTS[$name]}"
       fi
     done
-    end="$(jq -rn --arg start "$start" --argjson m "$latest_minutes" \
-      '$start | fromdateiso8601 + ($m * 60) | todateiso8601')" || return 1
+    if ! end="$(jq -rn --arg start "$start" --argjson m "$latest_minutes" \
+      '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1)"; then
+      echo "prep-running: cannot add ${latest_minutes} minutes to '${start}', which this" \
+        "script read as the current time: $end" >&2
+      return 1
+    fi
     printf '%s %s' "$end" "$latest_minutes"
     return 0
   fi
   while read -r id; do
     [[ -n "$id" ]] || continue
+    # run_answer names the cause on stderr, so this level adds nothing.
     answer="$(run_answer "$id")" || return 1
     answer="${answer% }"
     [[ -n "$answer" ]] || continue
