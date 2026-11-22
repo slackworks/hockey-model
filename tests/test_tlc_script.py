@@ -45,6 +45,7 @@ def test_list_prints_one_json_object_for_each_shard() -> None:
     rows = [json.loads(line) for line in result.stdout.splitlines()]
     assert [row["name"] for row in rows] == [
         "upgrade",
+        "registry",
         "stall",
         "blocked",
         "cutoff",
@@ -250,6 +251,7 @@ case "$*" in -version*) echo 'openjdk version "17.0.7" 2023-04-18' >&2; exit 0 ;
 echo "$*" >> "$FAKE_JAVA_LOG"
 case "$*" in
     *store_upgrade.cfg*) exit "${FAKE_UPGRADE_RC:-0}" ;;
+    *experiment_registry.cfg*) exit "${FAKE_REGISTRY_RC:-0}" ;;
     *daily_prepare_stall.cfg*) exit "${FAKE_STALL_RC:-0}" ;;
     *daily_prepare_blocked.cfg*) exit "${FAKE_BLOCKED_RC:-0}" ;;
     *daily_prepare_cutoff.cfg*) exit "${FAKE_CUTOFF_RC:-0}" ;;
@@ -267,6 +269,7 @@ def _run_with_fake_java(
     cutoff_rc: int = 0,
     recent_rc: int = 0,
     upgrade_rc: int = 0,
+    registry_rc: int = 0,
     shard: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run a copy of tlc.sh whose pinned hash matches a fake jar, and return the java calls."""
@@ -292,6 +295,7 @@ def _run_with_fake_java(
     env.update(
         FAKE_JAVA_LOG=str(log),
         FAKE_UPGRADE_RC=str(upgrade_rc),
+        FAKE_REGISTRY_RC=str(registry_rc),
         FAKE_STALL_RC=str(stall_rc),
         FAKE_BLOCKED_RC=str(blocked_rc),
         FAKE_CUTOFF_RC=str(cutoff_rc),
@@ -313,13 +317,14 @@ def _run_with_fake_java(
 def test_all_configs_pass_and_the_small_configs_run_first(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0)
     assert result.returncode == 0
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert "-config specs/store_upgrade.cfg " in calls[0]
-    assert "-config specs/daily_prepare_stall.cfg" in calls[1]
-    assert "-config specs/daily_prepare_blocked.cfg" in calls[2]
-    assert "-config specs/daily_prepare_cutoff.cfg " in calls[3]
-    assert "-config specs/daily_prepare_recent.cfg " in calls[4]
-    assert "-config specs/daily_prepare.cfg " in calls[5]
+    assert "-config specs/experiment_registry.cfg " in calls[1]
+    assert "-config specs/daily_prepare_stall.cfg" in calls[2]
+    assert "-config specs/daily_prepare_blocked.cfg" in calls[3]
+    assert "-config specs/daily_prepare_cutoff.cfg " in calls[4]
+    assert "-config specs/daily_prepare_recent.cfg " in calls[5]
+    assert "-config specs/daily_prepare.cfg " in calls[6]
     assert all("-workers auto" in call for call in calls)
 
 
@@ -330,38 +335,45 @@ def test_a_failed_first_config_stops_before_the_others(tmp_path: Path) -> None:
     assert "specs/store_upgrade.cfg failed" in result.stderr
 
 
+def test_a_failed_registry_config_stops_before_the_daily_prepare_configs(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, registry_rc=12)
+    assert result.returncode == 12
+    assert len(calls) == 2
+    assert "specs/experiment_registry.cfg failed" in result.stderr
+
+
 def test_a_failed_stall_config_stops_before_the_others_of_its_spec(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=12, main_rc=0)
     assert result.returncode == 12
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert "specs/daily_prepare_stall.cfg failed" in result.stderr
 
 
 def test_a_failed_blocked_config_stops_before_the_main_config(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, blocked_rc=13)
     assert result.returncode == 13
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert "specs/daily_prepare_blocked.cfg failed" in result.stderr
 
 
 def test_a_failed_cutoff_config_stops_before_the_main_config(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, cutoff_rc=12)
     assert result.returncode == 12
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert "specs/daily_prepare_cutoff.cfg failed" in result.stderr
 
 
 def test_a_failed_main_config_returns_its_code(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
     assert result.returncode == 13
-    assert len(calls) == 6
+    assert len(calls) == 7
     assert "specs/daily_prepare.cfg failed" in result.stderr
 
 
 def test_a_failed_recent_config_stops_before_the_main_config(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, recent_rc=13)
     assert result.returncode == 13
-    assert len(calls) == 5
+    assert len(calls) == 6
     assert "specs/daily_prepare_recent.cfg failed" in result.stderr
 
 

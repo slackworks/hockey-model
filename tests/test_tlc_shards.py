@@ -76,6 +76,7 @@ def test_a_change_of_the_fit_command_selects_no_shard() -> None:
 
 DAILY = [s["name"] for s in DATA["shards"] if s["spec"] == "specs/daily_prepare.tla"]
 UPGRADE = [s["name"] for s in DATA["shards"] if s["spec"] == "specs/store_upgrade.tla"]
+REGISTRY = [s["name"] for s in DATA["shards"] if s["spec"] == "specs/experiment_registry.tla"]
 
 
 def test_a_change_of_the_refresh_command_selects_the_daily_prepare_shards() -> None:
@@ -87,9 +88,22 @@ def test_a_change_of_the_upgrade_code_selects_the_upgrade_shard_only() -> None:
         assert shards.plan(DATA, [path]) == UPGRADE
 
 
+def test_a_change_of_the_registry_code_selects_the_registry_shard_only() -> None:
+    for path in (
+        "src/hockey_model/experiments/history.py",
+        "src/hockey_model/experiments/looks.py",
+    ):
+        assert shards.plan(DATA, [path]) == REGISTRY
+
+
+def test_a_change_of_a_registry_record_selects_the_registry_shard() -> None:
+    assert shards.plan(DATA, ["experiments/0001-first-look.json"]) == REGISTRY
+
+
 def test_a_change_of_a_spec_selects_the_shards_that_run_it_and_a_config_selects_its_shard() -> None:
     assert shards.plan(DATA, ["specs/daily_prepare.tla"]) == DAILY
     assert shards.plan(DATA, ["specs/store_upgrade.tla"]) == UPGRADE
+    assert shards.plan(DATA, ["specs/experiment_registry.tla"]) == REGISTRY
     assert shards.plan(DATA, ["specs/daily_prepare_recent.cfg"]) == ["recent"]
 
 

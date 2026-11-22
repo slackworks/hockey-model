@@ -430,6 +430,7 @@ Behavior:
    If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
    The `upgrade` shard runs `specs/store_upgrade.cfg` on `specs/store_upgrade.tla` first (#263).
+   The `registry` shard runs `specs/experiment_registry.cfg` on `specs/experiment_registry.tla` second (#262).
    For `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, `specs/daily_prepare_recent.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
 8. Exit with the TLC exit code.

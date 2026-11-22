@@ -216,3 +216,29 @@ def test_a_record_is_outlived_exactly_when_a_higher_number_is_a_confirmation(
 
 def test_a_name_that_is_not_a_record_id_never_outlives_a_record() -> None:
     assert outlived("0001-a", ["9999", "notes", "0002_a"], lambda _: True) is False
+
+
+def test_a_ran_record_renamed_with_an_edit_is_a_deleted_record(
+    repo: Path, registry_dir: Path
+) -> None:
+    """Git pairs a removed file with an added file by likeness, so a rename must not matter."""
+    register(registry_dir, _SPENT | {"id": "0002-ran", "look_number": 1})
+    _commit(repo, "register and run")
+    _git(repo, "mv", "experiments/0002-ran.json", "experiments/0002-moved.json")
+    register(registry_dir, _SPENT | {"id": "0002-moved", "title": "Another title"})
+    _commit(repo, "move it")
+    result = check_all(repo_root=repo)
+    assert result["ok"] is False
+    assert any("0002-ran: tracked" in error for error in result["errors"])
+
+
+def test_a_new_record_in_the_commit_that_deletes_an_unrun_record_is_no_loss(
+    repo: Path, registry_dir: Path
+) -> None:
+    """The new record did not outlive the deleted one, so a squash merge keeps the verdict."""
+    register(registry_dir, {"id": "0002-unrun", "look_number": 1})
+    _commit(repo, "register one record")
+    _git(repo, "rm", "-q", "experiments/0002-unrun.json")
+    register(registry_dir, {"id": "0003-new", "look_number": 1, "title": "Another title"})
+    _commit(repo, "replace it")
+    assert check_all(repo_root=repo)["ok"] is True

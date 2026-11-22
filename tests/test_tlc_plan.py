@@ -19,6 +19,7 @@ NAMES = [shard["name"] for shard in SHARDS]
 # The shards that check the daily prepare spec. A change of that code starts these only.
 DAILY = [shard["name"] for shard in SHARDS if shard["spec"] == "specs/daily_prepare.tla"]
 UPGRADE = [shard["name"] for shard in SHARDS if shard["spec"] == "specs/store_upgrade.tla"]
+REGISTRY = [shard["name"] for shard in SHARDS if shard["spec"] == "specs/experiment_registry.tla"]
 NULL_SHA = "0" * 40
 
 
@@ -100,6 +101,8 @@ def test_a_pull_request_that_changes_the_refresh_code_selects_the_daily_prepare_
         ("specs/store_upgrade.cfg", UPGRADE),
         ("src/hockey_model/store/upgrade.py", UPGRADE),
         ("src/hockey_model/store/schema.sql", UPGRADE),
+        ("specs/experiment_registry.cfg", REGISTRY),
+        ("src/hockey_model/experiments/history.py", REGISTRY),
         ("scripts/tlc.sh", NAMES),
     ],
 )
