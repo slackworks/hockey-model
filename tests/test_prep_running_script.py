@@ -166,7 +166,7 @@ def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_pat
                     "started_at": "2026-11-04T06:00:00Z",
                 },
                 # The skip job of the same run holds the group, and it is the holder.
-                {"name": "skip", "status": "completed", "started_at": _CREATED},
+                {"name": "skip", "status": "in_progress", "started_at": _CREATED},
             ]
         }
     )
@@ -174,6 +174,32 @@ def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_pat
     result = _lookup({**env, "FAKE_JOBS_JSON": skipped})
     assert result.returncode == 0, result.stderr
     assert _printed_end(result, 10) == _end(_CREATED, 10)
+
+
+def test_a_prepare_job_that_stopped_early_holds_no_group(fakes: Path, tmp_path: Path) -> None:
+    """A run whose job died keeps its run status, and the job list is the record (#311).
+
+    GitHub keeps a run `in_progress` after one job fails or is cancelled, because the jobs
+    that need it keep running. A start from such a job is not a window that the report
+    waits behind, and the run then reads as a holder for hours after it stopped.
+    """
+    stopped = "2026-11-04T05:00:00Z"
+    jobs = json.dumps(
+        {
+            "jobs": [
+                {
+                    "name": "prepare",
+                    "status": "completed",
+                    "conclusion": "cancelled",
+                    "started_at": stopped,
+                },
+                {"name": "gate", "status": "in_progress", "started_at": stopped},
+            ]
+        }
+    )
+    env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
+    result = _lookup({**env, "FAKE_JOBS_JSON": jobs})
+    assert (result.returncode, result.stdout) == (0, "")
 
 
 def test_the_run_with_the_latest_end_names_the_wait(fakes: Path, tmp_path: Path) -> None:

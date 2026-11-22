@@ -115,7 +115,10 @@ prepare_ids() {
 
 # Print "<JOB> <START>" for each job of run $1 that the --timeout flags name and that holds
 # the group. A job that has not started prints an empty START, because it can still use its
-# whole timeout. A job that concluded with `skipped` holds nothing, so it prints no line.
+# whole timeout. The holder is a job that GitHub holds just before it starts or that has
+# started, so a job with any other state prints no line. The set that holds is written out,
+# because each job state that does not hold is a separate state: a skipped job, a cancelled
+# job, one that failed before it touched the store, and one that completed hours ago.
 #
 # A --timeout name that the run does not carry prints no line, and that is not an error. The
 # jobs of the split prepare appear one at a time (#311): while the skip job runs, the job list
@@ -133,8 +136,10 @@ job_holds() {
     return 1
   fi
   if ! answer="$(jq -rs --argjson names "$names" '
+    def holds: . == "in_progress" or . == "queued" or . == "waiting"
+      or . == "pending" or . == "requested";
     .[].jobs[]
-    | select(.conclusion != "skipped")
+    | select(.status | holds)
     | select(.name as $n | $names | index($n))
     | "\(.name) \(if .status == "in_progress" or .status == "completed"
         then (.started_at // "") else "" end)"
