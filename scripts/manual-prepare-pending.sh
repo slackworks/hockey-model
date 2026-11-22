@@ -21,6 +21,9 @@ set -euo pipefail
 source "$(dirname "$0")/usage.sh"
 
 workflow="daily-prepare.yml"
+# A count of the positional arguments, because a guard that compares the value with the
+# default accepts the default twice.
+named=0
 while (($# > 0)); do
   case "$1" in
   -h | --help)
@@ -32,11 +35,12 @@ while (($# > 0)); do
     exit 2
     ;;
   *)
-    if [[ "$workflow" != "daily-prepare.yml" ]]; then
+    if ((named > 0)); then
       echo "manual-prepare-pending: only one workflow name is allowed; see --help" >&2
       exit 2
     fi
     workflow="$1"
+    named=1
     shift
     ;;
   esac

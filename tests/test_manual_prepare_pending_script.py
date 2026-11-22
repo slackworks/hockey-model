@@ -87,6 +87,8 @@ def test_the_workflow_argument_ignores_the_default_workflow(fakes: Path, tmp_pat
     ("args", "message"),
     [
         (("mutation.yml", "other.yml"), "only one workflow name"),
+        # The default twice is two names too, and a guard on the value lets it through.
+        (("daily-prepare.yml", "daily-prepare.yml"), "only one workflow name"),
         (("mutation",), "is not a workflow file name"),
         (("extra/daily-prepare.yml",), "is not a workflow file name"),
     ],
