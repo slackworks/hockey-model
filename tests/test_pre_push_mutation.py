@@ -200,6 +200,18 @@ def test_a_run_that_failed_before_its_stats_leaves_a_directory_to_remove(
     assert not (repo / "mutants").exists()
 
 
+def test_a_mutants_directory_with_no_file_that_mutmut_writes_is_left_alone(
+    mod: ModuleType, repo: Path
+) -> None:
+    """The allowlist holds generic names, so it alone cannot tell mutmut output from a user."""
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "pyproject.toml").write_text("", encoding="utf-8")
+    (repo / "mutants" / "uv.lock").write_text("", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match="which mutmut always writes"):
+        mod.clear_generated_mutants(repo)
+    assert (repo / "mutants").exists()
+
+
 def test_a_mutants_path_that_is_a_file_names_its_own_fix(mod: ModuleType, repo: Path) -> None:
     """rmtree raises NotADirectoryError on a file, and that names no fix to the reader."""
     (repo / "mutants").write_text("mine", encoding="utf-8")

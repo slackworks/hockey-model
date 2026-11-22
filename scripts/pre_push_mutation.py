@@ -57,6 +57,9 @@ MUTATION_LOG = Path(".tmp") / "mutation-changed.log"
 MUTANTS_OUTPUT_NAMES = frozenset(
     {"mutmut-stats.json", "pyproject.toml", "src", "tests", "uv.lock", ".hypothesis"}
 )
+# A directory that names only the generic part of the allowlist can be a directory of the user.
+# mutmut always writes the stats file or the copied sources, so the clean needs one of these.
+MUTANTS_OWNER_NAMES = frozenset({"mutmut-stats.json", "src"})
 # Statuses that a mutant can carry when the tests do not kill it. The changed lines gate them.
 SURVIVING = frozenset({"survived", "no tests"})
 # A mutant that ran past its limit. The changed lines gate it like a survivor.
@@ -351,7 +354,9 @@ def clear_generated_mutants(repo: Path) -> None:
 
     A run that fails before its stats phase writes no ``mutmut-stats.json``, and the directory
     then holds only copied sources and tests. That is still mutmut output, so it is removed
-    (#316). Any other name is left in place, because the hook does not own it.
+    (#316). Any other name is left in place, because the hook does not own it. A directory
+    that names none of the files mutmut always writes is left in place too, because the
+    allowlist alone cannot tell it from a directory of the user.
     """
     target = repo / MUTANTS_DIR
     if not target.exists():
@@ -366,6 +371,12 @@ def clear_generated_mutants(repo: Path) -> None:
         raise PushCheckError(
             f"{MUTANTS_DIR}/ does not hold only mutmut output, so it was not removed. "
             f"Move {sorted(names - MUTANTS_OUTPUT_NAMES)} aside, then push again."
+        )
+    # The allowlist holds generic names, so a directory of the user can pass the check above.
+    if not names & MUTANTS_OWNER_NAMES:
+        raise PushCheckError(
+            f"{MUTANTS_DIR}/ holds none of {sorted(MUTANTS_OWNER_NAMES)}, which mutmut always "
+            f"writes, so it was not removed. Move it aside, then push again."
         )
     shutil.rmtree(target)
 
