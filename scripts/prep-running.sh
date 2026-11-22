@@ -60,12 +60,18 @@ while (($# > 0)); do
       echo "prep-running: --timeout '$2' is not JOB=MINUTES; see --help" >&2
       exit 2
     fi
-    if [[ ! "$minutes" =~ ^[0-9]+$ ]] || ((10#$minutes < 1 || 10#$minutes > 360)); then
+    if [[ ! "$minutes" =~ ^[0-9]{1,3}$ ]]; then
       echo "prep-running: --timeout '$2' needs whole minutes from 1 to 360, which is the" \
         "GitHub job limit; see --help" >&2
       exit 2
     fi
-    TIMEOUTS["$job"]="$((10#$minutes))"
+    # The arithmetic reads a leading zero as base 8, so "08" would stop this script.
+    if [[ "$minutes" == 0* ]] || ((minutes < 1 || minutes > 360)); then
+      echo "prep-running: --timeout '$2' needs whole minutes from 1 to 360, with no leading" \
+        "zero; see --help" >&2
+      exit 2
+    fi
+    TIMEOUTS["$job"]="$minutes"
     shift 2
     ;;
   -h | --help)

@@ -350,6 +350,36 @@ def test_an_unknown_argument_is_refused(fakes: Path, tmp_path: Path) -> None:
     assert "unknown argument" in result.stderr
 
 
+@pytest.mark.parametrize("minutes", ["1", "10", "360"])
+def test_a_whole_minute_count_is_accepted(fakes: Path, tmp_path: Path, minutes: str) -> None:
+    """The ends of the accepted range are the ones a parser gets wrong."""
+    result = _run("prep-running.sh", _env(fakes, tmp_path), "--timeout", f"skip={minutes}")
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("minutes", ["0", "0.5", "361", "9999", "", "abc", "-1", " 10", "1 0"])
+def test_a_minute_count_that_is_not_whole_and_inside_the_limit_is_refused(
+    fakes: Path, tmp_path: Path, minutes: str
+) -> None:
+    result = _run("prep-running.sh", _env(fakes, tmp_path), "--timeout", f"skip={minutes}")
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "whole minutes" in result.stderr
+
+
+@pytest.mark.parametrize("minutes", ["08", "008", "060"])
+def test_a_leading_zero_is_refused_with_its_own_reason(
+    fakes: Path, tmp_path: Path, minutes: str
+) -> None:
+    """A leading zero reads as base 8, so the message names the zero and not the range.
+
+    The two failures read the same to a caller, and they need different fixes.
+    """
+    result = _run("prep-running.sh", _env(fakes, tmp_path), "--timeout", f"skip={minutes}")
+    assert result.returncode == 2
+    assert "leading zero" in result.stderr
+
+
 def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
