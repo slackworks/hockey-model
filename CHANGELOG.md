@@ -105,6 +105,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stand a report run aside while a manual `daily-prepare` run waits or runs, when the run would only replace a published day. Its build job shares the store group and would take the one waiting slot that the group keeps, so the manual dispatch was cancelled with nothing to show for it (#295). A day with no release keeps the slot, because a day with no report is worse than a delayed rebuild. [fix:report]
 - Stand a scheduled `mutation` run aside while a manual run waits or runs. The weekly run could take the one waiting slot of its concurrency group and cancel a manual dispatch, as a scheduled `daily-prepare` run did (#296). `scripts/manual-prepare-pending.sh` takes the workflow file name, so both workflows call it. [fix:ci]
 - Compare every commit of an experiment record with its registration commit. A frozen field that changed before a run and changed back after it passed `experiments check`, because only the head was compared. The error names the commit that held the changed field.
 - Read the history of one record path, and find deleted records without rename detection. `git log --follow` dropped the commits of a path when a later commit moved a file onto it, so a committed result could leave the history. A rename is now a deletion and an addition.

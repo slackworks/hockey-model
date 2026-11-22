@@ -28,9 +28,11 @@
 #   dry-run             the report is built and not published
 #   prepare-wait        a prepare run holds the store group and can run past the puck drop, so
 #                       this run would publish after it; the run is skipped and not built
+#   manual-wait         a manual prepare run waits or runs, and this run would replace a
+#                       published day; the run is skipped and not built (#295)
 # Exits non-zero when the schedule payload is malformed, the release lookup fails, the
-# decision step fails or prints a payload that lacks a field, or the day has no game inside
-# its window while the feed lists a game outside it.
+# decision step fails or prints a payload that lacks a field, the manual-run lookup fails,
+# or the day has no game inside its window while the feed lists a game outside it.
 set -euo pipefail
 
 day=""
@@ -205,5 +207,27 @@ warning="$(jq -r '.warning // ""' <<<"$decision")"
 if [[ -n "$warning" ]]; then
   echo "$warning" >&2
 fi
+
+# A run that only replaces a published day can stand aside. A day with no release does not,
+# because it would then have no report at all. The build job shares the store group with a
+# prepare run, and it would take the one waiting slot that the group keeps, so a manual
+# prepare that waits there is lost (#295). A failed lookup stops the run: a wrong "no" loses
+# the manual run, and the next hour tries again.
+reason="$(jq -r '.reason' <<<"$decision")"
+if [[ "$reason" == "replace" ]]; then
+  pending="$(bash "$(dirname "$0")/manual-prepare-pending.sh")" || {
+    echo "report-gate: the manual prepare lookup failed; its error is above" >&2
+    exit 1
+  }
+  if [[ "$pending" == "yes" ]]; then
+    echo "::warning::report-gate: a manual daily-prepare run waits or runs, and $day already" \
+      "has a release. This run would replace the day, and its build would take the one" \
+      "waiting slot of the hockey-model-store group, so it stands aside (#295)." >&2
+    jq -c --arg tag "$tag" --arg date "$day" \
+      '{due: false, publish: false, tag: $tag, reason: "manual-wait", date: $date}' <<<"{}"
+    exit 0
+  fi
+fi
+
 jq -c --arg tag "$tag" --arg date "$day" '{due, publish, tag: $tag, reason, date: $date}' \
   <<<"$decision"

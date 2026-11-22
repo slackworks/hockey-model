@@ -27,7 +27,8 @@ jobs:
   # GitHub keeps one waiting run for a concurrency group, and a newer waiting run replaces an
   # older one. A scheduled run that joined the group would cancel a manual run that waits
   # there, so this job has no group and a scheduled run stands aside while a manual run waits or
-  # runs (#285). The report build can still take the waiting slot of a manual run (#295).
+  # runs (#285). A report gate whose run would replace a published day stands aside too, so a
+  # report build takes that slot only for a day with no release (#295).
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5

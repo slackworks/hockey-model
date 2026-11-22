@@ -99,9 +99,13 @@ The `prepare` job of `daily-prepare.yml` holds the group, and a `gate` job befor
 On a scheduled run the gate calls `scripts/manual-prepare-pending.sh`, and the run stands aside while a manual `daily-prepare` run is pending, queued, waiting, or running.
 A manual dispatch never stands aside.
 A failed lookup fails the gate, so the hourly run turns red and the next hour retries.
-Two cases remain.
-The `build` job of `daily-report.yml` can still take the waiting slot of a manual prepare, because the report must not wait for an operator's rebuild (#295).
-A scheduled gate and a manual dispatch that start in the same few seconds can also race.
+A report run that would only replace a published day stands aside in the same way (#295).
+Its gate calls the same script before it decides, and it skips with reason `manual-wait` while a manual `daily-prepare` run is pending, queued, waiting, or running.
+The report keeps the slot only when the day has no release, because a day with no report is worse than a delayed rebuild.
+A report hour that stands aside leaves the published report in place, and the next hour tries again.
+A failed lookup fails the gate, for the same reason as on the prepare side.
+One case remains.
+A scheduled gate and a manual dispatch that start in the same few seconds can race.
 
 Both workflows share one concurrency group, because both write the cached store.
 The group is on the `build` job of `daily-report.yml`, not on the workflow, so the gate job starts at the trigger.

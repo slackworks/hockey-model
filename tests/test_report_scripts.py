@@ -75,6 +75,88 @@ def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_pat
     }
 
 
+# --- gate: a manual prepare waits (#295) --------------------------------------
+
+
+_PREPARE_WORKFLOW = ".github/workflows/daily-prepare.yml"
+
+
+def _manual_prepare(*runs: tuple[str, str]) -> str:
+    """Return a run list payload. Each pair is the workflow path and the event."""
+    rows = [{"id": 2000 + n, "path": path, "event": event} for n, (path, event) in enumerate(runs)]
+    return json.dumps({"workflow_runs": rows})
+
+
+def _a_manual_prepare() -> str:
+    """Return the run list payload of one waiting manual daily-prepare run."""
+    return _manual_prepare((_PREPARE_WORKFLOW, "workflow_dispatch"))
+
+
+def test_gate_stands_aside_a_replace_while_a_manual_prepare_waits(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The build would take the one waiting slot of the store group, and the manual run is lost."""
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "due": False,
+        "publish": False,
+        "tag": TAG,
+        "reason": "manual-wait",
+        "date": DAY,
+    }
+    assert "::warning::report-gate: a manual daily-prepare run waits or runs" in result.stderr
+    assert "#295" in result.stderr
+
+
+def test_gate_replaces_a_published_day_when_no_manual_prepare_waits(
+    fakes: Path, tmp_path: Path
+) -> None:
+    env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "replace"
+
+
+def test_gate_keeps_a_due_run_when_a_manual_prepare_waits(fakes: Path, tmp_path: Path) -> None:
+    """A day with no release stands aside for nothing, because that would lose the report."""
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "due"
+    assert "manual-wait" not in result.stdout
+
+
+def test_gate_does_not_ask_about_a_manual_prepare_on_an_already_published_day(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The run builds nothing, so it takes no slot, and it needs no lookup."""
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(due=False), FAKE_RELEASES=f"{TAG}\n")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert json.loads(result.stdout)["reason"] == "already-published"
+    assert not any("workflow_dispatch" in line for line in _calls(tmp_path))
+
+
+def test_gate_fails_when_the_manual_prepare_lookup_fails(fakes: Path, tmp_path: Path) -> None:
+    """A wrong `no` cancels the manual run, so a failed lookup stops this run instead."""
+    env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_RUNS_FAIL="1")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "the manual prepare lookup failed" in result.stderr
+    assert "cannot read the in_progress workflow runs" in result.stderr
+
+
 def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path: Path) -> None:
     due = due_json()
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
