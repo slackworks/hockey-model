@@ -13,13 +13,12 @@
 # Exits 2 on bad arguments.
 set -euo pipefail
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
-
 case "${1:-}" in
 "") ;;
 -h | --help)
+  # The helper loads here, so a run with a bare PATH reaches the jq check below.
+  # shellcheck source=scripts/usage.sh
+  source "$(dirname "$0")/usage.sh"
   usage
   exit 0
   ;;

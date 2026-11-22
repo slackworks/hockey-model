@@ -10,9 +10,8 @@
 # missing, has the wrong type, or the date is not YYYY-MM-DD. Exit 2 for a bad argument.
 set -euo pipefail
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 file=""
 while (($# > 0)); do

@@ -20,9 +20,8 @@ set -euo pipefail
 
 WORKFLOW="ci.yml"
 
-usage() {
-  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 fail() {
   echo "check-commit-ci: $1" >&2

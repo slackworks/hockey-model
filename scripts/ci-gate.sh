@@ -19,9 +19,8 @@
 # variable.
 set -euo pipefail
 
-usage() {
-  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 case "${1:-}" in
 -h | --help)

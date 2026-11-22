@@ -25,9 +25,8 @@ set -euo pipefail
 # shellcheck source=scripts/release-exists.sh
 source "$(dirname "$0")/release-exists.sh"
 
-usage() {
-  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 fail() {
   echo "publish-release: $1" >&2

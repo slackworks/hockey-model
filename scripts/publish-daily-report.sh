@@ -20,9 +20,8 @@ set -euo pipefail
 day=""
 report_dir=""
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 while (($# > 0)); do
   case "$1" in
