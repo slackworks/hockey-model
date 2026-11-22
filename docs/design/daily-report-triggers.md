@@ -130,6 +130,8 @@ A test compares those flags with the `timeout-minutes` of each job, so a rename 
 
 The `prepare` job of the split prepare does not exist in the job list while `skip` runs, and it never exists when the day needs no rebuild.
 The lookup therefore refuses no job name at run time, and an hour that finds a name matches nothing.
+A run that has started no holder yet names the longest timeout instead, because the group can admit the rebuild job first.
+A forced dispatch skips the `skip` job and goes straight to the rebuild, so the long window is the one to plan for.
 
 One case remains.
 A `skip` job that reads a prepared store at minute 14 can find that the day needs the rebuild, and then the `prepare` job takes the group for up to 180 minutes.

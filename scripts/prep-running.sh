@@ -32,7 +32,8 @@
 # means it waits for a runner. This script uses the current time for both, because that is the
 # earliest instant that the run can start. The run object does carry `run_started_at` in
 # those states, but the value is its creation time, and that would read as a run that ends
-# early enough to leave the report room.
+# early enough to leave the report room. Such a run names the longest of the --timeout values,
+# because the group can admit its rebuild job first (#311).
 #
 # Exits 2 when the answer is not known: no run list, no gh, or a list that cannot be read.
 # A caller MUST NOT read a failed lookup as "no prepare": a wrong answer of none lets the
@@ -180,13 +181,13 @@ status_answer() {
     return 0
   fi
   # A run that the group holds, or one that waits for a runner or an approval, has no job
-  # start to read. Its creation time is not a start, so every window opens now. The run's
-  # first job to take the group is the shortest one, and the earliest end is the answer that
-  # cannot claim the group frees later than it does.
+  # start to read. Its creation time is not a start, so every window opens now. The group
+  # admits whichever job it reaches first, and a forced run reaches the rebuild without a
+  # check job, so the longest window is the one that the report must plan for (#311).
   if [[ "$status" != "in_progress" ]]; then
     start="$now"
     for name in "${!TIMEOUTS[@]}"; do
-      if [[ -z "$latest_minutes" || "${TIMEOUTS[$name]}" -lt "$latest_minutes" ]]; then
+      if [[ -z "$latest_minutes" || "${TIMEOUTS[$name]}" -gt "$latest_minutes" ]]; then
         latest_minutes="${TIMEOUTS[$name]}"
       fi
     done

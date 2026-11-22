@@ -209,9 +209,10 @@ def test_a_prepare_held_by_the_group_opens_its_window_now(fakes: Path, tmp_path:
     env = _env_for(fakes, tmp_path, "pending", (_PREPARE, None))
     result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    # Not the creation time: the run can still use its full window from now.
-    end = _printed_end(result, 10)
-    assert end != _end(_CREATED, 10)
+    # Not the creation time: the run can still use its full window from now. The group can
+    # admit the rebuild job first, so the long window is the answer (#311).
+    end = _printed_end(result, 180)
+    assert end != _end(_CREATED, 180)
     assert _ISO.match(end), end
 
 
@@ -219,7 +220,7 @@ def test_a_queued_prepare_opens_its_window_now(fakes: Path, tmp_path: Path) -> N
     env = _env_for(fakes, tmp_path, "queued", (_PREPARE, None))
     result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert _printed_end(result, 10) != _end(_CREATED, 10)
+    assert _printed_end(result, 180) != _end(_CREATED, 180)
 
 
 @pytest.mark.parametrize("status", ["in_progress", "pending", "queued", "waiting", "requested"])

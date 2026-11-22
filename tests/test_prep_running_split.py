@@ -125,6 +125,30 @@ def test_a_job_that_has_not_started_opens_its_window_now(fakes: Path, tmp_path: 
     assert minutes == "10"
 
 
+def _runs_queued() -> str:
+    return json.dumps({"workflow_runs": [{"id": 1000, "path": _PREPARE}]})
+
+
+def test_a_run_that_has_not_started_names_its_longest_window(fakes: Path, tmp_path: Path) -> None:
+    """A queued run can start its prepare job first, so the long window is the one to plan for.
+
+    A forced run skips the skip job and goes straight to the rebuild, and a run that the
+    report build holds starts with whichever prepare job the group admits next. The short
+    window would under-claim, and the report would then start behind the live rebuild (#311).
+    """
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON_QUEUED=_runs_queued(),
+        FAKE_JOBS_JSON=_jobs(_job("skip", None, status="queued")),
+    )
+    result = _run("prep-running.sh", env, *_TIMEOUTS)
+    assert result.returncode == 0, result.stderr
+    end, minutes = result.stdout.split()
+    assert _ISO.match(end), end
+    assert minutes == "180"
+
+
 def test_a_timeout_flag_is_required(fakes: Path, tmp_path: Path) -> None:
     """The caller names the timeouts, so the script never guesses one from the workflow."""
     result = _run("prep-running.sh", _env(fakes, tmp_path))
