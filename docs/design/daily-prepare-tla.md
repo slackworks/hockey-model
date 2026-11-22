@@ -59,7 +59,8 @@ The prose names constants and does not repeat their values, because the values l
 5. `read_days()` and `read_boxscores()` count the units that they finished for good and that are older than `BACKLOG_BEFORE` before the game day of `now`.
    A score day is finished when its read made it complete.
    A boxscore is finished when its read worked.
-   An open day and a due day do not count, because the next run reads them again.
+   A due day counts when its read resolved a game, because the next run then has fewer due games (#303).
+   An open day does not count, because the next run reads it again.
    A day that closed since the last run does not count, because a daily run completes one such day first.
    Without this rule, that day would count as progress, and a run that the budget stops would exit 75 and never fail.
 6. After the loop, `nhl()` adds an error when the first read that stopped the loop timed out and no old unit was finished, and either no unit of any age was finished or `old_work_left()` is true.
@@ -70,8 +71,8 @@ The prose names constants and does not repeat their values, because the values l
    The error names `--budget-seconds`, so the refresh exits 1 and not 75 (#178).
    A run that finished a recent day, with no old work left, adds no error, so it exits 75, and the next run continues (#302).
    A run that finished no unit adds the error, because the next run with the same budget stops at the same place.
-   A due day whose re-read resolves its game counts as zero, so a run that spends its budget on due days gets the error once.
-   The next run continues, so this is a single false exit 1 and not a loop (#303).
+   A run that resolves a game of a due day and then stops on the budget adds no error.
+   A run that re-reads due days and resolves none of their games finished nothing, so it adds the error: the next run stops at the same place.
 
 ### Score days: `store/refresh_nhl.py`, `read_days()`
 
@@ -388,7 +389,8 @@ The first one was a limit of the code. Issue #178 fixed it.
    `EndNhl` has the same condition (`StallError`).
    `specs/daily_prepare_recent.cfg` holds the case of a run that finished recent days, and `StallNeedsBacklogOrNoHeadway` checks the rule.
    The property covers a run with no source failure, because a failed read makes exit 1 correct, and it is an action property of `EndNhl`, where only the stall raises an error.
-   A run that spends its budget on due days still gets the error once, as before (#303).
+   The model does not count a due re-read as finished, because a due day exists in the model only in bad weather, when a good read can leave a game open.
+   The code counts a re-read that resolved a game, so the model raises the error in at least every run where the code does.
 
 ## Files to add or change
 
