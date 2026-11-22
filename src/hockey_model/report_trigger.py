@@ -31,11 +31,6 @@ def first_puck_drop(day_closes: datetime, starts: list[datetime]) -> datetime:
     return min(starts) if starts else day_closes
 
 
-# The longest prepare job (timeout-minutes of `prepare` in daily-prepare.yml). It answers a
-# caller that names no prepare end, and a prepare can hold the group no longer than this.
-PREP_DEFAULT_WINDOW = timedelta(minutes=180)
-
-
 def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | None = None) -> bool:
     """Return True while a run that starts at ``now`` can publish before the puck drop.
 
