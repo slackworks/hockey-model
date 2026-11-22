@@ -365,3 +365,45 @@ def test_the_list_that_was_just_saved_stays_even_when_other_files_look_newer(
     newcomer = _file(tmp_path, names=("newcomer",))
     newcomer.save(rows)
     assert newcomer.path.exists()
+
+
+def test_a_link_to_nothing_among_the_files_is_removed_and_does_not_stop_the_save(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    files = _lists(tmp_path, KEEP_FEATURE_LISTS, rows)
+    dangling = tmp_path / f"actual-3-{'f' * 12}-{OTHER}.json"
+    dangling.symlink_to(tmp_path / "missing.json")
+    newcomer = _file(tmp_path, names=("newcomer",))
+    newcomer.save(rows)
+    assert newcomer.path.exists()
+    # The link ranks as a list of its own, so the two oldest real lists go.
+    assert [f.path.exists() for f in files] == [False, False] + [True] * (len(files) - 2)
+
+
+def test_lists_with_the_same_file_time_are_ranked_by_tag_and_not_by_the_listing(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    files = _lists(tmp_path, KEEP_FEATURE_LISTS + 1, rows)
+    for file in files:
+        os.utime(file.path, (1_700_000_000, 1_700_000_000))
+    newcomer = _file(tmp_path, names=("newcomer",))
+    newcomer.save(rows)
+    by_tag = sorted(files, key=lambda f: f.path.name.split("-")[2])
+    assert [f.path.exists() for f in by_tag] == [True] * (KEEP_FEATURE_LISTS - 1) + [False] * 2
+
+
+def test_a_file_that_another_run_removed_before_the_mark_is_not_a_warning(
+    tmp_path: Path,
+    rows: list[TrainingRow],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file = _file(tmp_path)
+    file.save(rows)
+
+    def gone(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError(2, "gone")
+
+    monkeypatch.setattr(os, "utime", gone)
+    assert file.load(_ids(rows)) == rows
+    assert capsys.readouterr().err == ""

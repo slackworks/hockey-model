@@ -27,7 +27,7 @@ CACHE_DIR_NAME = "season-rows"
 # A season keeps the files of this many feature lists for each goalie mode, the newest by
 # file time. The daily prepare uses the list of the backtest and the list of the fit, and the
 # other places leave room for the lists of an experiment.
-KEEP_FEATURE_LISTS = 4
+KEEP_FEATURE_LISTS = 6
 
 
 def cache_dir(database: Path) -> Path:
@@ -61,10 +61,13 @@ class SeasonFile:
             )
 
     @property
-    def _slot(self) -> str:
+    def _tag(self) -> str:
         # A hash of the list keeps a feature name out of the file name.
-        tag = hashlib.sha256(json.dumps(self.names).encode()).hexdigest()[:12]
-        return f"{self.mode.value}-{self.season}-{tag}"
+        return hashlib.sha256(json.dumps(self.names).encode()).hexdigest()[:12]
+
+    @property
+    def _slot(self) -> str:
+        return f"{self.mode.value}-{self.season}-{self._tag}"
 
     @property
     def path(self) -> Path:
@@ -107,6 +110,8 @@ class SeasonFile:
         """Set the file time to now, so the lists that a run reads outlast the lists it does not."""
         try:
             os.utime(self.path)
+        except FileNotFoundError:
+            return  # another run removed the file after this run read it
         except OSError as exc:
             _warn(
                 f"cannot mark the cached rows {str(self.path)!r} as used ({exc}); check the owner"
@@ -164,10 +169,14 @@ class SeasonFile:
         paths: dict[str, list[Path]] = {}
         for path in self.directory.glob(f"{self.mode.value}-{self.season}-*-*.json"):
             tag = path.name.split("-")[2]
-            newest[tag] = max(newest.get(tag, 0.0), path.stat().st_mtime)
+            try:
+                # lstat, so a link that points nowhere ranks by its own time and is removed.
+                newest[tag] = max(newest.get(tag, 0.0), path.lstat().st_mtime)
+            except FileNotFoundError:
+                continue  # another run removed the file after the listing
             paths.setdefault(tag, []).append(path)
-        own = self._slot.split("-")[2]
-        ranked = sorted(newest, key=lambda tag: (tag != own, -newest[tag]))
+        # Lists with the same file time rank by tag, so the result does not follow the listing.
+        ranked = sorted(newest, key=lambda tag: (tag != self._tag, -newest[tag], tag))
         for tag in ranked[KEEP_FEATURE_LISTS:]:
             for old in paths[tag]:
                 self._remove(old)
