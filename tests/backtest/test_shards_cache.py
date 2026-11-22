@@ -138,3 +138,14 @@ def test_a_damaged_file_is_built_again_and_written_again(seeded: sqlite3.Connect
     _, guess = build_sharded(seeded, PLAN, FEATURES, 2)
     assert guess == _full(seeded, GoalieMode.GUESS)
     assert decode_rows(path.read_text())
+
+
+def test_a_file_with_no_rows_for_a_season_that_has_games_is_built_again(
+    seeded: sqlite3.Connection,
+) -> None:
+    build_sharded(seeded, PLAN, FEATURES, 2)
+    (path,) = [p for p in _directory(seeded).iterdir() if p.name.startswith("actual-5-")]
+    path.write_text("[]")
+    actual, _ = build_sharded(seeded, PLAN, FEATURES, 2)
+    assert actual == _full(seeded, GoalieMode.ACTUAL)
+    assert decode_rows(path.read_text())

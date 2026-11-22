@@ -53,13 +53,7 @@ def build_season_rows(path: Path, shard: Shard) -> list[TrainingRow]:
     """Build the rows of one shard in a worker, on its own read-only connection."""
     conn = open_read_only(path)
     try:
-        now = len(_final_games(conn, shard.burn_in))
-        if now != shard.final_games:
-            raise HockeyModelError(
-                f"backtest: the store changed during the run: the parent read "
-                f"{shard.final_games} final games and a worker read {now}; do not refresh "
-                "the store while a backtest or a fit runs, then run it again"
-            )
+        _check_unchanged(conn, shard)
         rows = training_rows(
             conn,
             shard.season,
@@ -76,6 +70,28 @@ def build_season_rows(path: Path, shard: Shard) -> list[TrainingRow]:
     return rows
 
 
+def _check_unchanged(conn: sqlite3.Connection, shard: Shard) -> None:
+    """Raise when the store of the worker differs from the store that the parent read.
+
+    The key of the season covers the data of the rows, so a worker never saves rows that the
+    key of the parent does not name.
+    """
+    now = len(_final_games(conn, shard.burn_in))
+    if now != shard.final_games:
+        raise HockeyModelError(
+            f"backtest: the store changed during the run: the parent read "
+            f"{shard.final_games} final games and a worker read {now}; do not refresh "
+            "the store while a backtest or a fit runs, then run it again"
+        )
+    key = season_keys(conn, shard.burn_in, shard.names).get(shard.season)
+    if key != shard.cache.key:
+        raise HockeyModelError(
+            f"backtest: the store changed during the run: the data of season {shard.season} "
+            "differs from what the parent read; do not refresh the store while a backtest or "
+            "a fit runs, then run it again"
+        )
+
+
 def _final_games(conn: sqlite3.Connection, burn_in: int) -> list[GameRow]:
     return [g for g in final_games_before(conn, LATEST_GAME) if g.season >= burn_in]
 
@@ -84,13 +100,16 @@ _Pair = tuple[GoalieMode, int]
 
 
 def _read_cached(
-    files: Mapping[_Pair, SeasonFile],
+    files: Mapping[_Pair, SeasonFile], games: Sequence[GameRow]
 ) -> tuple[dict[_Pair, list[TrainingRow]], list[_Pair]]:
-    """Return the rows that the cache holds, and the pairs that it does not hold."""
+    """Return the rows that the cache holds, and the pairs that it does not hold.
+
+    A file counts only when it holds the final games of its season in the store.
+    """
     found: dict[_Pair, list[TrainingRow]] = {}
     missing: list[_Pair] = []
     for pair, file in files.items():
-        cached = file.load()
+        cached = file.load([g.game_id for g in games if g.season == file.season])
         if cached is None:
             missing.append(pair)
         else:
@@ -117,7 +136,7 @@ def _build(
         for mode in modes
         for season in seasons
     }
-    parts, missing = _read_cached(files)
+    parts, missing = _read_cached(files, games)
     print(
         f"backtest: season rows: {len(parts)} read from the cache, {len(missing)} to build",
         file=sys.stderr,

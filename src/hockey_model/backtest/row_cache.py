@@ -2,17 +2,18 @@
 
 One file holds one goalie mode and one feature list of one season, and its name carries the key
 of the season (``season_key``). The newest key replaces the older file of the same mode, season,
-and feature list, and the files of another feature list stay. A file that is damaged is a miss,
-and the next build writes it again. A file that cannot be written is a warning, because the run
-does not need the cache to finish.
+and feature list, and the files of another feature list stay. A file that is damaged, or whose
+games differ from the games of the store, is a miss, and the next build writes it again. A file
+that cannot be written is a warning, because the run does not need the cache to finish.
 Design: docs/design/backtest-speed.md
 """
 
-import contextlib
 import hashlib
 import json
 import os
 import sys
+import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,14 @@ class SeasonFile:
     names: tuple[str, ...]
     key: str
 
+    def __post_init__(self) -> None:
+        # The key reads no starter read, so rows that use the reads would not follow it.
+        if self.mode is GoalieMode.READS:
+            raise ValueError(
+                "SeasonFile: the key covers the backtest modes, not the reads mode; "
+                "use GoalieMode.ACTUAL or GoalieMode.GUESS"
+            )
+
     @property
     def _slot(self) -> str:
         # A hash of the list keeps a feature name out of the file name.
@@ -57,10 +66,20 @@ class SeasonFile:
         """Return the path of the file for this key."""
         return self.directory / f"{self._slot}-{self.key}.json"
 
-    def load(self) -> list[TrainingRow] | None:
-        """Return the cached rows, or ``None`` when there is no usable file."""
+    def load(self, game_ids: Sequence[int]) -> list[TrainingRow] | None:
+        """Return the cached rows, or ``None`` when there is no usable file.
+
+        ``game_ids`` are the final games of the season in start order. A file that holds other
+        games, or the same games in another order, is not used.
+        """
+        if self.path.is_symlink():
+            _warn(
+                f"the cached rows {str(self.path)!r} are a link and are not read; "
+                "the season is built again and the file is written again"
+            )
+            return None
         try:
-            return decode_rows(self.path.read_text(encoding="utf-8"))
+            rows = decode_rows(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except (OSError, UnicodeDecodeError, HockeyModelError) as exc:
@@ -69,25 +88,64 @@ class SeasonFile:
                 "the season is built again and the file is written again"
             )
             return None
+        if not self._matches(rows, game_ids):
+            _warn(
+                f"the cached rows in {str(self.path)!r} do not hold the games of season "
+                f"{self.season} in the store; the season is built again and the file is "
+                "written again"
+            )
+            return None
+        return rows
+
+    def _matches(self, rows: list[TrainingRow], game_ids: Sequence[int]) -> bool:
+        return [r.game.game_id for r in rows] == list(game_ids) and all(
+            r.game.season == self.season and r.features.game_id == r.game.game_id for r in rows
+        )
 
     def save(self, rows: list[TrainingRow]) -> None:
         """Write the rows, and remove the older files of the same mode, season, and features.
 
-        The file is complete or absent: it is written under a temporary name and then renamed.
+        The file is complete or absent: it is written under a temporary name that no link can
+        occupy, and then renamed.
         """
-        temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
         try:
             text = encode_rows(rows)
-            self.directory.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(text, encoding="utf-8")
-            temporary.replace(self.path)
-            for old in self.directory.glob(f"{self._slot}-*.json"):
-                if old != self.path:
-                    old.unlink()
-        except (OSError, ValueError) as exc:
-            with contextlib.suppress(OSError):
-                temporary.unlink(missing_ok=True)
+        except (ValueError, HockeyModelError) as exc:
+            _warn(
+                f"cannot encode the rows of {self.path.name!r} ({exc}); the next run builds "
+                "the season again; fix the feature value that the message names"
+            )
+            return
+        try:
+            self._write(text)
+        except OSError as exc:
             _warn(
                 f"cannot write the cached rows {str(self.path)!r} ({exc}); the next run builds "
                 "the season again; check that the directory is writable and has free space"
             )
+            return
+        self._remove_older()
+
+    def _write(self, text: str) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(
+            dir=self.directory, prefix=f".{self.path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            Path(name).replace(self.path)
+        except BaseException:
+            Path(name).unlink(missing_ok=True)
+            raise
+
+    def _remove_older(self) -> None:
+        """Remove the files of the same slot under another key, and the temporary files."""
+        for pattern in (f"{self._slot}-*.json", f".{self._slot}-*.tmp"):
+            for old in self.directory.glob(pattern):
+                if old == self.path:
+                    continue
+                try:
+                    old.unlink(missing_ok=True)
+                except OSError as exc:
+                    _warn(f"cannot remove the old cached rows {str(old)!r} ({exc}); remove it")
