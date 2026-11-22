@@ -97,7 +97,7 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
   # The prepare runs every hour. A run before the first puck drop finds no marker when the
   # prepare has not finished, and the next hour can still make it, so that run skips. After the
   # first puck drop the same missing marker still fails below.
-  due_json="$(uv run hockey-model report-due --date "$day")" || {
+  due_json="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-due --date "$day")" || {
     echo "daily-report: report-due failed while checking the puck drop; its error is above" >&2
     exit 1
   }
