@@ -16,8 +16,11 @@ from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, ABANDON_
 
 ROOT = Path(__file__).resolve().parents[1]
 SHARD_MAP = require_path(ROOT / "specs" / "shards.json")
+# The constants below belong to the daily prepare spec. The upgrade spec has its own test.
 CFGS = tuple(
-    ROOT / shard["config"] for shard in json.loads(SHARD_MAP.read_text(encoding="utf-8"))["shards"]
+    ROOT / shard["config"]
+    for shard in json.loads(SHARD_MAP.read_text(encoding="utf-8"))["shards"]
+    if shard["spec"] == "specs/daily_prepare.tla"
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")

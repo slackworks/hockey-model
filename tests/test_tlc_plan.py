@@ -14,7 +14,11 @@ PLAN = require_path(ROOT / "scripts" / "tlc-plan.sh")
 HELPER = require_path(ROOT / "scripts" / "tlc_shards.py")
 SHARD_MAP = require_path(ROOT / "specs" / "shards.json")
 WORKFLOW = require_path(ROOT / ".github" / "workflows" / "tla.yml")
-NAMES = [shard["name"] for shard in json.loads(SHARD_MAP.read_text(encoding="utf-8"))["shards"]]
+SHARDS = json.loads(SHARD_MAP.read_text(encoding="utf-8"))["shards"]
+NAMES = [shard["name"] for shard in SHARDS]
+# The shards that check the daily prepare spec. A change of that code starts these only.
+DAILY = [shard["name"] for shard in SHARDS if shard["spec"] == "specs/daily_prepare.tla"]
+UPGRADE = [shard["name"] for shard in SHARDS if shard["spec"] == "specs/store_upgrade.tla"]
 NULL_SHA = "0" * 40
 
 
@@ -80,18 +84,30 @@ def test_a_pull_request_that_changes_one_command_selects_no_shard(repo: Path) ->
     assert "runs no shard" in result.stderr
 
 
-def test_a_pull_request_that_changes_the_model_code_selects_every_shard(repo: Path) -> None:
+def test_a_pull_request_that_changes_the_refresh_code_selects_the_daily_prepare_shards(
+    repo: Path,
+) -> None:
     base = _change(repo, "src/hockey_model/store/refresh_nhl.py")
     result = _plan(repo, EVENT_NAME="pull_request", BASE_SHA=base)
-    assert json.loads(result.stdout) == NAMES
+    assert json.loads(result.stdout) == DAILY
 
 
-@pytest.mark.parametrize("path", ["specs/daily_prepare.tla", "scripts/tlc.sh"])
-def test_a_pull_request_that_changes_a_spec_or_the_script_selects_every_shard(
-    repo: Path, path: str
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("specs/daily_prepare.tla", DAILY),
+        ("specs/store_upgrade.tla", UPGRADE),
+        ("specs/store_upgrade.cfg", UPGRADE),
+        ("src/hockey_model/store/upgrade.py", UPGRADE),
+        ("src/hockey_model/store/schema.sql", UPGRADE),
+        ("scripts/tlc.sh", NAMES),
+    ],
+)
+def test_a_pull_request_selects_the_shards_that_cover_the_changed_path(
+    repo: Path, path: str, expected: list[str]
 ) -> None:
     base = _change(repo, path)
-    assert json.loads(_plan(repo, EVENT_NAME="pull_request", BASE_SHA=base).stdout) == NAMES
+    assert json.loads(_plan(repo, EVENT_NAME="pull_request", BASE_SHA=base).stdout) == expected
 
 
 def test_a_push_compares_with_the_commit_before_it(repo: Path) -> None:
@@ -158,7 +174,7 @@ def test_every_script_that_the_workflow_runs_starts_every_shard_when_it_changes(
     assert ".github/workflows/tla.yml" in data["always"]
 
 
-def test_a_renamed_covered_file_selects_every_shard(repo: Path) -> None:
+def test_a_renamed_covered_file_selects_its_shards(repo: Path) -> None:
     # The old path is the one that the map lists. A diff with renames shows the new path only.
     covered = repo / "src" / "hockey_model" / "store" / "refresh_nhl.py"
     covered.parent.mkdir(parents=True)
@@ -169,7 +185,7 @@ def test_a_renamed_covered_file_selects_every_shard(repo: Path) -> None:
     _git(repo, "mv", "src/hockey_model/store/refresh_nhl.py", "src/hockey_model/store/gone.py")
     _git(repo, "commit", "-q", "-m", "rename")
     result = _plan(repo, EVENT_NAME="pull_request", BASE_SHA=base)
-    assert json.loads(result.stdout) == NAMES
+    assert json.loads(result.stdout) == DAILY
 
 
 def test_a_failed_diff_gives_the_reason_of_git(repo: Path) -> None:
@@ -187,6 +203,8 @@ def test_a_failed_diff_gives_the_reason_of_git(repo: Path) -> None:
         "src/hockey_model/store/nhl_writes.py",
     ],
 )
-def test_a_module_that_owns_a_modeled_rule_selects_every_shard(repo: Path, path: str) -> None:
+def test_a_module_that_owns_a_modeled_rule_selects_the_daily_prepare_shards(
+    repo: Path, path: str
+) -> None:
     base = _change(repo, path)
-    assert json.loads(_plan(repo, EVENT_NAME="pull_request", BASE_SHA=base).stdout) == NAMES
+    assert json.loads(_plan(repo, EVENT_NAME="pull_request", BASE_SHA=base).stdout) == DAILY

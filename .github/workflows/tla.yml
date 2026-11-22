@@ -1,6 +1,7 @@
 name: tla
 
-# TLC checks the daily prepare spec. The plan job reads specs/shards.json and starts one job
+# TLC checks the daily prepare spec and the store upgrade spec. The plan job reads
+# specs/shards.json and starts one job
 # for each shard that the change reaches. A change that no shard covers starts no TLC job.
 # The job is not a required check, because a pull request can start no TLC job.
 on:

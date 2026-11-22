@@ -15,7 +15,8 @@ Subcommands:
 - ``rows [--shard NAME]``: print one line for each shard, or for one shard, with the name,
     the spec, and the config, separated by tabs. Exit 2 when NAME is not a shard.
 - ``plan [--all]``: read changed paths from stdin, one per line, and print the JSON list of
-    the shards to run. A path that matches an ``always`` pattern selects every shard. ``--all``
+    the shards to run. A path that matches an ``always`` pattern selects every shard, and a
+    path of a spec or a config selects the shards that run it. ``--all``
     selects every shard without reading stdin.
 
 A pattern that ends in ``/**`` matches every path under that directory. Any other pattern is
@@ -57,6 +58,8 @@ def _check_shard(path: Path, shard: object, names: set[str]) -> None:
         raise ValueError(f"{path}: the shard {shard['name']} is listed twice")
     names.add(shard["name"])
     _strings(shard.get("paths", []), f"{path}: paths of {shard['name']}", empty_ok=True)
+    if "covers" in shard:
+        _strings(shard["covers"], f"{path}: covers of {shard['name']}", empty_ok=True)
 
 
 def load_map(path: Path = MAP) -> dict[str, Any]:
@@ -90,8 +93,14 @@ def matches(path: str, patterns: list[str]) -> bool:
 
 
 def shard_paths(data: dict[str, Any], shard: dict[str, Any]) -> list[str]:
-    """Return the patterns that start ``shard``: its own, the shared ones, and the always ones."""
-    return [*data["always"], *data["covers"], *shard.get("paths", [])]
+    """Return the patterns that start ``shard``.
+
+    These are the always paths, the covers of the shard or the shared covers when it names none,
+    its own paths, and its spec and config files. A change of a spec starts the shards of that
+    spec only.
+    """
+    covers = shard["covers"] if "covers" in shard else data["covers"]
+    return [*data["always"], *covers, shard["spec"], shard["config"], *shard.get("paths", [])]
 
 
 def plan(data: dict[str, Any], changed: list[str]) -> list[str]:
