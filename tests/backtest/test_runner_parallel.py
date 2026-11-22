@@ -34,11 +34,17 @@ def _outputs(report: runner.BacktestReport, records: list, tmp_path: Path, name:
 
 
 def test_workers_give_a_byte_identical_report_and_csv(
-    store: sqlite3.Connection, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+    store: sqlite3.Connection,
+    tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seed(store, range(1, 8))
     store.commit()
+    # The full build in this process is the reference that the season shards must equal.
+    monkeypatch.setattr(runner, "can_shard", lambda conn, workers: False)
     serial = _outputs(*run_backtest(store, PLAN, candidates=FEATURES), tmp_path, "serial")
+    monkeypatch.undo()
     capfd.readouterr()
     parallel = _outputs(
         *run_backtest(store, PLAN, candidates=FEATURES, workers=3), tmp_path, "parallel"

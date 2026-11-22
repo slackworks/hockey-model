@@ -7,7 +7,8 @@ Writes report.json, games.csv, and hashes.json to DIR, and prints hashes.json on
 The exact_* hashes are the SHA-256 of the two files. Two runs on one machine MUST give equal
 values. The canonical_* hashes round every float first, so they also hold across machines; the
 golden test commits that form. Run the script before and after a speed change on the real store,
-and paste both forms in the pull request. The script opens the store for reading only.
+and paste both forms in the pull request. The script opens the store for reading only,
+and the season row cache is written to the directory beside the store file.
 
 Exit codes: 0 done; 1 the backtest or a write failed (the message names the cause); 2 the store
 file is missing or an argument is wrong.

@@ -84,6 +84,8 @@ def feed(monkeypatch: pytest.MonkeyPatch, store: sqlite3.Connection):
             return [r for r in rows[mode] if first <= r.game.season <= last]
 
         monkeypatch.setattr(runner, "training_rows", fake)
+        # The fake replaces the full build, so the store must not take the sharded build.
+        monkeypatch.setattr(runner, "can_shard", lambda conn, workers: False)
         return store
 
     return use

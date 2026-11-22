@@ -116,7 +116,8 @@ def test_the_rows_of_a_season_from_its_boundary_equal_the_rows_of_the_full_build
         assert shard == [row for row in full if row.game.season == season]
 
 
-def test_the_sharded_build_equals_two_full_builds(store: sqlite3.Connection) -> None:
+@pytest.mark.parametrize("workers", [1, 3])
+def test_the_sharded_build_equals_two_full_builds(store: sqlite3.Connection, workers: int) -> None:
     seed(store, range(1, 8))
     store.commit()
     last = PLAN.scored[1]
@@ -126,7 +127,7 @@ def test_the_sharded_build_equals_two_full_builds(store: sqlite3.Connection) -> 
     expected_guess = training_rows(
         store, PLAN.fit_first, last, GoalieMode.GUESS, PLAN.burn_in, names=FEATURES
     )
-    actual, guess = build_sharded(store, PLAN, FEATURES, 3)
+    actual, guess = build_sharded(store, PLAN, FEATURES, workers)
     assert actual == expected_actual
     assert guess == expected_guess
 
