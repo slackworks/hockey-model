@@ -12,9 +12,9 @@
 # next to the store says it finished. The backfill reads one year at a time, newest year
 # first, and stops after BACKFILL_BUDGET_S seconds (default 1800). A stopped backfill
 # writes no marker and exits with code 75. It resumes on the next run, because refresh
-# skips what it already read. A budget that stops the backfill before it reads one older
-# day or game, not counting the last two days, exits with code 1, and the message names
-# --budget-seconds: raise BACKFILL_BUDGET_S. The backtest files and a prepared-DATE
+# skips what it already read. A budget that stops the backfill before it finishes one
+# day or game exits with code 1, and so does a stop that reads no older day or game while
+# older days wait. The message names --budget-seconds: raise BACKFILL_BUDGET_S. The backtest files and a prepared-DATE
 # marker go next to the store, where daily-report.sh finds them. The backtest and the fit build
 # their feature rows one season at a time in up to BACKTEST_WORKERS processes (default 4, the
 # cores of a GitHub runner), and the output does not change with the count. Any failed step
