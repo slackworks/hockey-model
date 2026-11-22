@@ -8,9 +8,16 @@ from pathlib import Path
 
 import pytest
 from experiment_support import make_record, register
+from hypothesis import given
+from hypothesis import strategies as st
 
 from hockey_model.experiments.check import check_all
-from hockey_model.experiments.status import status_for_interval
+from hockey_model.experiments.models import RESULT_STATUSES, STATUS_INCONCLUSIVE, STATUS_REGISTERED
+from hockey_model.experiments.status import (
+    inconclusive_notes,
+    status_for_interval,
+    status_problem,
+)
 
 # An interval whose upper end is below zero promotes.
 _PROMOTES = (-0.002, -0.0005)
@@ -18,6 +25,13 @@ _PROMOTES = (-0.002, -0.0005)
 _REJECTS = (0.0005, 0.002)
 # An interval that straddles zero rejects.
 _STRADDLES = (-0.001, 0.002)
+
+_INTERVALS = st.tuples(
+    st.floats(min_value=-1e6, max_value=1e6),
+    st.floats(min_value=-1e6, max_value=1e6),
+)
+_EFFECTS = st.none() | st.floats(min_value=-10.0, max_value=10.0)
+_STATUSES = st.sampled_from([STATUS_REGISTERED, *RESULT_STATUSES])
 
 
 def _result(interval: tuple[float, float]) -> dict:
@@ -130,3 +144,73 @@ class TestTheStoredStatusMustMatchTheResult:
         )
         errors = check_all(repo_root=registry_dir.parent)["errors"]
         assert any("exploration" in error for error in errors), errors
+
+
+class TestTheStatusRuleHoldsOverAnyInterval:
+    """The rule is a comparison, so it must hold for every interval and every status."""
+
+    @given(interval=_INTERVALS, expected_effect=_EFFECTS, status=_STATUSES)
+    def test_a_confirmation_record_is_clean_exactly_when_it_agrees(
+        self,
+        interval: tuple[float, float],
+        expected_effect: float | None,
+        status: str,
+    ) -> None:
+        """The check is silent for a status the interval earns, and names it otherwise."""
+        record = make_record(
+            {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
+        )
+        earned = status_for_interval(record, interval)
+        problem = status_problem(record)
+        assert (problem is None) is (status == earned), problem
+        if problem is not None:
+            assert repr(earned) in problem
+
+    def test_a_confirmation_record_with_no_result_is_clean(self) -> None:
+        """A record that has not run yet holds no result, so no interval contradicts it."""
+        record = make_record({"status": "registered"})
+        assert status_problem(record) is None
+
+    @given(status=_STATUSES)
+    def test_an_exploration_record_may_hold_no_status_that_a_result_earns(
+        self, status: str
+    ) -> None:
+        """Only a result status fails, and the note names the status to use instead."""
+        record = make_record(
+            {"cohort": "exploration", "status": status, "result": _result(_PROMOTES)}
+        )
+        problem = status_problem(record)
+        assert (problem is None) is (status not in RESULT_STATUSES), problem
+        if problem is not None:
+            assert repr(status) in problem
+            assert repr(STATUS_REGISTERED) in problem
+
+
+class TestTheInconclusiveNote:
+    """The note states the two numbers that made the run underpowered."""
+
+    @given(interval=_INTERVALS, expected_effect=_EFFECTS, status=_STATUSES)
+    def test_the_note_appears_only_for_an_inconclusive_result_with_an_effect(
+        self,
+        interval: tuple[float, float],
+        expected_effect: float | None,
+        status: str,
+    ) -> None:
+        record = make_record(
+            {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
+        )
+        notes = inconclusive_notes(record)
+        quiet = status != STATUS_INCONCLUSIVE or expected_effect is None
+        assert (notes == ()) is quiet, notes
+        if quiet:
+            return
+        low, high = interval
+        assert len(notes) == 1
+        assert f"{(high - low) / 2:.4f}" in notes[0]
+        assert f"{abs(expected_effect):.4f}" in notes[0]
+
+    @given(expected_effect=_EFFECTS)
+    def test_a_record_with_no_result_gets_no_note(self, expected_effect: float | None) -> None:
+        """A status alone cannot say the interval was wide, because there is no interval."""
+        record = make_record({"status": STATUS_INCONCLUSIVE, "expected_effect": expected_effect})
+        assert inconclusive_notes(record) == ()
