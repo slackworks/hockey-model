@@ -13,6 +13,7 @@ from seeding import add_game
 from test_runner_store import PLAN, seed
 
 from hockey_model.backtest import shards
+from hockey_model.backtest.row_cache import SeasonFile
 from hockey_model.backtest.shards import actual_rows, build_sharded
 from hockey_model.game_model.elo import EloBook, replay, season_boundaries
 from hockey_model.game_model.features import FEATURES, GoalieMode
@@ -267,6 +268,13 @@ def _shard(store: sqlite3.Connection, season: int, final_games: int | None = Non
         tuple(FEATURES),
         season_boundaries(games)[season],
         len(games) if final_games is None else final_games,
+        SeasonFile(
+            shards.database_path(store).parent / "season-rows",
+            GoalieMode.ACTUAL,
+            season,
+            tuple(FEATURES),
+            "0" * 64,
+        ),
     )
 
 
