@@ -127,10 +127,13 @@ def _build(
 ) -> dict[GoalieMode, list[TrainingRow]]:
     """Build the rows of each mode, one season at a time, and join them in season order."""
     path = database_path(conn)
+    # The keys come first. A store that changes between the two reads then gives a worker a key
+    # that differs from this one, and the worker stops. In the other order the keys could name
+    # data that the Elo boundaries of this process do not hold.
+    key = season_keys(conn, burn_in, names)
     games = _final_games(conn, burn_in)
     boundaries = season_boundaries(games)
     seasons = sorted(s for s in boundaries if seasons_range[0] <= s <= seasons_range[1])
-    key = season_keys(conn, burn_in, names)
     files = {
         (mode, season): SeasonFile(cache_dir(path), mode, season, tuple(names), key[season])
         for mode in modes

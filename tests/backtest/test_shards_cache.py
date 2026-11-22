@@ -1,17 +1,20 @@
 """The sharded build reads the rows of a season from the cache when its key has not changed."""
 
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from test_runner_store import PLAN, seed
 
+from hockey_model.backtest import shards
 from hockey_model.backtest.row_cache import cache_dir
 from hockey_model.backtest.row_codec import decode_rows, encode_rows
 from hockey_model.backtest.shards import actual_rows, build_sharded
 from hockey_model.backtest.units import database_path
 from hockey_model.game_model.features import FEATURES, GoalieMode
 from hockey_model.game_model.training import training_rows
+from hockey_model.types import HockeyModelError
 
 SEASONS = range(PLAN.fit_first, PLAN.scored[1] + 1)
 
@@ -149,3 +152,41 @@ def test_a_file_with_no_rows_for_a_season_that_has_games_is_built_again(
     actual, _ = build_sharded(seeded, PLAN, FEATURES, 2)
     assert actual == _full(seeded, GoalieMode.ACTUAL)
     assert decode_rows(path.read_text())
+
+
+def _change_scores_when_the_keys_are_made(
+    store: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, *, after: bool
+) -> None:
+    """Make the keys, and change the stored scores before or after that, as a refresh would."""
+    real = shards.season_keys
+
+    def keys(conn: sqlite3.Connection, burn_in: int, names: Sequence[str]) -> dict[int, str]:
+        if not after:
+            store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
+            store.commit()
+        made = real(conn, burn_in, names)
+        if after:
+            store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
+            store.commit()
+        return made
+
+    monkeypatch.setattr(shards, "season_keys", keys)
+
+
+def test_a_change_before_the_keys_are_made_gives_the_rows_of_the_changed_store(
+    seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _change_scores_when_the_keys_are_made(seeded, monkeypatch, after=False)
+    actual, guess = build_sharded(seeded, PLAN, FEATURES, 2)
+    assert actual == _full(seeded, GoalieMode.ACTUAL)
+    assert guess == _full(seeded, GoalieMode.GUESS)
+
+
+def test_a_change_after_the_keys_are_made_stops_the_workers(
+    seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _change_scores_when_the_keys_are_made(seeded, monkeypatch, after=True)
+    with pytest.raises(HockeyModelError, match="the store changed during the run"):
+        build_sharded(seeded, PLAN, FEATURES, 2)
+    # The seasons before the change keep their keys, so only they may write a file.
+    assert {int(n.split("-")[1]) for n in _names(seeded)} <= {2, 3}
