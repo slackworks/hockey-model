@@ -8,10 +8,10 @@
 #            jobs of daily-prepare.yml, because a name that no job carries matches nothing
 #            and the answer reads as no prepare.
 #
-# Prints "<ISO 8601 UTC end> <MINUTES>" and exits 0, or prints nothing and exits 0 when no
-# daily-prepare job holds the group. The end is the latest end among the holders, and MINUTES
-# is the timeout of the holder that ends last. GitHub counts a job timeout from the job start,
-# so the caller needs that one job's window, and not a start time and a guess (#163).
+# Prints an ISO 8601 UTC end and exits 0, or prints nothing and exits 0 when no daily-prepare
+# job holds the group. The end is the latest end among the holders, and each holder's window
+# is its own start plus its own timeout. GitHub counts a job timeout from the job start, so
+# the caller needs that one job's window, and not a start time and a guess (#163).
 # A report that starts before the end can reach the puck drop, and one that starts after it
 # cannot.
 #
@@ -157,11 +157,11 @@ window_end() {
     '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1
 }
 
-# Print "<END> <MINUTES>" for the latest end of every holder in one run, or nothing when the
-# run has no holder. Both holders of the split prepare can be live in one run, so the answer
-# is the holder that ends last (#311).
+# Print the latest end of every holder in one run, or nothing when the run has no holder. Both
+# holders of the split prepare can be live in one run, so the answer is the holder that ends
+# last (#311).
 run_answer() {
-  local run_id="$1" holds job start end latest_end="" latest_minutes=""
+  local run_id="$1" holds job start end latest_end=""
   holds="$(job_holds "$run_id")" || return 1
   while read -r job start; do
     [[ -n "$job" ]] || continue
@@ -176,17 +176,16 @@ run_answer() {
     fi
     if [[ -z "$latest_end" || "$end" > "$latest_end" ]]; then
       latest_end="$end"
-      latest_minutes="${TIMEOUTS[$job]}"
     fi
   done <<<"$holds"
-  printf '%s %s' "$latest_end" "$latest_minutes"
+  printf '%s' "$latest_end"
 }
 
-# Print "<END> <MINUTES>" for one status, or nothing when that status holds no prepare run. A
-# status that holds a prepare run breaks the caller's loop, because an earlier status holds
+# Print the end of the window of one status, or nothing when that status holds no prepare run.
+# A status that holds a prepare run breaks the caller's loop, because an earlier status holds
 # the group first. ISO 8601 UTC strings compare correctly as text while both sides end in `Z`.
 status_answer() {
-  local status="$1" runs ids id answer start end latest_end="" latest_minutes="" name
+  local status="$1" runs ids id answer start end latest_end="" longest=0 name
   if ! runs="$(gh api --paginate \
     "repos/{owner}/{repo}/actions/runs?status=${status}&per_page=100" 2>&1)"; then
     echo "prep-running: cannot read the ${status} workflow runs: $runs" >&2
@@ -205,33 +204,28 @@ status_answer() {
   if [[ "$status" != "in_progress" ]]; then
     start="$now"
     for name in "${!TIMEOUTS[@]}"; do
-      if [[ -z "$latest_minutes" || "${TIMEOUTS[$name]}" -gt "$latest_minutes" ]]; then
-        latest_minutes="${TIMEOUTS[$name]}"
+      if ((${TIMEOUTS[$name]} > longest)); then
+        longest="${TIMEOUTS[$name]}"
       fi
     done
-    if ! end="$(window_end "$start" "$latest_minutes")"; then
-      echo "prep-running: cannot add ${latest_minutes} minutes to '${start}', which this" \
-        "script read as the current time: $end" >&2
+    if ! end="$(window_end "$start" "$longest")"; then
+      echo "prep-running: cannot add ${longest} minutes to '${start}', which this script" \
+        "read as the current time: $end" >&2
       return 1
     fi
-    printf '%s %s' "$end" "$latest_minutes"
+    printf '%s' "$end"
     return 0
   fi
   while read -r id; do
     [[ -n "$id" ]] || continue
     # run_answer names the cause on stderr, so this level adds nothing.
     answer="$(run_answer "$id")" || return 1
-    answer="${answer% }"
     [[ -n "$answer" ]] || continue
-    end="${answer% *}"
-    if [[ -z "$latest_end" || "$end" > "$latest_end" ]]; then
-      latest_end="$end"
-      latest_minutes="${answer##* }"
+    if [[ -z "$latest_end" || "$answer" > "$latest_end" ]]; then
+      latest_end="$answer"
     fi
   done <<<"$ids"
-  if [[ -n "$latest_end" ]]; then
-    printf '%s %s' "$latest_end" "$latest_minutes"
-  fi
+  printf '%s' "$latest_end"
 }
 
 answer=""

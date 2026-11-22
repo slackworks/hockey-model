@@ -116,7 +116,7 @@ The `skip` job restores the cache, runs `daily-prepare.sh --check-only`, and sav
 Exit code 4 means the day needs the rebuild, and the `prepare` job then runs with the 180-minute timeout.
 A prepared day ends in the `skip` job, so it holds the group for minutes.
 The group frees only after every holder ends, so the holder that ends last is the one the report waits for.
-`scripts/prep-running.sh` reads the job list of each live `daily-prepare` run and prints the end of the window of that holder, with the timeout that produced it.
+`scripts/prep-running.sh` reads the job list of each live `daily-prepare` run and prints the end of the window of that holder.
 The gate passes the end to `report-due` as `--prep-ends`, and a due run whose first puck drop falls at or before that end skips with reason `prepare-wait`.
 The wait ends when that job ends, so the report's own budget starts then and adds to the job window.
 A forced run still queues, because the operator asked for it.

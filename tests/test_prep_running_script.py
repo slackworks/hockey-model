@@ -33,11 +33,10 @@ def _end(started: str, minutes: int = 180) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _printed_end(result: subprocess.CompletedProcess[str], minutes: int = 180) -> str:
-    """Return the end of the window that the lookup printed, and check the timeout it names."""
-    end, printed = result.stdout.split()
-    assert printed == str(minutes), result.stdout
-    return end
+def _printed_end(result: subprocess.CompletedProcess[str]) -> str:
+    """Return the end of the window that the lookup printed."""
+    assert _ISO.match(result.stdout), result.stdout
+    return result.stdout
 
 
 def _runs(*runs: tuple[str, str | None], status: str = "in_progress") -> str:
@@ -173,7 +172,7 @@ def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_pat
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
     result = _lookup({**env, "FAKE_JOBS_JSON": skipped})
     assert result.returncode == 0, result.stderr
-    assert _printed_end(result, 10) == _end(_CREATED, 10)
+    assert _printed_end(result) == _end(_CREATED, 10)
 
 
 def test_a_prepare_job_that_stopped_early_holds_no_group(fakes: Path, tmp_path: Path) -> None:
@@ -237,7 +236,7 @@ def test_a_prepare_held_by_the_group_opens_its_window_now(fakes: Path, tmp_path:
     assert result.returncode == 0, result.stderr
     # Not the creation time: the run can still use its full window from now. The group can
     # admit the rebuild job first, so the long window is the answer (#311).
-    end = _printed_end(result, 180)
+    end = _printed_end(result)
     assert end != _end(_CREATED, 180)
     assert _ISO.match(end), end
 
@@ -246,7 +245,7 @@ def test_a_queued_prepare_opens_its_window_now(fakes: Path, tmp_path: Path) -> N
     env = _env_for(fakes, tmp_path, "queued", (_PREPARE, None))
     result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert _printed_end(result, 180) != _end(_CREATED, 180)
+    assert _printed_end(result) != _end(_CREATED, 180)
 
 
 @pytest.mark.parametrize("status", ["in_progress", "pending", "queued", "waiting", "requested"])
@@ -354,7 +353,7 @@ def test_an_unknown_argument_is_refused(fakes: Path, tmp_path: Path) -> None:
 def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
-    assert "<ISO 8601 UTC end> <MINUTES>" in result.stdout
+    assert "Prints an ISO 8601 UTC end" in result.stdout
 
 
 @pytest.mark.parametrize("workflow", ["daily-report.yml"])

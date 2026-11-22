@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -64,14 +65,14 @@ def test_a_skip_job_names_the_end_of_its_short_window(fakes: Path, tmp_path: Pat
     env = _env_with(fakes, tmp_path, _job("skip", _STARTED))
     result = _run("prep-running.sh", env, *_TIMEOUTS)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{_end(_STARTED, 10)} 10"
+    assert result.stdout == _end(_STARTED, 10)
 
 
 def test_a_prepare_job_names_the_end_of_its_own_long_window(fakes: Path, tmp_path: Path) -> None:
     env = _env_with(fakes, tmp_path, _job("prepare", _STARTED))
     result = _run("prep-running.sh", env, *_TIMEOUTS)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{_end(_STARTED, 180)} 180"
+    assert result.stdout == _end(_STARTED, 180)
 
 
 def test_a_prepare_job_that_follows_a_finished_skip_job_names_the_prepare_job(
@@ -86,7 +87,7 @@ def test_a_prepare_job_that_follows_a_finished_skip_job_names_the_prepare_job(
     )
     result = _run("prep-running.sh", env, *_TIMEOUTS)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{_end(_OTHER_STARTED, 180)} 180"
+    assert result.stdout == _end(_OTHER_STARTED, 180)
 
 
 def test_the_holder_that_ends_last_names_the_wait(fakes: Path, tmp_path: Path) -> None:
@@ -98,7 +99,7 @@ def test_the_holder_that_ends_last_names_the_wait(fakes: Path, tmp_path: Path) -
     env = _env_with(fakes, tmp_path, _job("skip", _STARTED), _job("prepare", _OTHER_STARTED))
     result = _run("prep-running.sh", env, *_TIMEOUTS)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{_end(_OTHER_STARTED, 180)} 180"
+    assert result.stdout == _end(_OTHER_STARTED, 180)
 
 
 def test_a_short_job_that_ends_last_names_its_own_short_timeout(
@@ -113,18 +114,44 @@ def test_a_short_job_that_ends_last_names_its_own_short_timeout(
     )
     result = _run("prep-running.sh", env, *_TIMEOUTS)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{_end('2026-11-04T10:00:00Z', 10)} 10"
+    assert result.stdout == _end("2026-11-04T10:00:00Z", 10)
+
+
+def _assert_window(
+    result: subprocess.CompletedProcess[str], minutes: int, before: datetime
+) -> None:
+    """Assert that the end is the one that a window of ``minutes`` from ``before`` produces.
+
+    A run that has not started opens its window at the current time, and the script reads
+    that time somewhere between ``before`` and now. One second of slack covers a clock read
+    that crosses a second boundary.
+    """
+    low = _end_after(before, minutes)
+    high = _end_after(datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1), minutes)
+    assert result.returncode == 0, result.stderr
+    assert _ISO.match(result.stdout), result.stdout
+    assert low <= result.stdout <= high, (result.stdout, low, high)
+
+
+def _run_now(
+    fakes: Path, tmp_path: Path, flags: tuple[str, ...], minutes: int, **extra: str
+) -> None:
+    """Run the lookup, and assert that the end is the one of a window from before the run."""
+    before = datetime.now(UTC).replace(microsecond=0)
+    result = _run("prep-running.sh", _env(fakes, tmp_path, **extra), *flags)
+    _assert_window(result, minutes, before)
 
 
 def test_a_job_that_has_not_started_opens_its_window_now(fakes: Path, tmp_path: Path) -> None:
     """A job that waits for the group can still use its whole window from now."""
-    env = _env_with(fakes, tmp_path, _job("skip", None, status="queued"))
-    result = _run("prep-running.sh", env, *_TIMEOUTS)
-    assert result.returncode == 0, result.stderr
-    end, minutes = result.stdout.split()
-    assert _ISO.match(end), end
-    assert end != _end(_STARTED, 10)
-    assert minutes == "10"
+    _run_now(
+        fakes,
+        tmp_path,
+        _TIMEOUTS,
+        10,
+        FAKE_RUNS_JSON_IN_PROGRESS=_runs(_STARTED),
+        FAKE_JOBS_JSON=_jobs(_job("skip", None, status="queued")),
+    )
 
 
 def _runs_queued() -> str:
@@ -138,17 +165,14 @@ def test_a_run_that_has_not_started_names_its_longest_window(fakes: Path, tmp_pa
     report build holds starts with whichever prepare job the group admits next. The short
     window would under-claim, and the report would then start behind the live rebuild (#311).
     """
-    env = _env(
+    _run_now(
         fakes,
         tmp_path,
+        _TIMEOUTS,
+        180,
         FAKE_RUNS_JSON_QUEUED=_runs_queued(),
         FAKE_JOBS_JSON=_jobs(_job("skip", None, status="queued")),
     )
-    result = _run("prep-running.sh", env, *_TIMEOUTS)
-    assert result.returncode == 0, result.stderr
-    end, minutes = result.stdout.split()
-    assert _ISO.match(end), end
-    assert minutes == "180"
 
 
 def test_a_timeout_flag_is_required(fakes: Path, tmp_path: Path) -> None:
@@ -186,7 +210,7 @@ def test_the_no_run_answer_names_no_window(fakes: Path, tmp_path: Path) -> None:
 def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
-    assert 'Prints "<ISO 8601 UTC end> <MINUTES>"' in result.stdout
+    assert "Prints an ISO 8601 UTC end" in result.stdout
 
 
 _JOB_NAMES = st.sampled_from(["skip", "prepare", "gate"])
@@ -198,9 +222,7 @@ _STARTS = st.datetimes(
 
 
 @st.composite
-def _holding_jobs(
-    draw: st.DrawFn,
-) -> tuple[list[dict[str, object]], list[str]]:
+def _holding_jobs(draw: st.DrawFn) -> tuple[list[dict[str, object]], list[str]]:
     """Return jobs that hold the group, and the --timeout flags that name their timeouts.
 
     Each job carries its own timeout, so the answer cannot come from one fixed pair. The
@@ -218,15 +240,12 @@ def _holding_jobs(
     return jobs, flags
 
 
-def _latest_end(jobs: list[dict[str, object]], flags: list[str]) -> tuple[str, int]:
-    """Return the end and the timeout of the job that ends last."""
+def _latest_end(jobs: list[dict[str, object]], flags: list[str]) -> str:
+    """Return the end of the job of the run that ends last."""
     pairs = re.findall(r"([a-z-]+)=(\d+)", " ".join(flags))
     timeouts = {name: int(minutes) for name, minutes in pairs}
-    ends = {
-        str(job["name"]): _end(str(job["started_at"]), timeouts[str(job["name"])]) for job in jobs
-    }
-    name = max(ends, key=lambda key: ends[key])
-    return ends[name], timeouts[name]
+    ends = [_end(str(job["started_at"]), timeouts[str(job["name"])]) for job in jobs]
+    return max(ends)
 
 
 @settings(
@@ -250,35 +269,41 @@ def test_the_latest_end_of_any_set_of_holders_is_the_answer(
     )
     result = _run("prep-running.sh", env, *flags)
     assert result.returncode == 0, result.stderr
-    expected, minutes = _latest_end(jobs, flags)
-    assert result.stdout == f"{expected} {minutes}"
+    assert result.stdout == _latest_end(jobs, flags)
 
 
 def _queued_env(fakes: Path, tmp_path: Path) -> dict[str, str]:
     return _env(fakes, tmp_path, FAKE_RUNS_JSON_QUEUED=_runs_queued())
 
 
+@st.composite
+def _longest_pair(draw: st.DrawFn) -> tuple[int, int]:
+    """Return a short timeout and one that is longer, so the answer is never the short one.
+
+    A rule that picks the shortest timeout prints an earlier end than the range below
+    allows, so a wrong rule fails and the longest-timeout rule passes.
+    """
+    short = draw(st.integers(min_value=1, max_value=359))
+    return short, draw(st.integers(min_value=short + 1, max_value=360))
+
+
 @settings(
     max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
 )
-@given(flags=st.lists(_TIMEOUT_RANGE, min_size=1, max_size=3, unique=True))
+@given(pair=_longest_pair())
 def test_a_run_that_has_not_started_names_its_longest_timeout(
-    fakes: Path, tmp_path: Path, flags: list[int]
+    fakes: Path, tmp_path: Path, pair: tuple[int, int]
 ) -> None:
     """Any job of the run can take the group first, so the longest window is the answer.
 
-    The run has no job start to read, so the window opens at the current time. The minutes
-    that it names are the longest timeout, and the order of the flags does not change them.
+    The run has no job start to read, so the window opens at the current time. The end is the
+    one that the longest timeout produces, and the order of the flags does not change it.
     """
-    names = ["skip", "prepare", "gate"][: len(flags)]
-    timeouts = [f"{name}={minutes}" for name, minutes in zip(names, flags, strict=True)]
+    short, longest = pair
+    timeouts = [f"skip={short}", f"prepare={longest}"]
     before = datetime.now(UTC).replace(microsecond=0)
     result = _run("prep-running.sh", _queued_env(fakes, tmp_path), *_as_flags(timeouts))
-    assert result.returncode == 0, result.stderr
-    end, minutes = result.stdout.split()
-    assert minutes == str(max(flags))
-    assert _ISO.match(end), end
-    assert _end_after(before, int(minutes)) <= end, (end, minutes)
+    _assert_window(result, longest, before)
 
 
 def _as_flags(timeouts: list[str]) -> list[str]:

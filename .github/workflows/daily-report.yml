@@ -79,7 +79,7 @@ jobs:
               "it would wait behind a prepare run" >&2
             exit 1
           fi
-          args+=(--prep-ends "${prep_ends% *}")
+          args+=(--prep-ends "$prep_ends")
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json
