@@ -88,6 +88,7 @@ def test_the_workflow_argument_ignores_the_default_workflow(fakes: Path, tmp_pat
     [
         (("mutation.yml", "other.yml"), "only one workflow name"),
         (("mutation",), "is not a workflow file name"),
+        (("extra/daily-prepare.yml",), "is not a workflow file name"),
     ],
 )
 def test_a_bad_workflow_argument_is_refused(

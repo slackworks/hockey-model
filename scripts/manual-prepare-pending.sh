@@ -3,7 +3,7 @@
 #
 # Usage: manual-prepare-pending.sh [WORKFLOW] [--help]
 #   WORKFLOW  File name of the workflow to read, such as daily-prepare.yml. The default is
-#             daily-prepare.yml.
+#             daily-prepare.yml. A value that holds a slash is refused.
 #
 # Prints `yes` when a run of that workflow that a person started (event workflow_dispatch) is
 # pending, queued, waiting, requested, or running. Prints `no` otherwise. A scheduled run
@@ -41,8 +41,12 @@ while (($# > 0)); do
     ;;
   esac
 done
-if [[ "$workflow" != *.yml ]]; then
-  echo "manual-prepare-pending: '$workflow' is not a workflow file name such as x.yml" >&2
+# The run list holds the workflow path, such as .github/workflows/daily-prepare.yml. The
+# argument is the file name, because the caller names a workflow beside it. A value that holds
+# a slash reads no run, and it answers `no` to every caller.
+if [[ "$workflow" != *.yml || "$workflow" == */* ]]; then
+  echo "manual-prepare-pending: '$workflow' is not a workflow file name such as x.yml," \
+    "which holds no slash; see --help" >&2
   exit 2
 fi
 
