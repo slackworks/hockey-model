@@ -207,6 +207,45 @@ def test_an_existing_backup_is_never_overwritten(v1: Path) -> None:
     assert version_of(v1) == 1
 
 
+def test_a_copy_that_a_killed_run_left_does_not_block_the_next_upgrade(v1: Path) -> None:
+    leftover = v1.parent / "store.db.v1.bak.tmp"
+    leftover.write_text("half a copy", encoding="utf-8")
+    report = upgrade_store(v1)
+    assert report.backup_path == str(v1.parent / "store.db.v1.bak")
+    assert version_of(Path(report.backup_path)) == 1
+    assert not leftover.exists()
+
+
+def test_the_copy_is_written_under_another_name_and_renamed_when_it_is_complete(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[str]] = []
+    real = upgrade._backup_to
+
+    def spy(path: Path, target: Path) -> None:
+        real(path, target)
+        seen.append(sorted(p.name for p in path.parent.iterdir() if ".bak" in p.name))
+
+    monkeypatch.setattr(upgrade, "_backup_to", spy)
+    upgrade_store(v1)
+    assert seen == [["store.db.v1.bak.tmp"]]
+    assert sorted(p.name for p in v1.parent.iterdir() if ".bak" in p.name) == ["store.db.v1.bak"]
+
+
+def test_a_failed_copy_leaves_no_file_and_the_store_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(path: Path, target: Path) -> None:
+        target.write_text("half a copy", encoding="utf-8")
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(upgrade, "_backup_to", broken)
+    with pytest.raises(StoreError, match="backup failed: disk full"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
 def test_a_missing_file_is_refused_without_being_created(tmp_path: Path) -> None:
     path = tmp_path / "absent.db"
     with pytest.raises(StoreError, match="no store file there"):
