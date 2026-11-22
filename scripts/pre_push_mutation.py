@@ -396,7 +396,7 @@ def _write_log(repo: Path, args: list[str], stdout: str, stderr: str) -> str:
     """Write the full output of a failed run to ``.tmp/mutation-changed.log``, and return its name.
 
     The message names the cause in one screen, and the traceback goes to the log (#316).
-    """.strip()
+    """
     path = repo / MUTATION_LOG
     path.parent.mkdir(parents=True, exist_ok=True)
     body = f"$ mutmut {' '.join(args)}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
