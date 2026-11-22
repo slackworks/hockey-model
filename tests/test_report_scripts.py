@@ -228,7 +228,18 @@ def test_gate_rejects_a_margin_that_is_not_whole_seconds(fakes: Path, tmp_path: 
     assert "--margin-seconds needs whole seconds" in result.stderr
 
 
-@pytest.mark.parametrize("value", ["tomorrow", "2026-11-22T18:00:00", "2026-11-22 18:00:00Z"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "tomorrow",
+        "2026-11-22T18:00:00",
+        "2026-11-22 18:00:00Z",
+        # A day that no calendar holds matches the shape, so the check reads the meaning.
+        "2026-02-30T00:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-99-99T99:99:99Z",
+    ],
+)
 def test_gate_refuses_a_prepare_end_that_is_not_an_iso_instant(
     fakes: Path, tmp_path: Path, value: str
 ) -> None:
@@ -239,18 +250,21 @@ def test_gate_refuses_a_prepare_end_that_is_not_an_iso_instant(
     """
     result = _run("report-gate.sh", _env(fakes, tmp_path), "--prep-ends", value)
     assert result.returncode == 2
-    assert "is not an ISO 8601 UTC instant" in result.stderr
+    assert "is not a real ISO 8601 UTC instant" in result.stderr
     assert result.stdout == ""
     assert not any("report-due" in line for line in _calls(tmp_path))
 
 
-def test_gate_accepts_the_prepare_end_shape_that_prep_running_writes(
-    fakes: Path, tmp_path: Path
+@pytest.mark.parametrize(
+    "value", ["2026-11-22T18:00:00Z", "2026-01-01T00:00:00Z", "2028-02-29T23:59:59Z"]
+)
+def test_gate_accepts_a_prepare_end_that_a_calendar_holds(
+    fakes: Path, tmp_path: Path, value: str
 ) -> None:
-    """The instant of the day is left to report-due, which reads it as a time."""
-    result = _run("report-gate.sh", _env(fakes, tmp_path), "--prep-ends", "2026-11-22T18:00:00Z")
-    assert any("--prep-ends 2026-11-22T18:00:00Z" in line for line in _calls(tmp_path))
-    assert "is not an ISO 8601 UTC instant" not in result.stderr
+    """A leap day is a real instant, so the meaning check must not refuse the shape."""
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--prep-ends", value)
+    assert any(f"--prep-ends {value}" in line for line in _calls(tmp_path))
+    assert "is not a real ISO 8601 UTC instant" not in result.stderr
 
 
 def test_gate_dry_run_builds_a_published_day_without_a_release_lookup(

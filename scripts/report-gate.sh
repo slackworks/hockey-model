@@ -104,11 +104,16 @@ if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
 fi
 # prep-running.sh writes this shape, and every caller passes what it prints. A wrong value
 # would otherwise reach report-due, which stops with its own error after the workflow has
-# already spent a runner and a store checkout.
-if [[ -n "$prep_ends" && ! "$prep_ends" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-  echo "report-gate: --prep-ends '$prep_ends' is not an ISO 8601 UTC instant such as" \
-    "2026-11-22T18:00:00Z; see --help" >&2
-  exit 2
+# already spent a runner and a store checkout. The shape check alone accepts 2026-02-30, so
+# the round trip through fromdateiso8601 reads the value as a real instant too (#313).
+if [[ -n "$prep_ends" ]]; then
+  if [[ ! "$prep_ends" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    ! jq -en --arg d "$prep_ends" '($d | fromdateiso8601 | todateiso8601) == $d' \
+      >/dev/null 2>&1; then
+    echo "report-gate: --prep-ends '$prep_ends' is not a real ISO 8601 UTC instant such as" \
+      "2026-11-22T18:00:00Z; see --help" >&2
+    exit 2
+  fi
 fi
 
 # The schedule read is one HTTP request. Each run then makes one release lookup, so a
