@@ -11,16 +11,12 @@ on:
 permissions:
   contents: read
 
-# One run at a time for each ref. A queued run waits, so two runs never write the report.
-concurrency:
-  group: mutation-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  # GitHub keeps one waiting run for a concurrency group, and a newer waiting run replaces an
-  # older one. A scheduled run that joined the group would cancel a manual run that waits
-  # there, so this job has no group and a scheduled run stands aside while a manual run waits
-  # or runs (#296), as the gate job of daily-prepare.yml does (#285).
+  # The work of this run holds no concurrency group, because the group is where a newer
+  # scheduled run would replace a manual run that waits. The next step is the guard that
+  # stands aside instead. GitHub keeps one waiting run for a group, and a newer waiting run
+  # replaces an older one, so a scheduled run that joined a group would cancel a manual run
+  # that waits there (#296), as the gate job of daily-prepare.yml does (#285).
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5

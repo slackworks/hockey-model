@@ -29,6 +29,11 @@ def _job(name: str) -> str:
     return rest if following is None else rest[: following.start() + 1]
 
 
+def test_no_group_holds_the_gate_back() -> None:
+    """A group on the workflow holds the gate job, so no run ever stands aside (#296)."""
+    assert not re.search(r"^concurrency:", _text(), re.MULTILINE)
+
+
 def test_a_scheduled_run_stands_aside_while_a_manual_run_waits() -> None:
     """A newer scheduled run would replace a waiting manual run and cancel it (#296)."""
     gate = _job("gate")
