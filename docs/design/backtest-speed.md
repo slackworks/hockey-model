@@ -10,7 +10,7 @@ The canonical hashes of the JSON report and the per-game CSV gate every change i
 Build this before any speed change, in its own pull request.
 
 1. `scripts/backtest_golden.py --db PATH --out DIR` runs the backtest and writes `report.json`, `games.csv`, and `hashes.json`. `hashes.json` holds the exact SHA-256 of the two files (`exact_report_sha256`, `exact_games_sha256`), which two runs on one machine must match, and a canonical form with every float rounded to nine decimals (`canonical_*`), which also holds across machines.
-2. `tests/backtest/test_golden.py` runs the same backtest on the seeded store and compares the canonical hashes with the values committed in `tests/fixtures/backtest_golden.json`, for one worker and for two. The fixture also holds the hash of the fitted weights of the seeded store (`canonical_fit_sha256`), so a change to the fit, such as #289, is gated too. A change that moves a hash fails the test.
+2. `tests/backtest/test_golden.py` runs the same backtest on the seeded store and compares the canonical hashes with the values committed in `tests/fixtures/backtest_golden.json`, for the full build and for the season shards with one worker and with two. The fixture also holds the hash of the fitted weights of the seeded store (`canonical_fit_sha256`), so a change to the fit, such as #289, is gated too. A change that moves a hash fails the test.
 3. A change that is meant to move a number is a model change. It runs the test with `UPDATE_GOLDEN=1`, updates the golden file in a separate commit, and the pull request says why.
 
 Run the script on the real store (`~/.cache/hockey-model/real.db`) before and after each speed change too, and paste the two hashes in the pull request.
@@ -69,6 +69,7 @@ Each unit logs `backtest: unit NAME took Ns` on stderr, and the run ends with `b
 Each worker opens its own read-only connection to the store file, so no worker writes.
 Each worker reads the committed rows of its own snapshot, so no writer may change the store during a backtest.
 `daily-prepare.sh` runs the backtest after the refresh, inside the one concurrency group that serializes writers, and `run_backtest` refuses `workers` above 1 for a connection with uncommitted changes.
+One worker takes the full build for such a connection and for a connection with no file.
 A failed unit stops the running workers at once, so a bad row in one build does not wait for the other build to finish.
 An error of this package keeps its type and gets the unit name in its message.
 The merge of the results has one fixed order: season, then game start, then game ID (`merge_scored`), because the block bootstrap depends on the order of its input.

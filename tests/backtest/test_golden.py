@@ -20,6 +20,7 @@ from hypothesis import strategies as st
 from mutation_copy import require_path
 from test_runner_store import PLAN, seed
 
+from hockey_model.backtest import runner
 from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.golden import (
     DECIMALS,
@@ -80,6 +81,14 @@ def test_the_seeded_backtest_matches_the_committed_hashes(store: sqlite3.Connect
 
 def test_workers_do_not_move_the_committed_hashes(store: sqlite3.Connection) -> None:
     assert _hashes(store, workers=2) == _committed()
+
+
+def test_the_full_build_matches_the_committed_hashes(
+    store: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One worker on a store file builds season by season, so the full build is forced here.
+    monkeypatch.setattr(runner, "can_shard", lambda conn, workers: False)
+    assert _hashes(store) == _committed()
 
 
 def test_a_warm_season_cache_does_not_move_the_committed_hashes(
