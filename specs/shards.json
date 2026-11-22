@@ -8,11 +8,8 @@
   ],
   "covers": [
     "scripts/daily-prepare.sh",
-    "src/hockey_model/store/refresh.py",
-    "src/hockey_model/store/refresh_backfill.py",
-    "src/hockey_model/store/refresh_context.py",
-    "src/hockey_model/store/refresh_nhl.py",
-    "src/hockey_model/store/refresh_old_work.py",
+    "src/hockey_model/store/refresh*.py",
+    "src/hockey_model/store/nhl_writes.py",
     "src/hockey_model/store/source_reads.py",
     "src/hockey_model/store_cli_refresh.py"
   ],

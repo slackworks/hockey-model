@@ -29,7 +29,7 @@ if [[ -z "$event" ]]; then
   exit 2
 fi
 
-shards() { python3 -I scripts/tlc_shards.py "$@"; }
+shards() { uv run --no-project python3 -I scripts/tlc_shards.py "$@"; }
 
 # A SHA of forty zeros is what GitHub sends as the "before" of a new branch.
 null_sha="0000000000000000000000000000000000000000"
@@ -50,8 +50,10 @@ esac
 if [[ -z "$reason" ]]; then
   if [[ -z "$base" || "$base" == "$null_sha" ]]; then
     reason="no base commit to compare with"
-  elif ! changed="$(git diff --name-only "$base" HEAD 2>/dev/null)"; then
-    reason="the diff against $base failed"
+  # A rename lists the new path only, unless --no-renames is set, so the old path of a
+  # modeled file would not select a shard.
+  elif ! changed="$(git diff --name-only --no-renames "$base" HEAD 2>&1)"; then
+    reason="the diff against $base failed: ${changed%%$'\n'*}"
   fi
 fi
 

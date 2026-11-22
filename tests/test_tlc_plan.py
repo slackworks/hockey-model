@@ -156,3 +156,37 @@ def test_every_script_that_the_workflow_runs_starts_every_shard_when_it_changes(
     for path in ("scripts/tlc.sh", "scripts/tlc_shards.py", "scripts/tlc-plan.sh"):
         assert path in data["always"], f"{path} is missing from always in specs/shards.json"
     assert ".github/workflows/tla.yml" in data["always"]
+
+
+def test_a_renamed_covered_file_selects_every_shard(repo: Path) -> None:
+    # The old path is the one that the map lists. A diff with renames shows the new path only.
+    covered = repo / "src" / "hockey_model" / "store" / "refresh_nhl.py"
+    covered.parent.mkdir(parents=True)
+    covered.write_text("x = 1\n" * 40, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "mv", "src/hockey_model/store/refresh_nhl.py", "src/hockey_model/store/gone.py")
+    _git(repo, "commit", "-q", "-m", "rename")
+    result = _plan(repo, EVENT_NAME="pull_request", BASE_SHA=base)
+    assert json.loads(result.stdout) == NAMES
+
+
+def test_a_failed_diff_gives_the_reason_of_git(repo: Path) -> None:
+    result = _plan(repo, EVENT_NAME="push", BEFORE_SHA="deadbeef" * 5)
+    assert json.loads(result.stdout) == NAMES
+    assert "the diff against" in result.stderr
+    assert "bad object" in result.stderr or "fatal" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/hockey_model/store/refresh_other.py",
+        "src/hockey_model/store/refresh_new_source.py",
+        "src/hockey_model/store/nhl_writes.py",
+    ],
+)
+def test_a_module_that_owns_a_modeled_rule_selects_every_shard(repo: Path, path: str) -> None:
+    base = _change(repo, path)
+    assert json.loads(_plan(repo, EVENT_NAME="pull_request", BASE_SHA=base).stdout) == NAMES
