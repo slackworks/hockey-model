@@ -1,8 +1,10 @@
 """Tests for scripts/tlc.sh. The tests use a fake curl or a fake jar, so no test downloads TLC."""
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -32,9 +34,29 @@ def test_help_prints_usage_and_exits_zero() -> None:
 
 def test_help_lists_every_config_in_specs_once() -> None:
     usage = _run("--help").stdout
-    listed = re.findall(r"^  (specs/\S+\.cfg)$", usage, flags=re.MULTILINE)
+    listed = re.findall(r"^  [a-z]+ +(specs/\S+\.cfg)$", usage, flags=re.MULTILINE)
     present = sorted(f"specs/{path.name}" for path in (SCRIPT.parents[1] / "specs").glob("*.cfg"))
     assert sorted(listed) == present, "tlc.sh does not run each config in specs/ once"
+
+
+def test_list_prints_one_json_object_for_each_shard() -> None:
+    result = _run("--list")
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [row["name"] for row in rows] == ["stall", "blocked", "cutoff", "recent", "main"]
+
+
+def test_an_unknown_shard_exits_two_and_names_the_shards() -> None:
+    result = _run("--shard", "bogus")
+    assert result.returncode == 2
+    assert "'bogus' is not a shard" in result.stderr
+    assert "stall" in result.stderr
+
+
+def test_shard_without_a_name_exits_two() -> None:
+    result = _run("--shard")
+    assert result.returncode == 2
+    assert "--shard takes one shard name" in result.stderr
 
 
 def test_help_names_the_deadlock_exit_code() -> None:
@@ -236,6 +258,7 @@ def _run_with_fake_java(
     blocked_rc: int = 0,
     cutoff_rc: int = 0,
     recent_rc: int = 0,
+    shard: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run a copy of tlc.sh whose pinned hash matches a fake jar, and return the java calls."""
     jar_bytes = b"a fake tla tools jar"
@@ -249,6 +272,9 @@ def _run_with_fake_java(
     )
     assert pinned[1] == 1, "tlc.sh must pin the jar with one TLA_TOOLS_SHA256 line"
     (root / "scripts" / "tlc.sh").write_text(pinned[0], encoding="utf-8")
+    # The script reads the shard map through the helper, so the copy needs both files.
+    shutil.copy(SCRIPT.parent / "tlc_shards.py", root / "scripts" / "tlc_shards.py")
+    shutil.copy(SCRIPT.parents[1] / "specs" / "shards.json", root / "specs" / "shards.json")
     jars = tmp_path / "jars"
     jars.mkdir()
     (jars / "tla2tools-v1.7.4.jar").write_bytes(jar_bytes)
@@ -263,7 +289,7 @@ def _run_with_fake_java(
         FAKE_MAIN_RC=str(main_rc),
     )
     result = subprocess.run(
-        ["bash", str(root / "scripts" / "tlc.sh")],
+        ["bash", str(root / "scripts" / "tlc.sh"), *(["--shard", shard] if shard else [])],
         capture_output=True,
         text=True,
         check=False,
@@ -336,3 +362,17 @@ def test_a_tlc_exit_code_is_returned_and_named(tmp_path: Path, code: int, messag
     result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=code)
     assert result.returncode == code
     assert message in result.stderr
+
+
+def test_one_shard_runs_that_config_alone(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, shard="recent")
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 1
+    assert "-config specs/daily_prepare_recent.cfg " in calls[0]
+
+
+def test_a_failed_shard_names_itself(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13, shard="main")
+    assert result.returncode == 13
+    assert len(calls) == 1
+    assert "(shard main)" in result.stderr
