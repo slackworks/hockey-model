@@ -99,6 +99,32 @@ def test_the_skip_job_hands_its_answer_to_the_rebuild_job() -> None:
     assert "needs.skip.outputs.rebuild" in _job(text, "prepare")
 
 
+@pytest.mark.parametrize("name", ["skip", "prepare"])
+def test_each_build_job_saves_the_cache_under_its_own_key(name: str) -> None:
+    """GitHub refuses a save under a key that another job of the run took first (#311).
+
+    The refused save is a green step with no cache entry, so the rebuilt store would never
+    be stored. The restore key matches the save key of the same job, or the store that the
+    job wrote is not the store that it reads back.
+    """
+    job = _job(PREPARE.read_text(encoding="utf-8"), name)
+    assert _cache_keys(job) == {f"hockey-model-store-${{{{ github.run_id }}}}-{name}"}
+
+
+def _cache_keys(job: str) -> set[str]:
+    """Return every cache key that one job names, from a `key:` line."""
+    return {key.rstrip() for key in re.findall(r"key: (hockey-model-store-.*)", job)}
+
+
+def test_the_skip_and_the_rebuild_do_not_share_a_cache_key() -> None:
+    """One key for both jobs is the collision that #311 found."""
+    text = PREPARE.read_text(encoding="utf-8")
+    skip_keys = _cache_keys(_job(text, "skip"))
+    prepare_keys = _cache_keys(_job(text, "prepare"))
+    assert skip_keys and prepare_keys
+    assert skip_keys.isdisjoint(prepare_keys)
+
+
 def test_only_a_scheduled_run_asks_whether_a_manual_run_waits() -> None:
     gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
     assert "actions: read" in gate

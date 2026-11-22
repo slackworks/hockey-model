@@ -92,7 +92,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-skip
           restore-keys: |
             hockey-model-store-
       # Exit code 4 means the day needs the rebuild, which is the next job's work. Any other
@@ -123,12 +123,15 @@ jobs:
       - if: always()
         name: Drop the upgrade backup
         run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak*
-      # Saved even after a failure, so the refreshed store is not read again.
+      # Saved even after a failure, so the refreshed store is not read again. The key names the
+      # job, because GitHub refuses a save under a key that another job of this run took first
+      # (#311). Jobs of one run share the run id, and a refused save is a green step with no
+      # cache entry, so the rebuilt store of the prepare job would never be stored.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-skip
     outputs:
       rebuild: ${{ steps.check.outputs.rebuild }}
 
@@ -156,7 +159,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-prepare
           restore-keys: |
             hockey-model-store-
       - env:
@@ -180,9 +183,9 @@ jobs:
         name: Drop the upgrade backup
         run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak*
       # Saved even after a failure or an early stop (exit code 75), so a partial backfill resumes
-      # on the next run.
+      # on the next run. The key names the job, for the reason that the skip job states (#311).
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-prepare
