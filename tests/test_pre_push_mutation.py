@@ -200,6 +200,22 @@ def test_a_run_that_failed_before_its_stats_leaves_a_directory_to_remove(
     assert not (repo / "mutants").exists()
 
 
+def test_a_mutants_path_that_is_a_file_names_its_own_fix(mod: ModuleType, repo: Path) -> None:
+    """rmtree raises NotADirectoryError on a file, and that names no fix to the reader."""
+    (repo / "mutants").write_text("mine", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match="is a file, not a directory"):
+        mod.clear_generated_mutants(repo)
+    assert (repo / "mutants").exists()
+
+
+def test_a_log_that_cannot_be_written_keeps_the_cause_of_the_failure(
+    mod: ModuleType, repo: Path
+) -> None:
+    """A missing .tmp that is a file stops the log, and the cause must still reach the reader."""
+    (repo / ".tmp").write_text("not a directory", encoding="utf-8")
+    assert mod._write_log(repo, ["run"], "out", "err").startswith("no log was written")
+
+
 def test_the_refusal_names_the_name_that_is_not_mutmut_output(mod: ModuleType, repo: Path) -> None:
     (repo / "mutants").mkdir()
     (repo / "mutants" / "notes.md").write_text("mine", encoding="utf-8")

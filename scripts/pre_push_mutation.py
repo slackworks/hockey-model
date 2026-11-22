@@ -356,7 +356,12 @@ def clear_generated_mutants(repo: Path) -> None:
     target = repo / MUTANTS_DIR
     if not target.exists():
         return
-    names = {entry.name for entry in target.iterdir()} if target.is_dir() else set()
+    if not target.is_dir():
+        raise PushCheckError(
+            f"{MUTANTS_DIR} is a file, not a directory, so it was not removed. Move it aside, "
+            "then push again."
+        )
+    names = {entry.name for entry in target.iterdir()}
     if not names <= MUTANTS_OUTPUT_NAMES:
         raise PushCheckError(
             f"{MUTANTS_DIR}/ does not hold only mutmut output, so it was not removed. "
@@ -393,14 +398,18 @@ def _cause(stdout: str, stderr: str) -> str:
 
 
 def _write_log(repo: Path, args: list[str], stdout: str, stderr: str) -> str:
-    """Write the full output of a failed run to ``.tmp/mutation-changed.log``, and return its name.
+    """Write the full output of a failed run to ``.tmp/mutation-changed.log``, return its name.
 
-    The message names the cause in one screen, and the traceback goes to the log (#316).
+    The message names the cause in one screen, and the traceback goes to the log (#316). A log
+    that cannot be written is part of the cause, so it never hides why the run failed.
     """
     path = repo / MUTATION_LOG
-    path.parent.mkdir(parents=True, exist_ok=True)
     body = f"$ mutmut {' '.join(args)}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
-    path.write_text(body, encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        return f"no log was written ({exc})"
     return MUTATION_LOG.as_posix()
 
 
