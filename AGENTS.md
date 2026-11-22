@@ -8,7 +8,7 @@ Hockey player stat and game prediction library. Python 3.14, managed with uv.
 - Run tests: `uv run pytest` (writes `lcov.info` and `coverage.json`). The CI test job and the pre-push hook add `-n auto` (pytest-xdist). Do not put the flag in `addopts`: mutmut runs pytest by itself and needs one process.
 - Per-module coverage floor: `uv run python3 scripts/check_per_module_coverage.py`
 - Lint and format: `uv run ruff check .` and `uv run ruff format --check .`
-- Model check: bash scripts/tlc.sh (TLC on specs/daily_prepare.tla; needs Java 11 or later)
+- Model check: bash scripts/tlc.sh (TLC on specs/daily_prepare.tla; needs Java 11 or later). `--list` prints the shards of `specs/shards.json`, and `--shard NAME` runs one.
 - Type check: `uv run ty check`
 - Language server: `uv run ty server`. `ty` is also the type checker, so the editor and `uv run ty check` agree. Do not add Pyright.
 - Wheel smoke test: `uv run python3 scripts/smoke_wheel.py`. It builds the wheel, installs the dependencies that `uv.lock` pins and then the wheel with `--no-deps` in a clean venv, and predicts one game from a seeded store. CI runs it in the `smoke` job. `--drop NAME` removes a file from the wheel, and the test must then fail.
