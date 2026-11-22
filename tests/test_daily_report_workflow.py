@@ -61,6 +61,18 @@ def test_an_over_budget_report_is_uploaded_and_published() -> None:
     assert "report_complete: ${{ steps.state.outputs.report_complete }}" in text
 
 
+def test_the_gate_job_can_read_the_prepare_runs_it_asks_about() -> None:
+    """The gate lists workflow runs, so it needs the actions scope (#311).
+
+    A token without it gets an empty list, and the gate then reads an idle store group.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    gate = text[text.index("\n  gate:\n") : text.index("\n  build:\n")]
+    permissions = gate[gate.index("    permissions:\n") : gate.index("    outputs:\n")]
+    assert "contents: read" in permissions
+    assert "actions: read" in permissions
+
+
 def test_the_gate_step_checks_each_output_before_it_writes_it() -> None:
     """A jq failure inside an echo argument would pass, and an empty output skips the build."""
     text = WORKFLOW.read_text(encoding="utf-8")

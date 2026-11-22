@@ -38,6 +38,10 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # The gate reads the live prepare runs, which the script reads from the runs API.
+      actions: read
     outputs:
       due: ${{ steps.gate.outputs.due }}
       publish: ${{ steps.gate.outputs.publish }}
