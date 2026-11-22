@@ -111,14 +111,13 @@ The cap is reachable, because the model can hold one record more than the cap al
 `MaxCommits` is 4.
 TLC checks 3.8 million distinct states in about 40 seconds.
 Run it with `bash scripts/tlc.sh --shard registry`.
-The `registry` shard of `specs/shards.json` starts when a file of `src/hockey_model/experiments/` or the spec changes.
-A change of a record file does not start it, because the model reads the code that checks the records.
+The `registry` shard of `specs/shards.json` starts when a file of `src/hockey_model/experiments/`, a record under `experiments/`, or the spec changes.
 
 `tests/test_tla_experiment_registry.py` checks that `MaxLooks` is `MAX_LOOKS`, that `ImmutableFields` is `IMMUTABLE_FIELDS`, that the config has more record numbers than looks, and that the config checks every property except the two known gaps.
 
 ## What the model found
 
-The first three findings were gaps in the code.
+The first four findings were gaps in the code.
 They are fixed, and each fix has a test in `tests/test_experiments/`.
 
 ### 1. A field that changed and changed back
@@ -161,7 +160,16 @@ A branch that deleted a record in one commit and added a higher record in the ne
 After a squash merge, the deleting commit held the higher record, and main failed.
 A higher record now outlives a deletion only when it is in the parent of the commit and in the commit.
 
-### 4. Gaps that remain
+### 4. Merge commits, found by the review and not by the model
+
+The model has a linear history.
+A path log follows one parent when a merge keeps the other side, so a branch that held a result could drop out of the history of a record.
+A merge commit also lists no file names, so a record that only the merge deleted was not a deleted record.
+The history of a record now runs with `--full-history`.
+The deletion log runs on the first-parent line, where a merge shows the files that it removed.
+The model does not cover merge commits that change a record.
+
+### 5. Gaps that remain
 
 Issue #307: the check accepts a registration commit that already holds a result.
 The model shows a one-commit history that passes.
@@ -171,7 +179,7 @@ Issue #308: a squash merge can fail on main after the branch passed.
 The case needs a record number that a pull request deletes and adds again.
 Main is red, so the failure is on the safe side.
 
-### 5. Checks that the properties do not need
+### 6. Checks that the properties do not need
 
 Removing `WithdrawnError` breaks no property of the model.
 `OneShotError` already catches a result that a withdrawal clears.

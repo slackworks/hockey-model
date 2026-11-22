@@ -96,9 +96,8 @@ def test_a_change_of_the_registry_code_selects_the_registry_shard_only() -> None
         assert shards.plan(DATA, [path]) == REGISTRY
 
 
-def test_a_change_of_a_registry_record_selects_no_shard() -> None:
-    # The model reads the code that checks the records, not the records.
-    assert shards.plan(DATA, ["experiments/0001-first-look.json"]) == []
+def test_a_change_of_a_registry_record_selects_the_registry_shard() -> None:
+    assert shards.plan(DATA, ["experiments/0001-first-look.json"]) == REGISTRY
 
 
 def test_a_change_of_a_spec_selects_the_shards_that_run_it_and_a_config_selects_its_shard() -> None:

@@ -32,6 +32,7 @@
       "spec": "specs/experiment_registry.tla",
       "config": "specs/experiment_registry.cfg",
       "covers": [
+        "experiments/**",
         "src/hockey_model/experiments/*.py"
       ]
     },

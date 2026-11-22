@@ -230,3 +230,65 @@ def test_a_record_that_a_merge_deleted_is_a_deleted_record(repo_root: Path) -> N
     _git(repo_root, "rm", "-q", f"experiments/{_ID}.json")
     _git(repo_root, "commit", "-m", "merge and drop the record")
     assert deleted_record_ids([], repo_root) == [_ID]
+
+
+def test_a_repository_with_no_commit_has_no_registration_commit(repo_root: Path) -> None:
+    subprocess.run(["git", "init"], cwd=repo_root, capture_output=True, check=True)
+    (repo_root / "experiments" / f"{_ID}.json").write_text("{}\n")
+    assert registration_commit(_ID, repo_root) is None
+
+
+_COMMITS = st.lists(
+    st.tuples(
+        st.text("0123456789abcdef", min_size=1, max_size=8),
+        st.lists(st.from_regex(r"experiments/[0-9]{4}-[a-z]+\.json", fullmatch=True), max_size=2),
+    ),
+    max_size=5,
+)
+
+
+@given(_COMMITS)
+def test_a_history_log_gives_each_name_with_the_commit_before_it(
+    commits: list[tuple[str, list[str]]],
+) -> None:
+    text = "".join(
+        f"commit:{sha}\n" + "".join(f"{name}\n" for name in names) for sha, names in commits
+    )
+    assert history.parse_history_log(text) == [
+        (sha, name) for sha, names in commits for name in names
+    ]
+
+
+@given(st.from_regex(r"experiments/[0-9]{4}-[a-z]+\.json", fullmatch=True), _COMMITS)
+def test_a_name_before_the_first_commit_line_of_a_history_log_is_an_error(
+    name: str, commits: list[tuple[str, list[str]]]
+) -> None:
+    text = f"{name}\n" + "".join(f"commit:{sha}\n" for sha, _ in commits)
+    with pytest.raises(HockeyModelError, match="before any commit"):
+        history.parse_history_log(text)
+
+
+@given(
+    st.one_of(
+        st.text(),
+        st.builds(
+            json.dumps,
+            st.recursive(
+                st.none() | st.booleans() | st.integers() | st.text(),
+                lambda inner: (
+                    st.lists(inner, max_size=3)
+                    | st.dictionaries(st.text(max_size=5), inner, max_size=3)
+                ),
+                max_leaves=8,
+            ),
+        ),
+    )
+)
+def test_a_stored_record_text_is_a_json_object_or_a_named_error(text: str) -> None:
+    try:
+        parsed = history.parse_record_object(text, "commit abc of experiments/0001-valid.json")
+    except HockeyModelError as error:
+        assert "commit abc" in str(error)
+    else:
+        assert isinstance(parsed, dict)
+        assert parsed == json.loads(text)

@@ -29,7 +29,7 @@ def record_relative_path(record_id: str) -> str:
 
 def registration_commit(record_id: str, repo_root: Path) -> str | None:
     """Return the commit that first added the record, or None when git does not track it."""
-    if not _is_work_tree(repo_root):
+    if not _is_work_tree(repo_root) or not _has_head(repo_root):
         return None
     if _git(["rev-parse", "--is-shallow-repository"], repo_root).strip() == "true":
         raise HockeyModelError(
@@ -202,12 +202,12 @@ def _deleted_below_a_confirmation(
     return found
 
 
-def parse_deletion_log(text: str) -> list[tuple[str, str]]:
-    """Return ``(commit, record_id)`` for each JSON file that a commit deleted.
+def parse_history_log(text: str) -> list[tuple[str, str]]:
+    """Return ``(commit, path)`` for each file name that a commit lists.
 
-    ``text`` is the output of ``git log --diff-filter=D --name-only --format=commit:%H``. A
-    file name before the first ``commit:`` line means that the output is not a log of this
-    form, and it raises.
+    ``text`` is the output of ``git log --name-only --format=commit:%H``. A commit that lists no
+    name, such as a merge, gives no pair. A file name before the first ``commit:`` line means that
+    the output is not a log of this form, and it raises.
     """
     pairs: list[tuple[str, str]] = []
     commit: str | None = None
@@ -218,12 +218,25 @@ def parse_deletion_log(text: str) -> list[tuple[str, str]]:
         elif name:
             if commit is None:
                 raise HockeyModelError(
-                    f"read the deletion log: the file name {name!r} comes before any commit; "
+                    f"read the commit log: the file name {name!r} comes before any commit; "
                     "the log must use --format=commit:%H"
                 )
-            if name.endswith(".json"):
-                pairs.append((commit, Path(name).stem))
+            pairs.append((commit, name))
     return pairs
+
+
+def parse_deletion_log(text: str) -> list[tuple[str, str]]:
+    """Return ``(commit, record_id)`` for each JSON file that a commit deleted.
+
+    ``text`` is the output of ``git log --diff-filter=D --name-only --format=commit:%H``. A
+    file name before the first ``commit:`` line means that the output is not a log of this
+    form, and it raises.
+    """
+    return [
+        (commit, Path(name).stem)
+        for commit, name in parse_history_log(text)
+        if name.endswith(".json")
+    ]
 
 
 def outlived(
@@ -295,11 +308,11 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
 
     A commit that deleted the file is left out, because it holds no copy to read.
 
-    The history is the history of one path, and it holds the commits of every branch that a merge
-    brought in, because git hides a side branch from a path log when the merge keeps one side.
-    Git does not follow a rename, because it pairs a
-    removed file with an added file by how alike the two are. A record that moves to another
-    name is a deleted record and a new record (docs/design/experiment-registry-tla.md).
+    The history is the history of one path. It holds the commits of every branch that a merge
+    brought in, because git hides a side branch from a path log when the merge keeps the other
+    side. Git does not follow a rename, because it pairs a removed file with an added file by
+    how alike the two are. A record that moves to another name is a deleted record and a new
+    record (docs/design/experiment-registry-tla.md).
     """
     out = _git(
         [
@@ -313,14 +326,7 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
         ],
         repo_root,
     )
-    pairs: list[tuple[str, str]] = []
-    commit = ""
-    for line in out.splitlines():
-        if line.startswith("commit:"):
-            commit = line.removeprefix("commit:")
-        elif line.strip():
-            pairs.append((commit, line.strip()))
-    return pairs
+    return parse_history_log(out)
 
 
 def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object:
@@ -331,14 +337,18 @@ def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object
 def _record_at(commit: str, relative: str, repo_root: Path) -> dict[str, object]:
     """Return a record as one commit stored it, as a JSON object."""
     text = _git(["show", f"{commit}:{relative}"], repo_root)
+    return parse_record_object(text, f"{relative} at commit {commit}")
+
+
+def parse_record_object(text: str, where: str) -> dict[str, object]:
+    """Return the JSON object in ``text``. ``where`` names the source in the error."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise HockeyModelError(f"read {relative} at commit {commit}: invalid JSON: {exc}") from exc
+        raise HockeyModelError(f"read {where}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise HockeyModelError(
-            f"read {relative} at commit {commit}: a record must be a JSON object, "
-            f"got a {type(data).__name__}"
+            f"read {where}: a record must be a JSON object, got a {type(data).__name__}"
         )
     return data
 
