@@ -292,3 +292,19 @@ def test_a_stored_record_text_is_a_json_object_or_a_named_error(text: str) -> No
     else:
         assert isinstance(parsed, dict)
         assert parsed == json.loads(text)
+
+
+def test_a_result_that_only_a_merge_commit_wrote_stays_in_the_history(repo_root: Path) -> None:
+    """A conflict-resolving merge holds its own copy of the record, so a later change sees it."""
+    _init_main(repo_root)
+    _commit(repo_root, _record())
+    _git(repo_root, "switch", "-c", "side")
+    _commit(repo_root, _record(title="Side title"))
+    _git(repo_root, "switch", "main")
+    _commit(repo_root, _record(title="Main title"))
+    subprocess.run(["git", "merge", "--no-ff", "side"], cwd=repo_root, capture_output=True)
+    _commit(repo_root, _record("a"))
+    _git(repo_root, "commit", "--amend", "--no-edit", "-m", "merge with a result")
+    _commit(repo_root, _record())
+    with pytest.raises(HockeyModelError, match="one-shot"):
+        check_one_shot(_record(), repo_root)

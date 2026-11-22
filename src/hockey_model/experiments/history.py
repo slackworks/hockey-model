@@ -318,6 +318,8 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
         [
             "log",
             "--full-history",
+            # A merge commit lists its files against each parent, so its own copy is read.
+            "--diff-merges=separate",
             "--diff-filter=d",
             "--name-only",
             "--format=commit:%H",
@@ -326,7 +328,8 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
         ],
         repo_root,
     )
-    return parse_history_log(out)
+    # A merge commit is listed once for each parent, so keep the first of each pair.
+    return list(dict.fromkeys(parse_history_log(out)))
 
 
 def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object:
