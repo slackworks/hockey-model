@@ -128,7 +128,9 @@ if [[ "$force" == true ]]; then
 fi
 args+=(--margin-seconds "$margin_s")
 args+=(--prep-ends "$prep_ends")
-status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
+# The token is unset here, as daily-report.sh unsets it, because a read of the schedule
+# needs no credential and this step must never use a write scope.
+status_json="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
   echo "report-gate: report-due failed; its error is above" >&2
   exit 1
 }
@@ -178,7 +180,8 @@ fi
 # The decision is in report_gate.py. This script reads the facts: the schedule above, and the
 # release below. A dry run and a day with no games never reach the release lookup.
 decide() {
-  uv run hockey-model report-decide --due "$due" --games "$games" --date "$day" \
+  env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-decide \
+    --due "$due" --games "$games" --date "$day" \
     --first-puck-drop "$first_drop" --margin-seconds "$margin_s" --published "$1" \
     ${force_flag[@]+"${force_flag[@]}"} ${dry_flag[@]+"${dry_flag[@]}"}
 }

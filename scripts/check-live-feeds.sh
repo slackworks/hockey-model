@@ -33,7 +33,9 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-report="$(uv run hockey-model store gaps --live)" || {
+# The token is unset here, as daily-report.sh unsets it, because a read of the store needs
+# no credential and this check must never use a write scope.
+report="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model store gaps --live)" || {
   echo "check-live-feeds: 'store gaps --live' failed; its error is above" >&2
   exit 1
 }

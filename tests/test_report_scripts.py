@@ -341,6 +341,22 @@ def test_gate_fails_on_a_payload_without_the_first_puck_drop(fakes: Path, tmp_pa
     assert "first_puck_drop_utc" in result.stderr
 
 
+def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None:
+    """The gate reads the schedule and the decision in Python, so it carries no token.
+
+    The release lookup is the one call that needs the token, and it is a gh call. Every uv
+    call makes an HTTP read of its own, so it must not see the token.
+    """
+    log = tmp_path / "env.log"
+    env = _env(fakes, tmp_path, FAKE_ENV_LOG=str(log), GH_TOKEN="a-token")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    calls = [line for line in lines if line.startswith("uv ")]
+    assert len(calls) == 3, calls
+    assert all(" GH_TOKEN=unset REPORT_GH_TOKEN=unset" in line for line in calls), calls
+
+
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
     fakes: Path, tmp_path: Path
 ) -> None:

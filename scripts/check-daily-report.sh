@@ -47,7 +47,9 @@ if ! is_valid_day "$day"; then
   exit 2
 fi
 
-status_json="$(uv run hockey-model report-due --date "$day")" || {
+# The token is unset here, as daily-report.sh unsets it, because a read of the schedule
+# needs no credential and this check must never use a write scope.
+status_json="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-due --date "$day")" || {
   echo "check-daily-report: report-due failed for $day; its error is above" >&2
   exit 1
 }
