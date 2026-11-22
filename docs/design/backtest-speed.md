@@ -171,6 +171,10 @@ A skater who never played in goal changes no key.
 
 The backtest builds all candidate features, and the fit builds the features that passed the joint test.
 The rows differ in their notes, so each feature list has its own file for a season, and a new key replaces only the file of its own list.
+A save also removes the files of the older feature lists of that mode and season, and keeps the newest `KEEP_FEATURE_LISTS` by file time (#306).
+The list of the file that was just saved always stays.
+A hit sets the file time to now, so the lists that a run reads outlast the lists that it does not.
+A series of experiments on many feature lists therefore cannot grow the directory without limit.
 
 A store file with no uncommitted change builds season by season, and reads the cache, for one worker too (`can_shard`, #305).
 The shards then run in the current process.
