@@ -66,6 +66,9 @@ RESULT_FIELDS = (
 # about 2600s of work. Shard 3 gained runner and shards, which brings it to about 2400s.
 # Read the new work as an estimate until a CI run records the real durations.
 #
+# The season row cache modules joined in #304 and went to shard 1, the lightest. Their tests run
+# in about 5s, so read their work as small until a CI run records it.
+#
 # The fit under-reads a shard of cheap mutants. Old shard 0 held 190 mutants of
 # sources.http, summed to 357s, and took 385s: 1.95 times its prediction. Each mutant is
 # a subprocess, so a cheap one spends most of its time in startup that its recorded
@@ -73,7 +76,7 @@ RESULT_FIELDS = (
 # mutant, so read their minutes as a floor and keep the margin at the step limit.
 SHARDS: tuple[tuple[str, ...], ...] = (
     ("experiments.models", "json_schema"),
-    ("backtest.metrics",),
+    ("backtest.metrics", "backtest.season_key", "backtest.row_cache", "backtest.row_codec"),
     ("sources.nhl", "sources.http", "sources.payload", "backtest.units", "backtest.golden"),
     (
         "backtest.runner",
