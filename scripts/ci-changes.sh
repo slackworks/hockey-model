@@ -30,12 +30,14 @@ case "${1:-}" in
   ;;
 esac
 
+# Tests read these design notes, so a change to one is a code change.
+read_by_tests=" docs/design/daily-prepare-tla.md docs/design/experiment-registry-tla.md "
+
 seen=0
 while IFS= read -r path || [[ -n "$path" ]]; do
   [[ -z "$path" ]] && continue
   seen=1
-  # tests/test_tla_appendix.py reads the TLA design note, so a change to it is a code change.
-  if [[ "$path" != *.md || "$path" == "docs/design/daily-prepare-tla.md" ]]; then
+  if [[ "$path" != *.md || "$read_by_tests" == *" $path "* ]]; then
     echo "ci-changes.sh: $path is not a docs path, so the code jobs run" >&2
     echo "code=true"
     # The writer of the pipe gets SIGPIPE and fails the step when the input stays unread.

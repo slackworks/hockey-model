@@ -48,6 +48,7 @@ def test_a_diff_of_markdown_only_skips_the_code_jobs(paths: list[str]) -> None:
         "pyproject.toml",
         ".github/workflows/ci.yml",
         "docs/design/daily-prepare-tla.md",
+        "docs/design/experiment-registry-tla.md",
         "README.md.bak",
         "notes.markdown",
     ],
@@ -56,6 +57,18 @@ def test_any_other_path_runs_the_code_jobs(path: str) -> None:
     result = decide(["README.md", path])
     assert (result.returncode, result.stdout) == (0, "code=true\n")
     assert path in result.stderr
+
+
+def test_every_design_note_that_a_test_reads_runs_the_code_jobs() -> None:
+    named = re.compile(r'"docs" / "design" / "([a-z0-9-]+\.md)"')
+    notes = {
+        f"docs/design/{match}"
+        for path in (ROOT / "tests").rglob("*.py")
+        for match in named.findall(path.read_text(encoding="utf-8"))
+    }
+    assert notes
+    for note in sorted(notes):
+        assert decide([note]).stdout == "code=true\n", note
 
 
 @pytest.mark.parametrize("paths", [[], [""], ["", ""]])
