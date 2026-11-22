@@ -160,7 +160,8 @@ if [[ -f "$store_dir/prepared-$day" ]]; then
   fi
 fi
 # A day that reaches this line needs the backtest and the fit. A check-only run says so and
-# stops before it removes any file, so the short job never writes the store.
+# stops before it removes any file, so the short job never rebuilds the store. The upgrade
+# and the refresh above already ran, and the check-only run reports from the store they left.
 if [[ "$check_only" == 1 ]]; then
   echo "daily-prepare: $day needs the backtest and the fit; the rebuild runs in the long job" >&2
   exit "$REBUILD_NEEDED"
