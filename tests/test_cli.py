@@ -218,7 +218,7 @@ def test_cli_refresh_exits_one_on_error(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
-    monkeypatch.setattr("hockey_model.store_cli.HttpClient", _RefreshClient)
+    monkeypatch.setattr("hockey_model.store_cli_refresh.HttpClient", _RefreshClient)
     code = cli.main(["refresh", "--backfill-from", "2026-01-10"])
     report = json.loads(capsys.readouterr().out)
     assert code == 1

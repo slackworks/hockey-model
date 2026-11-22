@@ -127,7 +127,7 @@ The model holds no property that says a blocked URL needs no span, because the d
 The value of `specs/daily_prepare_blocked.cfg` is that every property of the main config still holds when a gap forms with no span.
 The main config keeps `Blocked` empty, because a blocked day there raised the count from about 27 million distinct states to more than 50 million (#188).
 
-### The exit code: `store_cli.py`, `_refresh()`, and `scripts/daily-prepare.sh`
+### The exit code: `store_cli_refresh.py`, `refresh_command()`, and `scripts/daily-prepare.sh`
 
 1. `refresh` exits 1 when any source recorded an error.
    This includes MoneyPuck, ESPN, and Daily Faceoff, which run after the NHL steps (`store/refresh.py`, `_STEPS`).
@@ -394,7 +394,7 @@ The first one was a limit of the code. Issue #178 fixed it.
 
 1. `specs/daily_prepare.tla`: copy the reference spec from the appendix without change.
 2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, and `specs/daily_prepare_recent.cfg`: copy the reference `.cfg` files from the appendix without change.
-3. `scripts/tlc.sh`: the run script below.
+3. `scripts/tlc.sh`: the run script below. `specs/shards.json`, `specs/shards.schema.json`, `scripts/tlc_shards.py`, and `scripts/tlc-plan.sh`: the shards below.
 4. `tests/test_tla_constants.py`: the constants test above.
 5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all five configs run, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. Every config in `specs/` must appear once in the usage text. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
 The Java version checks run against fake `java` output for versions 8, 9, 11, 17, and 21, and for unreadable output.
@@ -412,7 +412,7 @@ The spec is not an input source, a model, or a feature of the report, so the AGE
 Behavior:
 
 1. `set -euo pipefail`. A header comment states the usage, and `--help` prints it, as `scripts/daily-prepare.sh` does.
-2. Flags: `--help` only. Any other argument exits 2 with a message that names it. The script passes `-workers auto`, because TLC runs one worker by default.
+2. Flags: `--help`, `--list`, and `--shard NAME`. Any other argument exits 2 with a message that names it. An unknown shard name exits 2 before the Java and jar checks. The script passes `-workers auto`, because TLC runs one worker by default. It reads the shards from `specs/shards.json` through `scripts/tlc_shards.py`, and with no flag it runs every shard in the order of the map.
 3. `TLA_TOOLS_VERSION="v1.7.4"` and `TLA_TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"`.
    v1.7.4 is the newest release that is not a pre-release.
    The checksum came from the v1.7.4 `tla2tools.jar` release asset on 2026-11-07, because GitHub gives no digest for this asset.
@@ -435,70 +435,104 @@ Behavior:
 
 Run `shellcheck` and `shfmt` on the script.
 
+### The shards (#260)
+
+`specs/shards.json` is the one map of the TLC work, and the script and the workflow both read it through `scripts/tlc_shards.py`.
+Each shard has a name, a spec, and a config, and it runs in the order of the map, with the small shards first.
+The map lists the paths that start every shard (`always`: the specs, the scripts, and the workflow), and the paths of the code that every shard models (`covers`).
+A shard may add paths of its own.
+A pattern that ends in `/**` matches every path under that directory.
+`specs/shards.schema.json` describes the map, and a test checks the map against it.
+
+The `covers` list names the modules that own a rule that the model states: the `refresh*.py` modules of the store, `nhl_writes.py` for the boxscore query, `source_reads.py` for the abandon rule, `daily-prepare.sh` for the exit code and the marker, and `store_cli_refresh.py` for the exit code of the refresh command.
+A change of the fit command, in `store_cli.py`, starts no shard.
+`store_cli_parsers.py` only declares the flags, such as `--budget-seconds`, and the meaning of a flag lives in a covered module, so a change of a flag declaration starts no shard.
+The model takes the results of the URL shapes, the HTTP status classes, the time parsing, and the game day as constants, so those modules are not listed.
+A test checks that every `covers` pattern matches a file and that every config in `specs/` is the config of one shard.
+
+`scripts/tlc.sh --list` prints each shard as a JSON line.
+`scripts/tlc.sh --shard NAME` runs one shard, and the script names the shard that failed.
+`scripts/tlc-plan.sh` picks the shards for the workflow.
+It compares `HEAD` with the base of the pull request or the commit before the push, without rename detection, so the old path of a renamed file selects its shard.
+It passes the changed paths to `scripts/tlc_shards.py plan`.
+A manual run, a push with no usable base, and a diff that fails select every shard, and the summary gives the reason.
+A run on `main` is never cancelled by a later push, because the later push would leave the change of the first one unchecked.
+
+Every shard models the same code today, so every shard lists the same code paths.
+A property split (#188, #191) adds shards to the map, and a shard that models less code lists fewer paths.
+
 ### `.github/workflows/tla.yml`
 
 ```yaml
 name: tla
 
-# TLC checks the daily prepare spec. It runs when the spec or the code that it models changes.
-# It is not a required check, because the path filter skips most pull requests.
+# TLC checks the daily prepare spec. The plan job reads specs/shards.json and starts one job
+# for each shard that the change reaches. A change that no shard covers starts no TLC job.
+# The job is not a required check, because a pull request can start no TLC job.
 on:
   pull_request:
-    paths:
-      - specs/**
-      - scripts/tlc.sh
-      - scripts/daily-prepare.sh
-      - src/hockey_model/store/refresh_backfill.py
-      - src/hockey_model/store/refresh_nhl.py
-      - src/hockey_model/store/refresh_context.py
-      - src/hockey_model/store/source_reads.py
-      - src/hockey_model/store/refresh.py
-      - src/hockey_model/store_cli.py
-      - src/hockey_model/store_cli_parsers.py
-      - .github/workflows/tla.yml
   push:
     branches: [main]
-    paths:
-      - specs/**
-      - scripts/tlc.sh
-      - scripts/daily-prepare.sh
-      - src/hockey_model/store/refresh_backfill.py
-      - src/hockey_model/store/refresh_nhl.py
-      - src/hockey_model/store/refresh_context.py
-      - src/hockey_model/store/source_reads.py
-      - src/hockey_model/store/refresh.py
-      - src/hockey_model/store_cli.py
-      - src/hockey_model/store_cli_parsers.py
-      - .github/workflows/tla.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push to a pull request cancels the older run. A run on main finishes, because a
+# cancelled run would leave the change of its push unchecked.
 concurrency:
   group: tla-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  tlc:
+  plan:
     runs-on: ubuntu-latest
-    # The full config needs about 38 minutes on a runner: the search takes 29 minutes and the
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: bash scripts/tlc-plan.sh
+
+  tlc:
+    needs: plan
+    if: needs.plan.outputs.shards != '[]'
+    name: tla (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    # The main shard needs about 38 minutes on a runner: the search takes 29 minutes and the
     # liveness check follows. #188 tracks the reduction that lets this limit come down.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: "21"
       - env:
           TLA_TOOLS_DIR: ${{ runner.temp }}/tla
-        run: bash scripts/tlc.sh
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/tlc.sh --shard "$SHARD"
 ```
 
-The two path lists MUST stay the same.
+The `plan` job runs on every pull request and every push to `main`, and it takes seconds.
+When it picks no shard, the `tlc` job is skipped and the job summary says so.
+A job is named for its shard, such as `tla (stall)`, so a failure names the config.
 The checkout pin is the one in `ci.yml`.
 The `setup-java` SHA is the `v6.2.0` tag commit, which GitHub published on 2026-11-04.
 Run `actionlint` and `zizmor` on the file.
@@ -517,7 +551,7 @@ Run `actionlint` and `zizmor` on the file.
 
 The mapping from spec to code stays manual.
 A change to a rule in "What the code does" MUST update the spec and this note in the same pull request.
-The path filter runs TLC on such a change.
+The shard map (`specs/shards.json`) starts TLC on such a change, so a new file of the modeled code goes into `covers` in the same pull request.
 
 ## Non-goals
 

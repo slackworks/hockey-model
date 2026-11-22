@@ -37,8 +37,8 @@ from hockey_model.sources.nhl import GameRow, fetch_score_day
 from hockey_model.store.db import connect, db_path_from_env
 from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, save_fit
 from hockey_model.store.reads import game_row
-from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
+from hockey_model.store_cli_refresh import refresh_command
 from hockey_model.store_group import run_store_group
 from hockey_model.types import HockeyModelError
 
@@ -60,62 +60,9 @@ STORE_COMMANDS = frozenset(
 )
 
 
-def _report_json(report: RefreshReport) -> dict[str, object]:
-    return {
-        "written": report.written,
-        "errors": [{"type": type(e).__name__, "message": str(e)} for e in report.errors],
-        "notes": list(report.notes),
-        "credits": list(report.credits),
-        "backfill_complete": report.backfill_complete,
-        "timed_out": report.timed_out,
-    }
-
-
 def _live_ref() -> FitRef:
     """Return the request for the fit that the daily run serves."""
     return FitRef(label=LIVE_LABEL)
-
-
-def _refresh(args: argparse.Namespace) -> tuple[object, int]:
-    if args.starters_only and args.backfill_from is not None:
-        raise HockeyModelError("refresh: a backfill reads every source; drop --starters-only")
-    if args.starters_only and args.budget_seconds is not None:
-        raise HockeyModelError("refresh: --starters-only has no budget; drop --budget-seconds")
-    if args.budget_seconds is not None and args.backfill_from is None:
-        raise HockeyModelError(
-            "refresh: --budget-seconds needs --backfill-from; a plain refresh that stops early "
-            "would exit 0 and report nothing"
-        )
-    if args.budget_seconds is not None and args.budget_seconds <= 0:
-        raise HockeyModelError(
-            f"refresh: --budget-seconds is {args.budget_seconds}; give a number above 0"
-        )
-    conn = connect(db_path_from_env(os.environ))
-    try:
-        if args.starters_only:
-            report = refresh_starters(
-                conn,
-                HttpClient(),
-                now=datetime.now(UTC),
-                clock=lambda: datetime.now(UTC),
-                retry_skipped=args.retry_skipped,
-            )
-        else:
-            report = refresh(
-                conn,
-                HttpClient(),
-                now=datetime.now(UTC),
-                backfill_from=args.backfill_from,
-                clock=lambda: datetime.now(UTC),
-                reread_moneypuck=args.reread_moneypuck,
-                retry_skipped=args.retry_skipped,
-                budget=None
-                if args.budget_seconds is None
-                else timedelta(seconds=args.budget_seconds),
-            )
-    finally:
-        conn.close()
-    return _report_json(report), 1 if report.errors else 0
 
 
 def parse_features(text: str | None) -> tuple[str, ...]:
@@ -343,7 +290,7 @@ def _store(args: argparse.Namespace) -> tuple[object, int]:
 
 
 _HANDLERS = {
-    "refresh": _refresh,
+    "refresh": refresh_command,
     "fit": _fit,
     "game": _game,
     "backtest": _backtest,

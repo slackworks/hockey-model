@@ -1,0 +1,43 @@
+{
+  "always": [
+    "specs/**",
+    "scripts/tlc.sh",
+    "scripts/tlc_shards.py",
+    "scripts/tlc-plan.sh",
+    ".github/workflows/tla.yml"
+  ],
+  "covers": [
+    "scripts/daily-prepare.sh",
+    "src/hockey_model/store/refresh*.py",
+    "src/hockey_model/store/nhl_writes.py",
+    "src/hockey_model/store/source_reads.py",
+    "src/hockey_model/store_cli_refresh.py"
+  ],
+  "shards": [
+    {
+      "name": "stall",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_stall.cfg"
+    },
+    {
+      "name": "blocked",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_blocked.cfg"
+    },
+    {
+      "name": "cutoff",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_cutoff.cfg"
+    },
+    {
+      "name": "recent",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_recent.cfg"
+    },
+    {
+      "name": "main",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare.cfg"
+    }
+  ]
+}
