@@ -2,9 +2,11 @@
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from mutation_copy import require_path
 from report_script_support import _env, _run
 
@@ -185,6 +187,108 @@ def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
     assert 'Prints "<ISO 8601 UTC end> <MINUTES>"' in result.stdout
+
+
+_JOB_NAMES = st.sampled_from(["skip", "prepare", "gate"])
+_TIMEOUT_RANGE = st.integers(min_value=1, max_value=360)
+_STARTS = st.datetimes(
+    min_value=datetime(2026, 1, 1),
+    max_value=datetime(2026, 12, 31, 23, 59, 59),
+).map(lambda moment: moment.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+@st.composite
+def _holding_jobs(
+    draw: st.DrawFn,
+) -> tuple[list[dict[str, object]], list[str]]:
+    """Return jobs that hold the group, and the --timeout flags that name their timeouts.
+
+    Each job carries its own timeout, so the answer cannot come from one fixed pair. The
+    names are unique because the flags build a map: a repeated name replaces its timeout.
+    """
+    count = draw(st.integers(min_value=1, max_value=3))
+    names = draw(st.lists(_JOB_NAMES, min_size=count, max_size=count, unique=True))
+    starts = draw(st.lists(_STARTS, min_size=count, max_size=count))
+    flags: list[str] = []
+    jobs: list[dict[str, object]] = []
+    for name, started in zip(names, starts, strict=True):
+        minutes = draw(_TIMEOUT_RANGE)
+        jobs.append(_job(name, started))
+        flags += ["--timeout", f"{name}={minutes}"]
+    return jobs, flags
+
+
+def _latest_end(jobs: list[dict[str, object]], flags: list[str]) -> tuple[str, int]:
+    """Return the end and the timeout of the job that ends last."""
+    pairs = re.findall(r"([a-z-]+)=(\d+)", " ".join(flags))
+    timeouts = {name: int(minutes) for name, minutes in pairs}
+    ends = {
+        str(job["name"]): _end(str(job["started_at"]), timeouts[str(job["name"])]) for job in jobs
+    }
+    name = max(ends, key=lambda key: ends[key])
+    return ends[name], timeouts[name]
+
+
+@settings(
+    max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(holders=_holding_jobs())
+def test_the_latest_end_of_any_set_of_holders_is_the_answer(
+    fakes: Path, tmp_path: Path, holders: tuple[list[dict[str, object]], list[str]]
+) -> None:
+    """The group frees after every holder ends, so the answer is the latest end of the run.
+
+    A fixed pair of jobs only ever checks one ordering. The rule is a maximum, so it must
+    hold for any set of job starts and timeouts, including a short job that started late.
+    """
+    jobs, flags = holders
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON_IN_PROGRESS=_runs(_STARTED),
+        FAKE_JOBS_JSON=_jobs(*jobs),
+    )
+    result = _run("prep-running.sh", env, *flags)
+    assert result.returncode == 0, result.stderr
+    expected, minutes = _latest_end(jobs, flags)
+    assert result.stdout == f"{expected} {minutes}"
+
+
+def _queued_env(fakes: Path, tmp_path: Path) -> dict[str, str]:
+    return _env(fakes, tmp_path, FAKE_RUNS_JSON_QUEUED=_runs_queued())
+
+
+@settings(
+    max_examples=20, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(flags=st.lists(_TIMEOUT_RANGE, min_size=1, max_size=3, unique=True))
+def test_a_run_that_has_not_started_names_its_longest_timeout(
+    fakes: Path, tmp_path: Path, flags: list[int]
+) -> None:
+    """Any job of the run can take the group first, so the longest window is the answer.
+
+    The run has no job start to read, so the window opens at the current time. The minutes
+    that it names are the longest timeout, and the order of the flags does not change them.
+    """
+    names = ["skip", "prepare", "gate"][: len(flags)]
+    timeouts = [f"{name}={minutes}" for name, minutes in zip(names, flags, strict=True)]
+    before = datetime.now(UTC).replace(microsecond=0)
+    result = _run("prep-running.sh", _queued_env(fakes, tmp_path), *_as_flags(timeouts))
+    assert result.returncode == 0, result.stderr
+    end, minutes = result.stdout.split()
+    assert minutes == str(max(flags))
+    assert _ISO.match(end), end
+    assert _end_after(before, int(minutes)) <= end, (end, minutes)
+
+
+def _as_flags(timeouts: list[str]) -> list[str]:
+    """Return one --timeout flag for each JOB=MINUTES pair."""
+    return [item for pair in timeouts for item in ("--timeout", pair)]
+
+
+def _end_after(before: datetime, minutes: int) -> str:
+    """Return the earliest end that a window which opened at ``before`` can have."""
+    return (before + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_the_job_timeouts_that_the_report_workflow_passes_are_the_real_ones() -> None:
