@@ -30,7 +30,7 @@ from hockey_model.backtest.report_notes import (
     is_production,
     joint_test_notes,
 )
-from hockey_model.backtest.shards import build_sharded
+from hockey_model.backtest.shards import build_sharded, can_shard
 from hockey_model.backtest.units import Unit, check_workers, run_units
 from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.imputation import (
@@ -409,13 +409,14 @@ def run_backtest(
     The feature builds, the fits, and the bootstrap runs are named units, and each logs its
     wall time. ``workers`` above 1 builds the rows one season at a time in worker processes,
     each with its own read-only store connection, because the builds take more than 99.9% of
-    the time. The report and the records are the same for every worker count. Only that build
-    reads a season from the season row cache (``row_cache``), so one worker builds every season.
+    the time. The report and the records are the same for every worker count. A store file
+    without uncommitted changes always builds this way, even with one worker, and reads a
+    season from the season row cache (``row_cache``) when its key has not changed.
     """
     check_workers(workers)
     started = time.monotonic()
     first, last = plan.fit_first, plan.scored[1]
-    if workers > 1:
+    if can_shard(conn, workers):
         actual, guess = build_sharded(conn, plan, candidates, workers)
     else:
         builds = [

@@ -99,6 +99,20 @@ def _final_games(conn: sqlite3.Connection, burn_in: int) -> list[GameRow]:
 _Pair = tuple[GoalieMode, int]
 
 
+def can_shard(conn: sqlite3.Connection, workers: int) -> bool:
+    """Return True when the rows are built one season at a time, and read from the cache.
+
+    More than one worker always shards, and a store with no file then fails with a named error.
+    One worker shards when the store is a file with no uncommitted change, because a shard reads
+    the committed file. Any other store gets the full build, which reads the connection itself.
+    """
+    if workers > 1:
+        return True
+    if conn.in_transaction:
+        return False
+    return any(name == "main" and file for _, name, file in conn.execute("PRAGMA database_list"))
+
+
 def _read_cached(
     files: Mapping[_Pair, SeasonFile], games: Sequence[GameRow]
 ) -> tuple[dict[_Pair, list[TrainingRow]], list[_Pair]]:
@@ -190,10 +204,12 @@ def actual_rows(
 ) -> list[TrainingRow]:
     """Return the rows of the games from ``first`` through ``last`` with the goalie who started.
 
-    One worker runs the full build and reads no cache. More workers build one season at a time,
-    read the season row cache, and give the same rows. The fit command uses this.
+    A store that is not a committed file gets the full build in this process. Any other store
+    builds one season at a time, reads the season row cache, and gives the same rows. The fit
+    command uses this.
     """
-    if check_workers(workers) == 1:
+    check_workers(workers)
+    if not can_shard(conn, workers):
         return training_rows(conn, first, last, GoalieMode.ACTUAL, burn_in, names=names)
     return _build(conn, (first, last), burn_in, names, (GoalieMode.ACTUAL,), workers)[
         GoalieMode.ACTUAL
