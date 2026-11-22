@@ -5,6 +5,7 @@ Covers:
 - deleted_record_ids in a repository with no commits and outside any repository
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -163,3 +164,34 @@ def test_immutable_fields_fail_exactly_when_a_frozen_field_changed(
         assert all(name in str(caught.value) for name in changed)
     else:
         check_immutable_fields(current, commit, root)
+
+
+def test_a_frozen_field_that_changed_around_a_result_and_changed_back_fails(
+    repo_root: Path,
+) -> None:
+    """The run saw the changed field, so restoring it later does not restore the record."""
+    _git(repo_root, "init")
+    _commit(repo_root, _record())
+    registered = registration_commit(_ID, repo_root)
+    assert registered is not None
+    _commit(repo_root, _record("a", look_number=2))
+    with pytest.raises(HockeyModelError, match="look_number"):
+        check_immutable_fields(_record("a"), registered, repo_root)
+
+
+def test_a_record_moved_away_and_back_keeps_the_commits_of_its_path(repo_root: Path) -> None:
+    """A rename that git reports must not hide the commits that held the result."""
+    _git(repo_root, "init")
+    _commit(repo_root, _record("a"))
+    path = repo_root / "experiments" / f"{_ID}.json"
+    other = repo_root / "experiments" / "0001-other.json"
+    other.write_text(
+        json.dumps({"id": "0001-other", "title": "Another record", "status": "registered"}) + "\n"
+    )
+    path.unlink()
+    _git(repo_root, "add", "-A", "experiments")
+    _git(repo_root, "commit", "-m", "replace the record")
+    _git(repo_root, "mv", str(other), str(path))
+    _git(repo_root, "commit", "-m", "move it back")
+    with pytest.raises(HockeyModelError, match="one-shot"):
+        check_one_shot(_record(), repo_root)

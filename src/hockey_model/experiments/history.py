@@ -48,9 +48,12 @@ def check_immutable_fields(
     """Raise when a field that the record carried at registration changed after it.
 
     A field the record did not carry at registration is a schema addition, not a
-    broken promise, so it is not compared.
+    broken promise, so it is not compared. Every commit of the record is compared, not only
+    the head: a run sees the record of its own commit, so a field that changed around the run
+    and changed back leaves a result that the registered record did not produce.
     """
-    relative = dict(_history(record.id, repo_root)).get(registration_commit_sha)
+    commits = _history(record.id, repo_root)
+    relative = dict(commits).get(registration_commit_sha)
     if relative is None:
         raise HockeyModelError(
             f"experiment {record.id!r}: commit {registration_commit_sha} is not in the "
@@ -69,6 +72,29 @@ def check_immutable_fields(
             f"experiment {record.id!r}: immutable field(s) {', '.join(changed)} changed "
             f"after registration commit {registration_commit_sha}"
         )
+    _check_commits_keep_fields(record.id, registered, commits, registration_commit_sha, repo_root)
+
+
+def _check_commits_keep_fields(
+    record_id: str,
+    registered: dict[str, object],
+    commits: list[tuple[str, str]],
+    registration_commit_sha: str,
+    repo_root: Path,
+) -> None:
+    """Raise when a commit between registration and head held a changed frozen field."""
+    names = [name for name in IMMUTABLE_FIELDS if name in registered]
+    for commit, relative in commits:
+        if commit == registration_commit_sha:
+            continue
+        stored = _record_at(commit, relative, repo_root)
+        moved = [name for name in names if stored.get(name) != registered[name]]
+        if moved:
+            raise HockeyModelError(
+                f"experiment {record_id!r}: immutable field(s) {', '.join(moved)} differ from "
+                f"registration commit {registration_commit_sha} in commit {commit}; a run in "
+                "that commit saw the changed record, so a later restore does not undo it"
+            )
 
 
 def check_one_shot(record: ExperimentRecord, repo_root: Path) -> None:
@@ -124,13 +150,21 @@ def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
     with a committed result stays. A confirmation record that never ran stays too when
     the commit that deleted it held a confirmation record with a higher number: the look
     budget counts earlier records by number, so the freed number could go to a new record
-    that scores games which a later look already scored (#291). A rename is not a deletion:
-    git follows it, and the changed ``id`` fails the immutability check.
+    that scores games which a later look already scored (#291). A rename is a deletion of the
+    old path and an addition of the new path, because the log runs without rename detection.
     """
     if history_unavailable_reason(repo_root) is not None:
         return []
     deleted = _git(
-        ["log", "--diff-filter=D", "--name-only", "--format=", "--", f"{REGISTRY_DIR_NAME}/"],
+        [
+            "log",
+            "--no-renames",
+            "--diff-filter=D",
+            "--name-only",
+            "--format=",
+            "--",
+            f"{REGISTRY_DIR_NAME}/",
+        ],
         repo_root,
     ).split()
     deleted += _git(["ls-tree", "--name-only", "HEAD", f"{REGISTRY_DIR_NAME}/"], repo_root).split()
@@ -149,6 +183,7 @@ def _deleted_below_a_confirmation(gone: set[str], repo_root: Path) -> set[str]:
     log = _git(
         [
             "log",
+            "--no-renames",
             "--diff-filter=D",
             "--name-only",
             "--format=commit:%H",
@@ -201,11 +236,25 @@ def outlived(
 
 
 def _was_outlived(record_id: str, commit: str, repo_root: Path) -> bool:
-    """Return True when ``commit`` deleted a confirmation record that a higher one outlived."""
+    """Return True when ``commit`` deleted a confirmation record that a higher one outlived.
+
+    A higher record outlives the deletion when it is in the parent of the commit and in the
+    commit. A record that the same commit adds is not older than the deleted one, so a squash
+    merge of a branch that deletes and adds records keeps the verdict of the branch.
+    """
     relative = record_relative_path(record_id)
     if _field_at(f"{commit}^", relative, "cohort", repo_root) != CONFIRMATION:
         return False
-    names = _git(["ls-tree", "--name-only", commit, f"{REGISTRY_DIR_NAME}/"], repo_root).split()
+    before = set(
+        _git(["ls-tree", "--name-only", f"{commit}^", f"{REGISTRY_DIR_NAME}/"], repo_root).split()
+    )
+    names = [
+        name
+        for name in _git(
+            ["ls-tree", "--name-only", commit, f"{REGISTRY_DIR_NAME}/"], repo_root
+        ).split()
+        if name in before
+    ]
     return outlived(
         record_id,
         (Path(name).stem for name in names if name.endswith(".json")),
@@ -243,12 +292,13 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
 
     A commit that deleted the file is left out, because it holds no copy to read.
 
-    Git follows a rename, so ``path`` is the file name the record had at that commit.
+    The history is the history of one path. Git does not follow a rename, because it pairs a
+    removed file with an added file by how alike the two are. A record that moves to another
+    name is a deleted record and a new record (docs/design/experiment-registry-tla.md).
     """
     out = _git(
         [
             "log",
-            "--follow",
             "--diff-filter=d",
             "--name-only",
             "--format=commit:%H",
@@ -269,6 +319,11 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
 
 def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object:
     """Return one field of a record as one commit stored it."""
+    return _record_at(commit, relative, repo_root).get(field)
+
+
+def _record_at(commit: str, relative: str, repo_root: Path) -> dict[str, object]:
+    """Return a record as one commit stored it, as a JSON object."""
     text = _git(["show", f"{commit}:{relative}"], repo_root)
     try:
         data = json.loads(text)
@@ -279,7 +334,7 @@ def _field_at(commit: str, relative: str, field: str, repo_root: Path) -> object
             f"read {relative} at commit {commit}: a record must be a JSON object, "
             f"got a {type(data).__name__}"
         )
-    return data.get(field)
+    return data
 
 
 def _is_work_tree(repo_root: Path) -> bool:
