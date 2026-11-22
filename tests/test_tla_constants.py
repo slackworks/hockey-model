@@ -19,6 +19,7 @@ CFGS = (
     ROOT / "specs" / "daily_prepare_stall.cfg",
     ROOT / "specs" / "daily_prepare_blocked.cfg",
     ROOT / "specs" / "daily_prepare_false_stall.cfg",
+    ROOT / "specs" / "daily_prepare_cutoff.cfg",
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")
@@ -71,6 +72,26 @@ def _load(cfg: Path) -> tuple[dict[str, str], str]:
 
 
 cfgs = pytest.mark.parametrize("cfg", CFGS, ids=lambda path: path.name)
+
+
+def test_every_config_in_specs_is_checked_here() -> None:
+    present = {path.name for path in require_path(ROOT / "specs").glob("*.cfg")}
+    listed = {path.name for path in CFGS}
+    assert present == listed, (
+        f"specs/ and CFGS differ: only in specs/ {sorted(present - listed)}, "
+        f"only in CFGS {sorted(listed - present)}; update CFGS in {Path(__file__).name}"
+    )
+
+
+@cfgs
+def test_a_config_names_something_to_check(cfg: Path) -> None:
+    # An empty INVARIANTS or PROPERTIES section makes TLC exit 0 and check nothing.
+    names = [
+        line.strip()
+        for line in cfg.read_text(encoding="utf-8").splitlines()
+        if line.startswith("    ") and "=" not in line
+    ]
+    assert names, f"{cfg.name} has no invariant and no property to check"
 
 
 @cfgs
@@ -179,3 +200,14 @@ def test_parse_returns_a_mapping_or_fails_with_a_message(text: str) -> None:
         assert "x.cfg" in str(error)
     else:
         assert all(isinstance(name, str) and isinstance(raw, str) for name, raw in values.items())
+
+
+@given(
+    count=st.integers(min_value=0, max_value=5),
+    garbage=st.text(alphabet="!@#$%^&*()", min_size=1, max_size=10),
+)
+def test_a_line_that_does_not_fit_fails_and_names_its_number(count: int, garbage: str) -> None:
+    lines = [f"    Name{'x' * n} = {n}" for n in range(count)]
+    text = "\n".join(["CONSTANTS", *lines, f"    {garbage}", "INVARIANTS", ""])
+    with pytest.raises(pytest.fail.Exception, match=rf"x\.cfg:{count + 2}: cannot read"):
+        parse_constants(text, "x.cfg")
