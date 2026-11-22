@@ -99,8 +99,10 @@ jobs:
           path: mutants/
 
   merge:
-    needs: shard
-    if: always()
+    needs: [gate, shard]
+    # A gate that stood aside skips the shard job, and a merge of no shard fails. The run then
+    # reports an execution failure and files an issue for work it never did (#296).
+    if: always() && needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -154,10 +156,11 @@ jobs:
             mutants/mutmut-timeouts.json
 
   report:
-    needs: [shard, merge]
+    needs: [gate, shard, merge]
     # The decision runs on every ref, so a manual run judges its own stats. A branch run
-    # files nothing, and the file job below runs only on main.
-    if: always()
+    # files nothing, and the file job below runs only on main. A gate that stood aside ran
+    # no shard, so there is nothing to judge and no report to file (#296).
+    if: always() && needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -218,9 +221,10 @@ jobs:
           path: .tmp/mutation-report.md
 
   file:
-    needs: [shard, merge, report]
+    needs: [gate, shard, merge, report]
     # Only the default branch may write an issue. This job is the only holder of that token.
-    if: always() && github.ref == 'refs/heads/main'
+    # A gate that stood aside leaves no status, and the script rejects an empty one (#296).
+    if: always() && needs.gate.outputs.go == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
