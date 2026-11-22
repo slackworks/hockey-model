@@ -184,8 +184,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The script reads index-DATE.json from the release, adds this build, and uploads it again.
-    # Two publishes of one day at once would drop an entry, so they run one at a time. A third
-    # publish that waits replaces the second, and the next hourly run publishes that build again.
+    # Two publishes of one day at once would drop an entry, so they run one at a time. A publish
+    # that waits behind another is replaced. While the day has no release, the next hourly run
+    # builds and publishes it again. After the first puck drop, the newer build stands for the
+    # day, and the replaced build leaves no entry in the index (#313).
     concurrency:
       group: hockey-model-publish-${{ needs.gate.outputs.day }}
       cancel-in-progress: false
