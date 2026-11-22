@@ -2,6 +2,7 @@
 
 import re
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from test_runner_store import PLAN, seed
 from hockey_model.backtest.season_key import COVERED_TABLES, season_keys, source_digest
 from hockey_model.game_model.features import FEATURES, GoalieMode
 from hockey_model.game_model.training import training_rows
-from hockey_model.store.timestamps import iso_utc
+from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
 SEASONS = range(1, 8)
 
@@ -120,55 +121,82 @@ def test_a_skater_who_never_played_goal_changes_no_key(seeded: sqlite3.Connectio
     assert _changed(before, _keys(seeded)) == []
 
 
-# Season 4 plays in November 2014 in the made-up store.
-_IN_SEASON_4 = "2014-11-05T00:00:00Z"
-_AFTER_ALL = "2030-01-01T00:00:00Z"
+_AFTER_ALL = "2030-01-01T00:00:00.000000+00:00"
 
 
-def _read_injury_list(conn: sqlite3.Connection, stamp: str, *, ok: int = 1) -> None:
-    conn.execute(
-        "INSERT INTO source_reads VALUES ('espn_injuries', 'u', ?, ?, NULL, 0)", (stamp, ok)
-    )
+def _read(
+    conn: sqlite3.Connection, stamp: str, *, source: str = "espn_injuries", ok: int = 1
+) -> None:
+    conn.execute("INSERT INTO source_reads VALUES (?, 'u', ?, ?, NULL, 0)", (source, stamp, ok))
     conn.commit()
 
 
-def test_an_injury_read_before_a_season_ends_changes_that_season_and_later_ones(
-    seeded: sqlite3.Connection,
+def _injury_row(conn: sqlite3.Connection, stamp: str) -> None:
+    conn.execute("INSERT INTO injury_reads VALUES ('TOR', 'Goalie TOR', 'out', NULL, ?)", (stamp,))
+    conn.commit()
+
+
+def _season_end(conn: sqlite3.Connection, season: int) -> datetime:
+    """Return the start of the last final game of ``season``."""
+    (text,) = conn.execute(
+        "SELECT MAX(start_utc) FROM latest_final_games WHERE season = ?", (season,)
+    ).fetchone()
+    return parse_iso_utc(text)
+
+
+_WRITERS = {"source_reads": _read, "injury_reads": _injury_row}
+_MICROSECOND = timedelta(microseconds=1)
+
+
+@pytest.mark.parametrize("table", sorted(_WRITERS))
+@pytest.mark.parametrize(
+    ("offset", "changed"),
+    [
+        (-_MICROSECOND, [3, 4, 5, 6, 7]),
+        (timedelta(0), [3, 4, 5, 6, 7]),
+        (_MICROSECOND, [4, 5, 6, 7]),
+    ],
+    ids=["a microsecond before the last start", "at the last start", "a microsecond after"],
+)
+def test_an_injury_read_belongs_to_the_first_season_that_ends_at_or_after_it(
+    seeded: sqlite3.Connection, table: str, offset: timedelta, changed: list[int]
 ) -> None:
     before = _keys(seeded)
-    _read_injury_list(seeded, _IN_SEASON_4)
-    assert _changed(before, _keys(seeded)) == [4, 5, 6, 7]
+    _WRITERS[table](seeded, iso_utc(_season_end(seeded, 3) + offset))
+    assert _changed(before, _keys(seeded)) == changed
 
 
-def test_an_injury_row_before_a_season_ends_changes_that_season_and_later_ones(
-    seeded: sqlite3.Connection,
+@pytest.mark.parametrize("table", sorted(_WRITERS))
+def test_an_injury_read_after_the_last_game_changes_no_key(
+    seeded: sqlite3.Connection, table: str
 ) -> None:
     before = _keys(seeded)
-    seeded.execute(
-        "INSERT INTO injury_reads VALUES ('TOR', 'Goalie TOR', 'out', NULL, ?)", (_IN_SEASON_4,)
-    )
-    seeded.commit()
-    assert _changed(before, _keys(seeded)) == [4, 5, 6, 7]
-
-
-def test_an_injury_read_after_the_last_game_changes_no_key(seeded: sqlite3.Connection) -> None:
-    before = _keys(seeded)
-    _read_injury_list(seeded, _AFTER_ALL)
-    seeded.execute(
-        "INSERT INTO injury_reads VALUES ('TOR', 'Goalie TOR', 'out', NULL, ?)", (_AFTER_ALL,)
-    )
-    seeded.commit()
+    _WRITERS[table](seeded, iso_utc(_season_end(seeded, 7) + _MICROSECOND))
+    _WRITERS[table](seeded, _AFTER_ALL)
     assert _changed(before, _keys(seeded)) == []
 
 
 def test_a_failed_or_other_read_changes_no_key(seeded: sqlite3.Connection) -> None:
     before = _keys(seeded)
-    _read_injury_list(seeded, _IN_SEASON_4, ok=0)
-    seeded.execute(
-        "INSERT INTO source_reads VALUES ('nhl_score', 'u', ?, 1, NULL, 0)", (_IN_SEASON_4,)
-    )
-    seeded.commit()
+    stamp = iso_utc(_season_end(seeded, 4))
+    _read(seeded, stamp, ok=0)
+    _read(seeded, stamp, source="nhl_score")
     assert _changed(before, _keys(seeded)) == []
+
+
+def test_the_status_and_return_date_of_an_injury_are_part_of_the_key(
+    seeded: sqlite3.Connection,
+) -> None:
+    stamp = iso_utc(_season_end(seeded, 4))
+    _injury_row(seeded, stamp)
+    before = _keys(seeded)
+    seeded.execute("UPDATE injury_reads SET status = 'day-to-day'")
+    seeded.commit()
+    assert _changed(before, _keys(seeded)) == [4, 5, 6, 7]
+    after_status = _keys(seeded)
+    seeded.execute("UPDATE injury_reads SET return_date = '2030-01-01'")
+    seeded.commit()
+    assert _changed(after_status, _keys(seeded)) == [4, 5, 6, 7]
 
 
 def test_the_features_and_the_burn_in_are_part_of_the_key(seeded: sqlite3.Connection) -> None:

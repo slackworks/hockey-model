@@ -6,7 +6,8 @@ player catalog. They also start from the Elo ratings before the season, which ev
 moves. The key of a season is a running hash over all of this data from the first game through
 the start of the last game of that season, with the data of the catalog, the features, the
 burn-in season, and the source files of the package. A change to an old game therefore changes
-the key of every later season, and a new game changes the key of its own season only.
+the key of every later season, and a new game changes the key of its own season only. A
+change to the goalie catalog changes every key.
 Design: docs/design/backtest-speed.md
 """
 
@@ -64,7 +65,7 @@ _INJURY_STAMPS = (
 )
 _INJURIES = (
     "SELECT fetched_at, team, player_name, status, return_date FROM injury_reads"
-    " ORDER BY fetched_at, team, player_name"
+    " ORDER BY fetched_at, team, player_name, status, return_date"
 )
 _SEASON_ENDS = (
     "SELECT MAX(start_utc), season FROM latest_final_games GROUP BY season ORDER BY season"
@@ -79,6 +80,9 @@ _CATALOG = (
 
 # The time of a read does not reach a row, and a re-read of an old day writes it again.
 _READ_TIME = "fetched_at"
+
+# The hash of a season that a table has no row for, so each table keeps its place in the chain.
+_NO_ROWS = bytes(hashlib.sha256().digest_size)
 
 
 def source_digest(root: Path) -> str:
@@ -171,7 +175,7 @@ def season_keys(conn: sqlite3.Connection, burn_in: int, names: Sequence[str]) ->
     for season in sorted(tables[0]):
         running.update(str(season).encode())
         for table in tables:
-            running.update(table.get(season, b""))
+            running.update(table.get(season, _NO_ROWS))
         keys[season] = hashlib.sha256(
             running.digest() + catalog + params.encode() + str(season).encode()
         ).hexdigest()
