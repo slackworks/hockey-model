@@ -264,3 +264,28 @@ def test_the_source_digest_of_the_package_is_in_the_key(
     before = _keys(seeded)
     monkeypatch.setattr("hockey_model.backtest.season_key.source_fingerprint", lambda: "other")
     assert _changed(before, _keys(seeded)) == list(SEASONS)
+
+
+_LATER = iso_utc(FETCHED.replace(year=FETCHED.year + 1))
+
+
+@pytest.mark.parametrize(
+    "copy",
+    [
+        "INSERT INTO games SELECT game_id, season, game_type, start_utc, home, away, state,"
+        " home_score, away_score, last_period, ? FROM games",
+        "INSERT INTO mp_team_games SELECT game_id, team, game_date, xg_for, xg_against,"
+        " shot_attempts_for, shot_attempts_against, attempts_known, ? FROM mp_team_games",
+        "INSERT INTO mp_goalie_games SELECT game_id, nhl_id, team, xg_against, goals_against, ?"
+        " FROM mp_goalie_games",
+        "INSERT INTO players SELECT nhl_id, full_name, position, team, ? FROM players",
+    ],
+    ids=["games", "mp_team_games", "mp_goalie_games", "players"],
+)
+def test_a_read_again_with_the_same_content_changes_no_key(
+    seeded: sqlite3.Connection, copy: str
+) -> None:
+    before = _keys(seeded)
+    seeded.execute(copy, (_LATER,))
+    seeded.commit()
+    assert _changed(before, _keys(seeded)) == []
