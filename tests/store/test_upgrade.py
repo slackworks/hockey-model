@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from hypothesis import given, settings
@@ -243,6 +243,35 @@ def test_a_failed_copy_leaves_no_file_and_the_store_unchanged(
     with pytest.raises(StoreError, match="backup failed: disk full"):
         upgrade_store(v1)
     assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_that_cannot_be_renamed_is_a_named_error_and_the_store_is_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: Path, target: Path) -> Path:
+        raise PermissionError(13, "no rename here", str(self))
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    with pytest.raises(StoreError, match="backup failed: .*no rename here"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_to_a_directory_that_cannot_be_written_is_a_named_error(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = sqlite3.connect
+
+    def connect(target: Path, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if str(target).endswith(".tmp"):
+            raise sqlite3.OperationalError("unable to open database file")
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(upgrade.sqlite3, "connect", connect)
+    with pytest.raises(StoreError, match="backup failed: unable to open database file"):
+        upgrade_store(v1)
     assert version_of(v1) == 1
 
 

@@ -134,13 +134,15 @@ def _last_backup(conn: sqlite3.Connection, path: Path) -> str | None:
 
 def _backup_to(path: Path, target: Path) -> None:
     """Copy the store at ``path`` to ``target`` with SQLite's backup API."""
-    source = sqlite3.connect(path)
-    dest = sqlite3.connect(target)
+    source = dest = None
     try:
+        source = sqlite3.connect(path)
+        dest = sqlite3.connect(target)
         source.backup(dest)
     finally:
-        source.close()
-        dest.close()
+        for conn in (source, dest):
+            if conn is not None:
+                conn.close()
 
 
 def _backup(path: Path, version: int) -> Path:
@@ -156,15 +158,15 @@ def _backup(path: Path, version: int) -> Path:
             "so the earlier backup is kept, then run the upgrade again"
         )
     partial = target.with_name(f"{target.name}.tmp")
-    partial.unlink(missing_ok=True)
     try:
+        partial.unlink(missing_ok=True)
         _backup_to(path, partial)
-    except sqlite3.Error as exc:
+        partial.replace(target)
+    except (sqlite3.Error, OSError) as exc:
         partial.unlink(missing_ok=True)
         raise StoreError(
             f"upgrade store {str(path)!r}: backup failed: {exc}; the store is unchanged"
         ) from exc
-    partial.replace(target)
     return target
 
 
