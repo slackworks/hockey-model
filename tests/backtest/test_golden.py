@@ -82,6 +82,19 @@ def test_workers_do_not_move_the_committed_hashes(store: sqlite3.Connection) -> 
     assert _hashes(store, workers=2) == _committed()
 
 
+def test_a_warm_season_cache_does_not_move_the_committed_hashes(
+    store: sqlite3.Connection,
+) -> None:
+    cold = _hashes(store, workers=2)
+    # The second run reads every season from the files that the first run wrote.
+    report, records = run_backtest(store, PLAN, candidates=FEATURES, workers=2)
+    warm = {
+        **canonical_hashes(report, records),
+        "canonical_fit_sha256": canonical_fit_hash(_seeded_fit(store)),
+    }
+    assert cold == warm == _committed()
+
+
 def _with_probability(records: list[GameRecord], value: float) -> list[GameRecord]:
     return [replace(records[0], home_win_prob=value), *records[1:]]
 

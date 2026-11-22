@@ -58,7 +58,10 @@ source_paths = ["src"]
 only_mutate = [
     "src/hockey_model/backtest/golden.py",
     "src/hockey_model/backtest/metrics.py",
+    "src/hockey_model/backtest/row_cache.py",
+    "src/hockey_model/backtest/row_codec.py",
     "src/hockey_model/backtest/runner.py",
+    "src/hockey_model/backtest/season_key.py",
     "src/hockey_model/backtest/shards.py",
     "src/hockey_model/backtest/units.py",
     "src/hockey_model/experiments/models.py",

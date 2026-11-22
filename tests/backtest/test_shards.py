@@ -13,6 +13,8 @@ from seeding import add_game
 from test_runner_store import PLAN, seed
 
 from hockey_model.backtest import shards
+from hockey_model.backtest.row_cache import SeasonFile
+from hockey_model.backtest.season_key import season_keys
 from hockey_model.backtest.shards import actual_rows, build_sharded
 from hockey_model.game_model.elo import EloBook, replay, season_boundaries
 from hockey_model.game_model.features import FEATURES, GoalieMode
@@ -267,6 +269,13 @@ def _shard(store: sqlite3.Connection, season: int, final_games: int | None = Non
         tuple(FEATURES),
         season_boundaries(games)[season],
         len(games) if final_games is None else final_games,
+        SeasonFile(
+            shards.database_path(store).parent / "season-rows",
+            GoalieMode.ACTUAL,
+            season,
+            tuple(FEATURES),
+            season_keys(store, PLAN.burn_in, FEATURES)[season],
+        ),
     )
 
 
@@ -355,3 +364,33 @@ def test_a_worker_result_count_that_differs_from_the_shard_count_is_refused(
     monkeypatch.setattr(shards, "run_units", lambda units, workers, label: [])
     with pytest.raises(ValueError, match="shorter"):
         shards._build(store, (2, 7), PLAN.burn_in, FEATURES, (GoalieMode.ACTUAL,), 1)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "UPDATE mp_team_games SET xg_for = xg_for + 1",
+        "UPDATE mp_goalie_games SET xg_against = xg_against + 1",
+        "UPDATE goalie_games SET started = 0",
+        "UPDATE players SET team = 'MTL'",
+    ],
+)
+def test_a_worker_refuses_a_store_whose_data_changed_after_the_key_was_made(
+    store: sqlite3.Connection, change: str
+) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    shard = _shard(store, 4)
+    store.execute(change)
+    store.commit()
+    with pytest.raises(HockeyModelError, match="the data of season 4 differs"):
+        shards.build_season_rows(shards.database_path(store), shard)
+    assert not shard.cache.path.exists()
+
+
+def test_a_worker_writes_the_file_of_its_season(store: sqlite3.Connection) -> None:
+    seed(store, range(1, 8))
+    store.commit()
+    shard = _shard(store, 4)
+    rows = shards.build_season_rows(shards.database_path(store), shard)
+    assert shard.cache.load([row.game.game_id for row in rows]) == rows

@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from report_script_support import DAY, LIVE, _calls, _env, _run, store_path
 
+from hockey_model.backtest.row_cache import CACHE_DIR_NAME
+
 OTHER_DAY = "2026-11-05"
 EARLIER_DAY = "2026-11-01"
 SKIP_WORDS = f"{DAY} is already prepared"
@@ -179,3 +181,49 @@ def test_the_backtest_and_the_fit_get_the_worker_count(
     calls = [c for c in _calls(tmp_path) if "hockey-model backtest" in c or "hockey-model fit" in c]
     assert len(calls) == 2
     assert all(call.endswith(f"--workers {expected}") for call in calls)
+
+
+def _cache_file(tmp_path: Path) -> Path:
+    directory = _store_dir(tmp_path) / CACHE_DIR_NAME
+    directory.mkdir(exist_ok=True)
+    path = directory / "actual-3-tag-key.json"
+    path.write_text("[]")
+    return path
+
+
+def test_force_deletes_the_season_row_cache(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    cached = _cache_file(tmp_path)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--force")
+    assert result.returncode == 0, result.stderr
+    assert not cached.parent.exists()
+
+
+def test_a_skip_and_an_unforced_rebuild_keep_the_season_row_cache(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _prepare_day(tmp_path)
+    cached = _cache_file(tmp_path)
+    _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY)
+    assert cached.exists()
+    _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", OTHER_DAY)
+    assert cached.exists()
+
+
+def test_force_finds_the_cache_beside_the_file_that_a_link_names(
+    fakes: Path, tmp_path: Path
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "store.db").touch()
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "store.db").symlink_to(real / "store.db")
+    (linked / "store.db.backfilled").touch()
+    cache = real / CACHE_DIR_NAME
+    cache.mkdir()
+    (cache / "actual-3-tag-key.json").write_text("[]")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(linked / "store.db"))
+    result = _run("daily-prepare.sh", env, "--date", DAY, "--force")
+    assert result.returncode == 0, result.stderr
+    assert not cache.exists()

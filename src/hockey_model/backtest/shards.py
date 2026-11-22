@@ -4,14 +4,18 @@ A full build replays the Elo from the first game, so it runs in one process for 
 hour on the real store. A season shard starts from the ratings before its first game, which one
 cheap pass over the results gives (``season_boundaries``), and reads the same ratings as the
 replay. The shards of all seasons and of both goalie modes then run side by side, and joining
-them in season order gives the rows of the full build. Design: docs/design/backtest-speed.md
+them in season order gives the rows of the full build. A season whose rows are in the season
+row cache under its current key is not built again. Design: docs/design/backtest-speed.md
 """
 
 import sqlite3
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from hockey_model.backtest.row_cache import SeasonFile, cache_dir
+from hockey_model.backtest.season_key import season_keys
 from hockey_model.backtest.units import (
     Unit,
     check_workers,
@@ -41,20 +45,16 @@ class Shard:
     elo_start: Mapping[str, float]
     # The number of final games that the parent read, so a worker can see a store that changed.
     final_games: int
+    # Where the worker writes the rows of this shard.
+    cache: SeasonFile
 
 
 def build_season_rows(path: Path, shard: Shard) -> list[TrainingRow]:
     """Build the rows of one shard in a worker, on its own read-only connection."""
     conn = open_read_only(path)
     try:
-        now = len(_final_games(conn, shard.burn_in))
-        if now != shard.final_games:
-            raise HockeyModelError(
-                f"backtest: the store changed during the run: the parent read "
-                f"{shard.final_games} final games and a worker read {now}; do not refresh "
-                "the store while a backtest or a fit runs, then run it again"
-            )
-        return training_rows(
+        _check_unchanged(conn, shard)
+        rows = training_rows(
             conn,
             shard.season,
             shard.season,
@@ -65,10 +65,56 @@ def build_season_rows(path: Path, shard: Shard) -> list[TrainingRow]:
         )
     finally:
         conn.close()
+    # A worker writes its own season, so the seasons that finished survive a failed run.
+    shard.cache.save(rows)
+    return rows
+
+
+def _check_unchanged(conn: sqlite3.Connection, shard: Shard) -> None:
+    """Raise when the store of the worker differs from the store that the parent read.
+
+    The key of the season covers the data of the rows, so a worker never saves rows that the
+    key of the parent does not name.
+    """
+    now = len(_final_games(conn, shard.burn_in))
+    if now != shard.final_games:
+        raise HockeyModelError(
+            f"backtest: the store changed during the run: the parent read "
+            f"{shard.final_games} final games and a worker read {now}; do not refresh "
+            "the store while a backtest or a fit runs, then run it again"
+        )
+    key = season_keys(conn, shard.burn_in, shard.names).get(shard.season)
+    if key != shard.cache.key:
+        raise HockeyModelError(
+            f"backtest: the store changed during the run: the data of season {shard.season} "
+            "differs from what the parent read; do not refresh the store while a backtest or "
+            "a fit runs, then run it again"
+        )
 
 
 def _final_games(conn: sqlite3.Connection, burn_in: int) -> list[GameRow]:
     return [g for g in final_games_before(conn, LATEST_GAME) if g.season >= burn_in]
+
+
+_Pair = tuple[GoalieMode, int]
+
+
+def _read_cached(
+    files: Mapping[_Pair, SeasonFile], games: Sequence[GameRow]
+) -> tuple[dict[_Pair, list[TrainingRow]], list[_Pair]]:
+    """Return the rows that the cache holds, and the pairs that it does not hold.
+
+    A file counts only when it holds the final games of its season in the store.
+    """
+    found: dict[_Pair, list[TrainingRow]] = {}
+    missing: list[_Pair] = []
+    for pair, file in files.items():
+        cached = file.load([g.game_id for g in games if g.season == file.season])
+        if cached is None:
+            missing.append(pair)
+        else:
+            found[pair] = cached
+    return found, missing
 
 
 def _build(
@@ -81,19 +127,43 @@ def _build(
 ) -> dict[GoalieMode, list[TrainingRow]]:
     """Build the rows of each mode, one season at a time, and join them in season order."""
     path = database_path(conn)
+    # The keys come first. A store that changes between the two reads then gives a worker a key
+    # that differs from this one, and the worker stops. In the other order the keys could name
+    # data that the Elo boundaries of this process do not hold.
+    key = season_keys(conn, burn_in, names)
     games = _final_games(conn, burn_in)
     boundaries = season_boundaries(games)
     seasons = sorted(s for s in boundaries if seasons_range[0] <= s <= seasons_range[1])
-    keys = [(mode, season) for mode in modes for season in seasons]
+    files = {
+        (mode, season): SeasonFile(cache_dir(path), mode, season, tuple(names), key[season])
+        for mode in modes
+        for season in seasons
+    }
+    parts, missing = _read_cached(files, games)
+    print(
+        f"backtest: season rows: {len(parts)} read from the cache, {len(missing)} to build",
+        file=sys.stderr,
+    )
     units = [
         Unit(
             f"build {mode.value} rows {season}",
             build_season_rows,
-            (path, Shard(season, mode, burn_in, tuple(names), boundaries[season], len(games))),
+            (
+                path,
+                Shard(
+                    season,
+                    mode,
+                    burn_in,
+                    tuple(names),
+                    boundaries[season],
+                    len(games),
+                    files[(mode, season)],
+                ),
+            ),
         )
-        for mode, season in keys
+        for mode, season in missing
     ]
-    parts = dict(zip(keys, run_units(units, workers, "build-rows"), strict=True))
+    parts.update(zip(missing, run_units(units, workers, "build-rows"), strict=True))
     return {mode: [row for season in seasons for row in parts[(mode, season)]] for mode in modes}
 
 
@@ -120,8 +190,8 @@ def actual_rows(
 ) -> list[TrainingRow]:
     """Return the rows of the games from ``first`` through ``last`` with the goalie who started.
 
-    One worker runs the full build. More workers build one season at a time, and the rows are
-    the same. The fit command uses this.
+    One worker runs the full build and reads no cache. More workers build one season at a time,
+    read the season row cache, and give the same rows. The fit command uses this.
     """
     if check_workers(workers) == 1:
         return training_rows(conn, first, last, GoalieMode.ACTUAL, burn_in, names=names)
