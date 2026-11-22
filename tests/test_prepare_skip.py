@@ -208,3 +208,22 @@ def test_a_skip_and_an_unforced_rebuild_keep_the_season_row_cache(
     assert cached.exists()
     _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", OTHER_DAY)
     assert cached.exists()
+
+
+def test_force_finds_the_cache_beside_the_file_that_a_link_names(
+    fakes: Path, tmp_path: Path
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "store.db").touch()
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "store.db").symlink_to(real / "store.db")
+    (linked / "store.db.backfilled").touch()
+    cache = real / CACHE_DIR_NAME
+    cache.mkdir()
+    (cache / "actual-3-tag-key.json").write_text("[]")
+    env = _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(linked / "store.db"))
+    result = _run("daily-prepare.sh", env, "--date", DAY, "--force")
+    assert result.returncode == 0, result.stderr
+    assert not cache.exists()

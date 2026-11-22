@@ -152,8 +152,10 @@ done
 shopt -u nullglob
 
 # A forced rebuild reads no cached season, so a wrong cache file cannot survive a rebuild.
+# SQLite resolves a link to the store file, and the cache sits beside the file it resolves to.
 if [[ "$force" == 1 ]]; then
-  rm -rf "$store_dir/season-rows"
+  store_file="$(realpath "$HOCKEY_MODEL_DB" 2>/dev/null || printf '%s' "$HOCKEY_MODEL_DB")"
+  rm -rf "$(dirname "$store_file")/season-rows"
 fi
 
 # The backtest writes beside the final names. The final files and the marker change only after
