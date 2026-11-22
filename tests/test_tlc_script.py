@@ -30,6 +30,16 @@ def test_help_prints_usage_and_exits_zero() -> None:
     assert "Exit codes:" in result.stdout
 
 
+def test_help_lists_every_config_once_and_names_the_known_failure() -> None:
+    usage = _run("--help").stdout
+    passing = re.findall(r"^  (specs/\S+\.cfg)$", usage, flags=re.MULTILINE)
+    known = re.findall(r"Then run TLC with (specs/\S+\.cfg)\.", usage)
+    assert known == ["specs/daily_prepare_false_stall.cfg"]
+    assert known[0] not in passing
+    present = sorted(f"specs/{path.name}" for path in (SCRIPT.parents[1] / "specs").glob("*.cfg"))
+    assert sorted([*passing, *known]) == present, "tlc.sh does not run each config in specs/ once"
+
+
 def test_help_names_the_deadlock_exit_code() -> None:
     assert "for a deadlock" in _run("--help").stdout
 
@@ -215,13 +225,22 @@ echo "$*" >> "$FAKE_JAVA_LOG"
 case "$*" in
     *daily_prepare_stall.cfg*) exit "${FAKE_STALL_RC:-0}" ;;
     *daily_prepare_blocked.cfg*) exit "${FAKE_BLOCKED_RC:-0}" ;;
+    *daily_prepare_cutoff.cfg*) exit "${FAKE_CUTOFF_RC:-0}" ;;
+    *daily_prepare_false_stall.cfg*)
+        echo "${FAKE_KNOWN_TEXT-Error: Action property StallOnlyForBacklog is violated.}"
+        exit "${FAKE_KNOWN_RC:-13}" ;;
     *) exit "${FAKE_MAIN_RC:-0}" ;;
 esac
 """
 
 
 def _run_with_fake_java(
-    tmp_path: Path, stall_rc: int, main_rc: int, blocked_rc: int = 0
+    tmp_path: Path,
+    stall_rc: int,
+    main_rc: int,
+    blocked_rc: int = 0,
+    cutoff_rc: int = 0,
+    known: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run a copy of tlc.sh whose pinned hash matches a fake jar, and return the java calls."""
     jar_bytes = b"a fake tla tools jar"
@@ -244,8 +263,10 @@ def _run_with_fake_java(
         FAKE_JAVA_LOG=str(log),
         FAKE_STALL_RC=str(stall_rc),
         FAKE_BLOCKED_RC=str(blocked_rc),
+        FAKE_CUTOFF_RC=str(cutoff_rc),
         FAKE_MAIN_RC=str(main_rc),
     )
+    env.update(known or {})
     result = subprocess.run(
         ["bash", str(root / "scripts" / "tlc.sh")],
         capture_output=True,
@@ -261,10 +282,13 @@ def _run_with_fake_java(
 def test_all_configs_pass_and_the_small_configs_run_first(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0)
     assert result.returncode == 0
-    assert len(calls) == 3
+    assert len(calls) == 5
     assert "-config specs/daily_prepare_stall.cfg" in calls[0]
     assert "-config specs/daily_prepare_blocked.cfg" in calls[1]
-    assert "-config specs/daily_prepare.cfg " in calls[2]
+    assert "-config specs/daily_prepare_cutoff.cfg " in calls[2]
+    assert "-config specs/daily_prepare.cfg " in calls[3]
+    assert "-config specs/daily_prepare_false_stall.cfg " in calls[4]
+    assert "expected violation of StallOnlyForBacklog" in result.stdout
     assert all("-workers auto" in call for call in calls)
 
 
@@ -282,11 +306,71 @@ def test_a_failed_blocked_config_stops_before_the_main_config(tmp_path: Path) ->
     assert "specs/daily_prepare_blocked.cfg failed" in result.stderr
 
 
+def test_a_failed_cutoff_config_stops_before_the_main_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, cutoff_rc=12)
+    assert result.returncode == 12
+    assert len(calls) == 3
+    assert "specs/daily_prepare_cutoff.cfg failed" in result.stderr
+
+
 def test_a_failed_main_config_returns_its_code(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
     assert result.returncode == 13
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert "specs/daily_prepare.cfg failed" in result.stderr
+
+
+def test_a_known_failure_config_that_passes_fails_the_run(tmp_path: Path) -> None:
+    known = {"FAKE_KNOWN_RC": "0", "FAKE_KNOWN_TEXT": ""}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 1
+    assert "StallOnlyForBacklog holds now" in result.stderr
+
+
+def test_a_known_failure_config_must_name_its_property(tmp_path: Path) -> None:
+    known = {"FAKE_KNOWN_TEXT": "Error: Action property DoneStaysDone is violated."}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 13
+    assert "not a violation of StallOnlyForBacklog" in result.stderr
+
+
+def test_the_property_text_with_another_exit_code_fails_the_run(tmp_path: Path) -> None:
+    known = {"FAKE_KNOWN_RC": "12"}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 12
+    assert "ended with exit 12" in result.stderr
+
+
+def test_a_known_failure_crash_prints_the_whole_log(tmp_path: Path) -> None:
+    # The cause of a crash is at the end of the log, past the head that a pass prints.
+    lines = [f"Progress line {n}" for n in range(60)] + ["java.lang.OutOfMemoryError"]
+    known = {"FAKE_KNOWN_RC": "3", "FAKE_KNOWN_TEXT": "\n".join(lines)}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 3
+    assert "java.lang.OutOfMemoryError" in result.stderr
+
+
+def test_a_known_failure_that_holds_prints_only_the_head(tmp_path: Path) -> None:
+    lines = ["Error: Action property StallOnlyForBacklog is violated."]
+    lines += [f"Trace line {n}" for n in range(100)]
+    known = {"FAKE_KNOWN_TEXT": "\n".join(lines)}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 0
+    assert "Trace line 10" in result.stdout
+    assert "Trace line 90" not in result.stdout
+
+
+def test_a_known_failure_config_that_crashes_fails_the_run(tmp_path: Path) -> None:
+    known = {"FAKE_KNOWN_RC": "255", "FAKE_KNOWN_TEXT": "Error: parse failure"}
+    result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, known=known)
+    assert result.returncode == 255
+    assert "ended with exit 255" in result.stderr
+
+
+def test_the_known_failure_config_does_not_run_after_a_failed_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
+    assert result.returncode == 13
+    assert not any("false_stall" in call for call in calls)
 
 
 @pytest.mark.parametrize(

@@ -5,10 +5,12 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from mutation_copy import require_path
 
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES
-from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
+from hockey_model.store.refresh_nhl import BACKLOG_BEFORE, RETRY_FAILED_AFTER
 from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, ABANDON_MIN_SPAN_DAYS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,8 @@ CFGS = (
     ROOT / "specs" / "daily_prepare.cfg",
     ROOT / "specs" / "daily_prepare_stall.cfg",
     ROOT / "specs" / "daily_prepare_blocked.cfg",
+    ROOT / "specs" / "daily_prepare_false_stall.cfg",
+    ROOT / "specs" / "daily_prepare_cutoff.cfg",
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")
@@ -70,6 +74,26 @@ def _load(cfg: Path) -> tuple[dict[str, str], str]:
 cfgs = pytest.mark.parametrize("cfg", CFGS, ids=lambda path: path.name)
 
 
+def test_every_config_in_specs_is_checked_here() -> None:
+    present = {path.name for path in require_path(ROOT / "specs").glob("*.cfg")}
+    listed = {path.name for path in CFGS}
+    assert present == listed, (
+        f"specs/ and CFGS differ: only in specs/ {sorted(present - listed)}, "
+        f"only in CFGS {sorted(listed - present)}; update CFGS in {Path(__file__).name}"
+    )
+
+
+@cfgs
+def test_a_config_names_something_to_check(cfg: Path) -> None:
+    # An empty INVARIANTS or PROPERTIES section makes TLC exit 0 and check nothing.
+    names = [
+        line.strip()
+        for line in cfg.read_text(encoding="utf-8").splitlines()
+        if line.startswith("    ") and "=" not in line
+    ]
+    assert names, f"{cfg.name} has no invariant and no property to check"
+
+
 @cfgs
 def test_abandon_reads_matches_code(cfg: Path) -> None:
     values, source = _load(cfg)
@@ -83,13 +107,32 @@ def test_abandon_ticks_is_one(cfg: Path) -> None:
     assert _integer(values, "AbandonTicks", source) == 1
 
 
+_TICK_WINDOWS = (
+    ("RetryTicks", "RETRY_FAILED_AFTER", RETRY_FAILED_AFTER),
+    ("CutoffTicks", "BACKLOG_BEFORE", BACKLOG_BEFORE),
+)
+# The main config cuts the cutoff short. A longer cutoff multiplies its states (#188), and the
+# other configs check the full cutoff. The short cutoff may be any length up to the code cutoff.
+SHORT_CUTOFF = (ROOT / "specs" / "daily_prepare.cfg", "CutoffTicks")
+
+
 @cfgs
-def test_retry_ticks_match_retry_window(cfg: Path) -> None:
+@pytest.mark.parametrize(("name", "constant", "window"), _TICK_WINDOWS, ids=("retry", "cutoff"))
+def test_ticks_match_the_code_window(
+    cfg: Path, name: str, constant: str, window: timedelta
+) -> None:
     values, source = _load(cfg)
-    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * _integer(values, "RetryTicks", source)
-    assert span == RETRY_FAILED_AFTER, (
-        f"RetryTicks * ABANDON_MIN_SPAN_DAYS is {span}, but RETRY_FAILED_AFTER is "
-        f"{RETRY_FAILED_AFTER}; update RetryTicks in {source}"
+    ticks = _integer(values, name, source)
+    span = timedelta(days=ABANDON_MIN_SPAN_DAYS) * ticks
+    if (cfg, name) == SHORT_CUTOFF:
+        assert 1 <= ticks and span <= window, (
+            f"{name} in {source} is {ticks}; it must be 1 or more, and "
+            f"{name} * ABANDON_MIN_SPAN_DAYS ({span}) must not pass {constant} ({window})"
+        )
+        return
+    assert span == window, (
+        f"{name} * ABANDON_MIN_SPAN_DAYS is {span}, but {constant} is {window}; "
+        f"update {name} in {source}"
     )
 
 
@@ -134,3 +177,37 @@ def test_repeated_constant_fails_with_name() -> None:
 def test_missing_constants_block_fails() -> None:
     with pytest.raises(pytest.fail.Exception, match="no CONSTANTS block"):
         parse_constants("INVARIANTS\n    TypeOK\n", "x.cfg")
+
+
+_NAMES = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", min_size=1, max_size=12
+)
+_VALUES = st.text(alphabet="abcXYZ0123456789{}, ", min_size=1, max_size=20).map(str.strip)
+
+
+@given(constants=st.dictionaries(_NAMES, _VALUES.filter(bool), min_size=1, max_size=8))
+def test_parse_returns_every_constant_line_that_it_was_given(constants: dict[str, str]) -> None:
+    lines = [f"    {name} = {value}" for name, value in constants.items()]
+    text = "\n".join(["CONSTANTS", *lines, "INVARIANTS", "    TypeOK", ""])
+    assert parse_constants(text, "x.cfg") == constants
+
+
+@given(text=st.text(max_size=200))
+def test_parse_returns_a_mapping_or_fails_with_a_message(text: str) -> None:
+    try:
+        values = parse_constants(text, "x.cfg")
+    except pytest.fail.Exception as error:
+        assert "x.cfg" in str(error)
+    else:
+        assert all(isinstance(name, str) and isinstance(raw, str) for name, raw in values.items())
+
+
+@given(
+    count=st.integers(min_value=0, max_value=5),
+    garbage=st.text(alphabet="!@#$%^&*()", min_size=1, max_size=10),
+)
+def test_a_line_that_does_not_fit_fails_and_names_its_number(count: int, garbage: str) -> None:
+    lines = [f"    Name{'x' * n} = {n}" for n in range(count)]
+    text = "\n".join(["CONSTANTS", *lines, f"    {garbage}", "INVARIANTS", ""])
+    with pytest.raises(pytest.fail.Exception, match=rf"x\.cfg:{count + 2}: cannot read"):
+        parse_constants(text, "x.cfg")

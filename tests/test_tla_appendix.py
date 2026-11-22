@@ -1,6 +1,6 @@
 """Tests that the appendix of the TLA+ design note holds the spec files byte for byte.
 
-The note says an implementer copies the three files from the appendix. A change to a spec file
+The note says an implementer copies the spec files from the appendix. A change to a spec file
 without the matching change to the appendix leaves the note giving a stale spec.
 """
 
@@ -17,6 +17,8 @@ FILES = (
     "specs/daily_prepare.cfg",
     "specs/daily_prepare_stall.cfg",
     "specs/daily_prepare_blocked.cfg",
+    "specs/daily_prepare_cutoff.cfg",
+    "specs/daily_prepare_false_stall.cfg",
 )
 for _name in FILES:
     require_path(ROOT / _name)

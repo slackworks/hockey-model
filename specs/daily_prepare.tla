@@ -11,6 +11,7 @@ CONSTANTS
     AbandonReads,   \* ABANDON_AFTER_FAILED_READS
     AbandonTicks,   \* ticks in ABANDON_MIN_SPAN_DAYS
     RetryTicks,     \* ticks in RETRY_FAILED_AFTER
+    CutoffTicks,    \* ticks in BACKLOG_BEFORE: a closed day this old is backlog
     OpenDays,       \* days that are not closed at the start; a tick closes them one by one
     BrokenScore,    \* score days whose every read fails
     BrokenBox,      \* days whose boxscore read always fails
@@ -27,7 +28,7 @@ Score(d) == [kind |-> "score", day |-> d]
 Box(d) == [kind |-> "box", day |-> d]
 
 ASSUME /\ NWindows >= 1 /\ DaysPerWindow >= 1 /\ Budget >= 1 /\ MaxFails >= 1
-       /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1
+       /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1 /\ CutoffTicks >= 1
        /\ OpenDays \subseteq Days /\ BrokenScore \subseteq Days /\ BrokenBox \subseteq Days
        /\ BlockedScore \subseteq BrokenScore /\ BlockedBox \subseteq BrokenBox
        /\ OtherBroken \in BOOLEAN /\ ArrivalsCount \in BOOLEAN /\ BacklogFirst \in BOOLEAN
@@ -58,7 +59,7 @@ VARIABLES
     okRead, streak, span, firstAge, lastAge,  \* source_reads, per URL
     marker,                                   \* the .backfilled file
     open,                                     \* days that are not closed yet
-    arrived,                                  \* days that closed since the last run ended
+    age,                                      \* ticks since each day closed, up to CutoffTicks
     calm,                                     \* TRUE: every read that is not broken works
     phase, pc, gaps, due, fails, reads,
     progress,  \* what the code counts: a finished unit, as ArrivalsCount sets it
@@ -66,9 +67,13 @@ VARIABLES
     clean, stopped, errors,  \* one run
     exitCode
 
-store == <<okRead, streak, span, firstAge, lastAge, marker, open, arrived>>
+store == <<okRead, streak, span, firstAge, lastAge, marker, open, age>>
 run == <<phase, pc, gaps, due, fails, reads, progress, backlog, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
+
+\* cutoff = game_day_of(now) - BACKLOG_BEFORE: a day that closed less than that long ago is
+\* recent, so the code leaves it out of the backlog. An open day has age 0.
+Recent(d) == age[d] < CutoffTicks
 
 Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
@@ -103,7 +108,7 @@ Init == /\ okRead = [u \in Urls |-> FALSE]
         /\ lastAge = [u \in Urls |-> 0]
         /\ marker = FALSE
         /\ open = OpenDays
-        /\ arrived = {}
+        /\ age = [d \in Days |-> IF d \in OpenDays THEN 0 ELSE CutoffTicks]
         /\ calm = FALSE
         /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ due = {}
         /\ fails = 0 /\ reads = 0 /\ progress = FALSE /\ backlog = FALSE
@@ -117,7 +122,7 @@ TypeOK ==
     /\ firstAge \in [Urls -> 0..AbandonTicks]
     /\ lastAge \in [Urls -> 0..RetryTicks]
     /\ marker \in BOOLEAN /\ calm \in BOOLEAN
-    /\ open \subseteq Days /\ arrived \subseteq Days
+    /\ open \subseteq Days /\ age \in [Days -> 0..CutoffTicks]
     /\ phase \in {"idle", "nhl", "other", "finish"}
     /\ pc \in 1..(Steps + 1)
     /\ gaps \subseteq Urls /\ due \subseteq Days
@@ -128,8 +133,8 @@ TypeOK ==
 
 (* Time passes only between runs. One tick is ABANDON_MIN_SPAN_DAYS. A run takes much less
    time than one tick, so every read of a run has the same time. A tick also closes the oldest
-   open day. That day is an arrival: it closed since the last run, and the code leaves it out
-   of the backlog (BACKLOG_BEFORE). *)
+   open day. That day is recent for CutoffTicks ticks, and the code leaves it out of the
+   backlog (BACKLOG_BEFORE). A day that closed earlier gets one tick older. *)
 Tick ==
     /\ phase = "idle"
     /\ firstAge' = [u \in Urls |-> IF streak[u] > 0
@@ -137,7 +142,7 @@ Tick ==
     /\ lastAge' = [u \in Urls |-> IF streak[u] > 0
                                   THEN Min(lastAge[u] + 1, RetryTicks) ELSE 0]
     /\ open' = IF open = {} THEN open ELSE open \ {Oldest(open)}
-    /\ arrived' = IF open = {} THEN arrived ELSE arrived \cup {Oldest(open)}
+    /\ age' = [d \in Days |-> IF d \in open THEN 0 ELSE Min(age[d] + 1, CutoffTicks)]
     /\ UNCHANGED <<okRead, streak, span, marker, calm, run, exitCode>>
 
 GoCalm ==
@@ -157,11 +162,11 @@ StartRun ==
     /\ UNCHANGED <<store, calm, pc, fails, reads, progress, backlog, clean, stopped, errors,
                    exitCode>>
 
-\* A finished unit that the run counts. An arrival is not backlog, so the old rule (ArrivalsCount)
-\* is the only case where an arrival counts as progress.
+\* A finished unit that the run counts. A recent day is not backlog, so the old rule
+\* (ArrivalsCount) is the only case where a recent day counts as progress.
 Finished(u, ok) == ok /\ ~okRead[u] /\ u.day \notin open
-CountsAsProgress(u, ok) == Finished(u, ok) /\ (ArrivalsCount \/ u.day \notin arrived)
-CountsAsBacklog(u, ok) == Finished(u, ok) /\ u.day \notin arrived
+CountsAsProgress(u, ok) == Finished(u, ok) /\ (ArrivalsCount \/ ~Recent(u.day))
+CountsAsBacklog(u, ok) == Finished(u, ok) /\ ~Recent(u.day)
 
 \* run.attempt(): one read in one transaction. It records the result in source_reads.
 \* A read finishes a unit for good when it works and the unit had no good read before.
@@ -183,7 +188,7 @@ Attempt(u, ok) ==
                                            ELSE @ \/ firstAge[u] >= AbandonTicks]
             /\ firstAge' = [firstAge EXCEPT ![u] = IF streak[u] = 0 THEN 0 ELSE @]
             /\ lastAge' = [lastAge EXCEPT ![u] = 0]
-    /\ UNCHANGED <<open, arrived>>
+    /\ UNCHANGED <<open, age>>
 
 Outcomes(u) == IF Broken(u) THEN {FALSE} ELSE IF calm THEN {TRUE} ELSE BOOLEAN
 
@@ -277,16 +282,15 @@ OtherSources ==
                    stopped, exitCode>>
 
 \* The backfill branch of daily-prepare.sh: refresh_rc, then backfill_complete.
-\* The run ends, so the arrivals of this run are no longer new for the next run.
+\* The ages do not change at the end of a run. Only a tick makes a day older.
 Finish ==
     /\ phase = "finish"
     /\ exitCode' = IF errors THEN 1 ELSE IF clean THEN 0 ELSE 75
     /\ marker' = (~errors /\ clean)
-    /\ arrived' = {}
     /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ due' = {}
     /\ fails' = 0 /\ reads' = 0 /\ progress' = FALSE /\ backlog' = FALSE
     /\ clean' = TRUE /\ stopped' = FALSE /\ errors' = FALSE
-    /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, calm>>
+    /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, age, calm>>
 
 Next == Tick \/ GoCalm \/ StartRun \/ NhlStep \/ EndNhl \/ OtherSources \/ Finish
 
@@ -327,6 +331,19 @@ StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
 \* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
 BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
                               => exitCode' = 1]_vars
+
+\* The budget stall error is justified only when backlog work was left unread. The code counts
+\* progress on backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or
+\* none, and stops on the budget raises the stall error while the backlog is already done. When no
+\* source failed, that error is the only cause of exit 1, and the exit 1 is false: more budget is
+\* not needed for the backlog. A run with due days is left out, because the weather picks the due
+\* set and the budget may be too small for the due reads. This property is expected to fail
+\* (#191, #302). Its config is specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check
+\* that must fail.
+BacklogUnread == \E d \in Days : ~Recent(d) /\ ~(ScoreDone(d) /\ BoxDone(d))
+StallOnlyForBacklog ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ due = {}
+        /\ stopped /\ ~progress /\ reads >= Budget) => BacklogUnread]_vars
 
 \* Liveness
 
