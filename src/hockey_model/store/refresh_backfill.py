@@ -16,6 +16,7 @@ from hockey_model.store.refresh_nhl import (
     score_days,
     score_gaps,
 )
+from hockey_model.store.refresh_old_work import old_work_left
 from hockey_model.types import HockeyModelError
 
 # A backfill reads this many game days at a time. A refresh that spends its time budget
@@ -39,8 +40,8 @@ def _budget_stall_error() -> HockeyModelError:
     """Return the error for a run that the time budget stopped before it reached the backlog.
 
     Every later run with the same budget reads the same open days and the days that closed
-    since the last run, and it stops at the same place. The backfill never finishes. The error
-    makes the run exit 1 instead of 75.
+    since the last run, and it stops at the same place while older days wait. The backfill
+    never finishes. The error makes the run exit 1 instead of 75.
     """
     return HockeyModelError(
         "refresh: the backfill spent its time budget before it read one older day or game, "
@@ -98,7 +99,7 @@ def nhl(run: RefreshRun) -> None:
             break
     if not complete:
         run.notes.append("backfill: some days or games are unread; run it again")
-    if progress == 0 and stopped_by_budget:
+    if progress == 0 and stopped_by_budget and old_work_left(run, run.backfill_from, cutoff, gaps):
         run.errors.append(_budget_stall_error())
     note_unresolved(run, unresolved)
     run.backfill_complete = complete
