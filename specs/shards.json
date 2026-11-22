@@ -3,6 +3,7 @@
     "specs/**",
     "scripts/tlc.sh",
     "scripts/tlc_shards.py",
+    "scripts/tlc-plan.sh",
     ".github/workflows/tla.yml"
   ],
   "covers": [
