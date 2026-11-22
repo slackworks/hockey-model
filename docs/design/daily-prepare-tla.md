@@ -365,8 +365,8 @@ The first one was a limit of the code. Issue #178 fixed it.
    `nhl()` counts only units older than the cutoff, which is the cause.
    A run needs a budget that cannot cover the recent days to reach this, so the risk is low.
    #302 tracks the code fix.
-   The first form of the property had no source-failure scope, and TLC found a trace where a failed read made exit 1 correct.
-   The scope on `errors` removes that trace, and the scope on `due` removes a trace where the weather picks due days that the budget cannot cover.
+   The property covers a run with no source failure, because a failed read makes exit 1 correct.
+   It covers a run with no due day, because the weather picks the due set, and the budget can be too small for the due reads.
    The config stays as a known failure.
    `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 cannot leave the config behind.
    The script checks the name of the property and not the trace, so any counterexample of that property counts.
