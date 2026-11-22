@@ -126,7 +126,10 @@ if ! built="$(uv run hockey-model report-index "${index_args[@]}")"; then
   echo "publish-daily-report: $json or the index of $day is not valid; its error is above. Nothing was published." >&2
   exit 1
 fi
-version_name="$(jq -er '.file | select(type == "string")' <<<"$built")"
+if ! version_name="$(jq -er '.file | select(type == "string")' <<<"$built")"; then
+  echo "publish-daily-report: report-index printed no build file name; it printed: $built. Nothing was published." >&2
+  exit 1
+fi
 build="${version_name%.json}"
 version_json="$report_dir/$build.json"
 version_md="$report_dir/$build.md"
