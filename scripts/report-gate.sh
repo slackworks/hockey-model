@@ -37,6 +37,12 @@
 # or the day has no game inside its window while the feed lists a game outside it.
 set -euo pipefail
 
+# The gate reads the feed and the release, and the release read is the only call that needs a
+# token. read_token holds the value for that call, and the export goes away here, so the feed
+# read and the decision step never see it (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
+
 day=""
 have_date=false
 force=false
@@ -210,7 +216,8 @@ decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
   # Ask for the one tag. A 404 means the day is not published yet; any other answer (auth,
   # network) stops the run.
-  answer="$(release_status "$tag")"
+  # The release read is the one call of this script that needs the token.
+  answer="$(GH_TOKEN="$read_token" release_status "$tag")"
   case "$answer" in
   published) published=true ;;
   missing) published=false ;;

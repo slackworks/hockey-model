@@ -345,7 +345,8 @@ def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None
     """The gate reads the schedule and the decision in Python, so it carries no token.
 
     The release lookup is the one call that needs the token, and it is a gh call. Every uv
-    call makes an HTTP read of its own, so it must not see the token.
+    call makes an HTTP read of its own, so it must not see the token. The script unsets
+    GH_TOKEN once at the top and re-exports it for the release read only (#313).
     """
     log = tmp_path / "env.log"
     env = _env(fakes, tmp_path, FAKE_ENV_LOG=str(log), GH_TOKEN="a-token")
@@ -355,6 +356,9 @@ def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None
     calls = [line for line in lines if line.startswith("uv ")]
     assert len(calls) == 3, calls
     assert all(" GH_TOKEN=unset REPORT_GH_TOKEN=unset" in line for line in calls), calls
+    gh_calls = [line for line in lines if line.startswith("gh ")]
+    assert gh_calls, lines
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
 
 
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
