@@ -2,16 +2,18 @@
 # Decide whether this scheduled trigger publishes the daily report.
 #
 # Usage: report-gate.sh [--date YYYY-MM-DD] [--force] [--dry-run]
-#                       [--margin-seconds N] [--prep-started ISO] [--help]
+#                       [--margin-seconds N] [--prep-ends ISO] [--help]
 #   --date   Eastern game day to check. Default: the game day that holds now.
 #   --force  Publish even outside the trigger slot. A day that is already
 #            published is still skipped.
 #   --margin-seconds  Seconds the build needs after this run starts. A published day is replaced
 #            only when the run can finish before the first puck drop. Default: 0.
-#   --prep-started ISO
-#            Start of the daily-prepare run that holds the store group now, or empty when no
-#            run holds it. The report queues behind that run, and GitHub counts the prepare
-#            timeout from its start, so a late prepare can hold the group past the puck drop.
+#   --prep-ends ISO
+#            End of the window of the daily-prepare job that holds the store group now, or
+#            empty when no run holds it, as prep-running.sh prints it. The report queues
+#            behind that run, so a prepare that holds the group past the puck drop is a
+#            prepare that blocks the report. A skip job of a prepared day holds the group
+#            for minutes, and a rebuild job for hours (#311).
 #   --dry-run  Build a report that the caller does not publish. This implies --force,
 #            and the published-release check is skipped, so a published day is due again.
 #
@@ -39,7 +41,7 @@ day=""
 have_date=false
 force=false
 dry_run=false
-prep_started=""
+prep_ends=""
 margin_s=0
 
 # shellcheck source=scripts/usage.sh
@@ -68,12 +70,12 @@ while (($# > 0)); do
     force=true
     shift
     ;;
-  --prep-started)
+  --prep-ends)
     if (($# < 2)); then
-      echo "report-gate: --prep-started needs an ISO instant; see --help" >&2
+      echo "report-gate: --prep-ends needs an ISO instant; see --help" >&2
       exit 2
     fi
-    prep_started="$2"
+    prep_ends="$2"
     shift 2
     ;;
   --dry-run)
@@ -112,7 +114,7 @@ if [[ "$force" == true ]]; then
   args+=(--force)
 fi
 args+=(--margin-seconds "$margin_s")
-args+=(--prep-started "$prep_started")
+args+=(--prep-ends "$prep_ends")
 status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
   echo "report-gate: report-due failed; its error is above" >&2
   exit 1
@@ -153,7 +155,7 @@ blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
 # A forced run is the operator's call, and it still queues, so it is not refused here.
 if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
   echo "::warning::report-gate: a daily-prepare run holds the hockey-model-store group, and its" \
-    "timeout reaches past the first puck drop of $day. This run would wait behind it and" \
+    "window ends at or after the first puck drop of $day. This run would wait behind it and" \
     "publish after the puck drop, so it builds nothing (#163)." >&2
   jq -c --arg tag "$tag" --arg date "$day" \
     '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}' <<<"{}"

@@ -147,10 +147,12 @@ def _add_report_due(parser: argparse.ArgumentParser) -> None:
         help="seconds the run needs after it starts; due only when it can finish before puck drop",
     )
     parser.add_argument(
-        "--prep-started",
+        "--prep-ends",
         default="",
         metavar="ISO",
-        help="start of the daily-prepare run that holds the store group; empty when none holds it",
+        help="end of the window of the daily-prepare job that holds the store group; from "
+        "prep-running.sh, which reads the timeout of the job that holds it (#311); empty "
+        "when no run holds the group",
     )
 
 

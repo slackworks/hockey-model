@@ -65,12 +65,17 @@ jobs:
           if [[ "$DISPATCH_DRY_RUN" == "true" ]]; then
             args+=(--dry-run)
           fi
-          if ! prep_started="$(bash scripts/prep-running.sh)"; then
+          # The lookup names the end of the window of the prepare job that holds the group
+          # (#311). A skip job of a prepared day holds the group for 10 minutes, and a rebuild
+          # job holds it for up to 180, so the timeout of each job is named here. A name that
+          # the workflow does not carry fails the test that compares the two files.
+          if ! prep_ends="$(bash scripts/prep-running.sh --timeout skip=10 \
+            --timeout prepare=180)"; then
             echo "::error::the prepare-run lookup failed, so this run cannot tell whether" \
               "it would wait behind a prepare run" >&2
             exit 1
           fi
-          args+=(--prep-started "$prep_started")
+          args+=(--prep-ends "${prep_ends% *}")
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json

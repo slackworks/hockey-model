@@ -50,20 +50,53 @@ def _job(text: str, name: str) -> str:
     )
 
 
-def test_the_store_group_is_on_the_prepare_job_and_not_on_the_workflow() -> None:
-    """A group on the workflow would let a scheduled run cancel a waiting manual run (#285)."""
+@pytest.mark.parametrize("name", ["skip", "prepare"])
+def test_the_store_group_is_on_each_build_job_and_not_on_the_workflow(name: str) -> None:
+    """A group on the workflow would let a scheduled run cancel a waiting manual run (#285).
+
+    The skip job writes the store through the refresh, so it takes the same group as the
+    rebuild (#311).
+    """
     text = PREPARE.read_text(encoding="utf-8")
+    job = _job(text, name)
     assert not re.search(r"^concurrency:", text, re.MULTILINE)
-    assert "group: hockey-model-store" in _job(text, "prepare")
-    assert "cancel-in-progress: false" in _job(text, "prepare")
+    assert "group: hockey-model-store" in job
+    assert "cancel-in-progress: false" in job
     assert "concurrency" not in _job(text, "gate")
 
 
-def test_the_prepare_job_waits_for_the_gate() -> None:
+def test_the_prepare_job_waits_for_the_gate_and_the_skip_check() -> None:
+    """The rebuild runs only when the skip check named it, so it waits for that job (#311)."""
     text = PREPARE.read_text(encoding="utf-8")
     prepare = _job(text, "prepare")
-    assert "needs: gate" in prepare
-    assert "if: needs.gate.outputs.go == 'true'" in prepare
+    assert "needs: [gate, skip]" in prepare
+    assert "needs.gate.outputs.go == 'true'" in prepare
+    assert "needs.skip.outputs.rebuild == 'true'" in prepare
+
+
+def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
+    """A prepared day holds the group for minutes, and a forced run rebuilds at once (#311)."""
+    skip = _job(PREPARE.read_text(encoding="utf-8"), "skip")
+    assert "needs: gate" in skip
+    assert "timeout-minutes: 10" in skip
+    assert "needs.gate.outputs.go == 'true'" in skip
+    assert "needs.gate.outputs.force != 'true'" in skip
+
+
+def test_the_skip_job_asks_the_script_whether_the_day_needs_the_rebuild() -> None:
+    """Exit code 4 names the rebuild and any other code stops the run (#311)."""
+    skip = _job(PREPARE.read_text(encoding="utf-8"), "skip")
+    assert "--check-only" in skip
+    assert "rebuild=true" in skip
+    assert "rebuild=false" in skip
+    assert "exit code 4" in skip
+    assert "if: always()" in skip
+
+
+def test_the_skip_job_hands_its_answer_to_the_rebuild_job() -> None:
+    text = PREPARE.read_text(encoding="utf-8")
+    assert "rebuild: ${{ steps.check.outputs.rebuild }}" in _job(text, "skip")
+    assert "needs.skip.outputs.rebuild" in _job(text, "prepare")
 
 
 def test_only_a_scheduled_run_asks_whether_a_manual_run_waits() -> None:

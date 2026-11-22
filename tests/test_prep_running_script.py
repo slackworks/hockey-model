@@ -1,7 +1,9 @@
-"""Tests for the lookup that names the prepare run holding the store group."""
+"""Tests for the lookup that names the prepare window that holds the store group."""
 
 import json
 import re
+import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,9 +15,29 @@ _PREPARE = ".github/workflows/daily-prepare.yml"
 _REPORT = ".github/workflows/daily-report.yml"
 _STARTED = "2026-11-04T08:07:12Z"
 # A queued run carries run_started_at, and the value is its creation time. The lookup must
-# not print it, because that instant reads as a run that ends early.
+# not read it, because that instant reads as a run that ends early.
 _CREATED = "2026-11-04T07:55:00Z"
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# The two jobs of the split prepare, with the timeouts that the workflow sets on each one.
+_TIMEOUTS = ("--timeout", "skip=10", "--timeout", "prepare=180")
+
+
+def _lookup(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the lookup with the job timeouts that the report gate passes."""
+    return _run("prep-running.sh", env, *_TIMEOUTS)
+
+
+def _end(started: str, minutes: int = 180) -> str:
+    """Return the end of a job window that opens at ``started`` and lasts ``minutes``."""
+    moment = datetime.fromisoformat(started.replace("Z", "+00:00")) + timedelta(minutes=minutes)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _printed_end(result: subprocess.CompletedProcess[str], minutes: int = 180) -> str:
+    """Return the end of the window that the lookup printed, and check the timeout it names."""
+    end, printed = result.stdout.split()
+    assert printed == str(minutes), result.stdout
+    return end
 
 
 def _runs(*runs: tuple[str, str | None], status: str = "in_progress") -> str:
@@ -23,7 +45,7 @@ def _runs(*runs: tuple[str, str | None], status: str = "in_progress") -> str:
 
     A running run names its start in ``run_started_at``. A run that the group holds, or one
     that waits for a runner, holds its creation time there. No run object has ``started_at``.
-    Each run carries an id, because the start of a running run comes from its job list.
+    Each run carries an id, because the window of a running run comes from its job list.
     """
     rows = []
     for index, (path, started) in enumerate(runs):
@@ -51,34 +73,35 @@ def _env_for(
 
 
 def test_no_runs_means_no_prepare_holds_the_group(fakes: Path, tmp_path: Path) -> None:
-    result = _run("prep-running.sh", _env(fakes, tmp_path))
+    result = _lookup(_env(fakes, tmp_path))
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
 
 
-def test_a_running_prepare_names_its_job_start(fakes: Path, tmp_path: Path) -> None:
-    """GitHub counts the job timeout from the job start, so the job start is the answer."""
+def test_a_running_prepare_names_the_end_of_its_job_window(fakes: Path, tmp_path: Path) -> None:
+    """GitHub counts the job timeout from the job start, so the end of the window is the answer."""
     env = _env_for(
         fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_JSON=_jobs(_STARTED)
     )
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == _STARTED
+    assert _printed_end(result) == _end(_STARTED)
 
 
-def test_a_job_that_has_not_started_names_now(fakes: Path, tmp_path: Path) -> None:
+def test_a_job_that_has_not_started_opens_its_window_now(fakes: Path, tmp_path: Path) -> None:
     """A run is in_progress while its job waits for a runner, and its window opens later.
 
     Reading the run start would predict an earlier end than the prepare can have, which is
     the late-publish case that the check exists to catch (#163).
     """
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_JSON=_jobs(None))
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
     # Not the run start, and not the creation time: the job can still use its full window.
-    assert result.stdout != _STARTED
-    assert result.stdout != _CREATED
-    assert _ISO.match(result.stdout), result.stdout
+    end = _printed_end(result)
+    assert end != _end(_STARTED)
+    assert end != _end(_CREATED)
+    assert _ISO.match(end), end
 
 
 def test_a_gate_job_that_started_early_does_not_move_the_window(
@@ -94,11 +117,11 @@ def test_a_gate_job_that_started_early_does_not_move_the_window(
         }
     )
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
-    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
-    assert (result.returncode, result.stdout) == (0, _STARTED)
+    result = _lookup({**env, "FAKE_JOBS_JSON": jobs})
+    assert (result.returncode, _printed_end(result)) == (0, _end(_STARTED))
 
 
-def test_a_prepare_job_that_waits_for_the_group_names_now_not_the_gate_start(
+def test_a_prepare_job_that_waits_for_the_group_opens_its_window_now(
     fakes: Path, tmp_path: Path
 ) -> None:
     jobs = json.dumps(
@@ -110,24 +133,26 @@ def test_a_prepare_job_that_waits_for_the_group_names_now_not_the_gate_start(
         }
     )
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
-    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    result = _lookup({**env, "FAKE_JOBS_JSON": jobs})
     assert result.returncode == 0, result.stderr
-    assert result.stdout != "2026-11-04T06:00:00Z"
-    assert _ISO.match(result.stdout), result.stdout
+    end = _printed_end(result)
+    assert end != _end("2026-11-04T06:00:00Z")
+    assert _ISO.match(end), end
 
 
 @pytest.mark.parametrize("status", ["queued", "waiting", "pending", "requested"])
-def test_a_waiting_prepare_job_names_now_even_when_it_carries_a_start(
+def test_a_waiting_prepare_job_opens_its_window_now_even_when_it_carries_a_start(
     fakes: Path, tmp_path: Path, status: str
 ) -> None:
     """GitHub fills started_at of a job that waits with its creation time."""
     created = "2026-11-04T06:00:00Z"
     jobs = json.dumps({"jobs": [{"name": "prepare", "status": status, "started_at": created}]})
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, created))
-    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": jobs})
+    result = _lookup({**env, "FAKE_JOBS_JSON": jobs})
     assert result.returncode == 0, result.stderr
-    assert result.stdout != created
-    assert _ISO.match(result.stdout), result.stdout
+    end = _printed_end(result)
+    assert end != _end(created)
+    assert _ISO.match(end), end
 
 
 def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_path: Path) -> None:
@@ -139,31 +164,24 @@ def test_a_prepare_job_that_the_gate_skipped_holds_no_group(fakes: Path, tmp_pat
                     "status": "completed",
                     "conclusion": "skipped",
                     "started_at": "2026-11-04T06:00:00Z",
-                }
+                },
+                # The skip job of the same run holds the group, and it is the holder.
+                {"name": "skip", "status": "completed", "started_at": _CREATED},
             ]
         }
     )
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, "2026-11-04T06:00:00Z"))
-    result = _run("prep-running.sh", {**env, "FAKE_JOBS_JSON": skipped})
+    result = _lookup({**env, "FAKE_JOBS_JSON": skipped})
     assert result.returncode == 0, result.stderr
-    assert result.stdout != "2026-11-04T06:00:00Z"
-    assert _ISO.match(result.stdout), result.stdout
+    assert _printed_end(result, 10) == _end(_CREATED, 10)
 
 
-def test_the_script_reads_the_job_that_the_workflow_names_prepare() -> None:
-    """A renamed job would match nothing, and the lookup would print the current time."""
-    root = Path(__file__).resolve().parents[1]
-    workflow = require_path(root / ".github" / "workflows" / "daily-prepare.yml")
-    text = workflow.read_text(encoding="utf-8")
-    prepare = re.search(r"^  prepare:\n(.*?)(?=^  [a-z-]+:\n|\Z)", text, re.DOTALL | re.MULTILINE)
-    assert prepare is not None
-    assert not re.search(r"^    name:", prepare.group(1), re.MULTILINE)
-    script = require_path(root / "scripts" / "prep-running.sh").read_text(encoding="utf-8")
-    assert '.name == "prepare"' in script
+def test_the_run_with_the_latest_end_names_the_wait(fakes: Path, tmp_path: Path) -> None:
+    """The group frees only after every holder ends, so the latest end is the answer.
 
-
-def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
-    # The earlier start holds the group first, so it is the one that the report waits behind.
+    The start of a run does not decide that: two runs can each hold their job at once, and
+    the one that ends last is the one that the report waits for.
+    """
     earlier = "2026-11-04T08:00:00Z"
     later = "2026-11-04T09:30:00Z"
     env = _env(
@@ -173,39 +191,35 @@ def test_the_earliest_of_two_prepares_wins(fakes: Path, tmp_path: Path) -> None:
         FAKE_JOBS_JSON=json.dumps(
             {
                 "jobs": [
-                    {
-                        "name": "prepare",
-                        "status": "in_progress",
-                        "started_at": "2026-11-04T09:30:00Z",
-                    },
-                    {"name": "prepare", "status": "in_progress", "started_at": earlier},
+                    {"name": "prepare", "status": "in_progress", "started_at": later},
+                    {"name": "skip", "status": "in_progress", "started_at": earlier},
                 ]
             }
         ),
     )
-    result = _run("prep-running.sh", env)
+    # The fake gh answers the same job list for both runs, so the latest end of the run that
+    # started later wins. A skip job of the later start still ends before the prepare job.
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == earlier
+    assert _printed_end(result) == _end(later)
 
 
-def test_a_prepare_held_by_the_group_names_now_as_its_earliest_start(
-    fakes: Path, tmp_path: Path
-) -> None:
+def test_a_prepare_held_by_the_group_opens_its_window_now(fakes: Path, tmp_path: Path) -> None:
     """A prepare that waits for the group is pending, not queued. It has not started."""
     env = _env_for(fakes, tmp_path, "pending", (_PREPARE, None))
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
     # Not the creation time: the run can still use its full window from now.
-    assert result.stdout != _CREATED
-    assert _ISO.match(result.stdout), result.stdout
+    end = _printed_end(result, 10)
+    assert end != _end(_CREATED, 10)
+    assert _ISO.match(end), end
 
 
-def test_a_queued_prepare_names_now_as_its_earliest_start(fakes: Path, tmp_path: Path) -> None:
+def test_a_queued_prepare_opens_its_window_now(fakes: Path, tmp_path: Path) -> None:
     env = _env_for(fakes, tmp_path, "queued", (_PREPARE, None))
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert result.stdout != _CREATED
-    assert _ISO.match(result.stdout), result.stdout
+    assert _printed_end(result, 10) != _end(_CREATED, 10)
 
 
 @pytest.mark.parametrize("status", ["in_progress", "pending", "queued", "waiting", "requested"])
@@ -214,7 +228,7 @@ def test_every_state_that_holds_the_group_is_asked_for(
 ) -> None:
     """A state that the script never asks for is a state it cannot see."""
     env = _env_for(fakes, tmp_path, status, (_PREPARE, None))
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
     runs_calls = [call for call in _calls(tmp_path) if "actions/runs" in call]
     assert any(f"status={status}" in call for call in runs_calls), runs_calls
@@ -222,7 +236,7 @@ def test_every_state_that_holds_the_group_is_asked_for(
 
 def test_a_report_run_alone_holds_no_store_group(fakes: Path, tmp_path: Path) -> None:
     env = _env_for(fakes, tmp_path, "in_progress", (_REPORT, "2026-11-04T11:44:00Z"))
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
 
@@ -230,7 +244,7 @@ def test_a_report_run_alone_holds_no_store_group(fakes: Path, tmp_path: Path) ->
 def test_a_failed_lookup_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> None:
     """A broken lookup read as "no prepare" would let the report start behind a live run."""
     env = _env(fakes, tmp_path, FAKE_RUNS_FAIL="1")
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert "cannot read the in_progress workflow runs" in result.stderr
@@ -239,7 +253,7 @@ def test_a_failed_lookup_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> 
 def test_a_failed_job_read_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> None:
     """A broken job read must not read as "no prepare", for the same reason as the run list."""
     env = _env_for(fakes, tmp_path, "in_progress", (_PREPARE, _STARTED), FAKE_JOBS_FAIL="1")
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert "cannot read the jobs of run" in result.stderr
@@ -247,7 +261,7 @@ def test_a_failed_job_read_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -
 
 def test_a_payload_that_jq_cannot_read_is_not_an_empty_answer(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, FAKE_RUNS_JSON_IN_PROGRESS="{not json")
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert "cannot read the workflow run list" in result.stderr
@@ -269,9 +283,23 @@ def test_a_run_with_no_path_is_skipped_not_fatal(fakes: Path, tmp_path: Path) ->
         FAKE_RUNS_JSON_IN_PROGRESS=payload,
         FAKE_JOBS_JSON=_jobs(_STARTED),
     )
-    result = _run("prep-running.sh", env)
+    result = _lookup(env)
     assert result.returncode == 0, result.stderr
-    assert result.stdout == _STARTED
+    assert _printed_end(result) == _end(_STARTED)
+
+
+def test_the_script_reads_the_job_that_the_workflow_names_prepare() -> None:
+    """A renamed job would match nothing, and the lookup would read the group as free.
+
+    The names come from the report workflow, so this test holds the two files together. A
+    job rename that misses the workflow leaves a name that no job carries.
+    """
+    root = Path(__file__).resolve().parents[1]
+    report = require_path(root / _REPORT).read_text(encoding="utf-8")
+    assert "--timeout prepare=180" in report
+    prepare = require_path(root / _PREPARE).read_text(encoding="utf-8")
+    assert re.search(r"^  prepare:\n", prepare, re.MULTILINE)
+    assert "    timeout-minutes: 180\n" in prepare
 
 
 def test_an_unknown_argument_is_refused(fakes: Path, tmp_path: Path) -> None:
@@ -283,16 +311,16 @@ def test_an_unknown_argument_is_refused(fakes: Path, tmp_path: Path) -> None:
 def test_help_names_the_output(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--help")
     assert result.returncode == 0
-    assert "ISO 8601 UTC instant" in result.stdout
+    assert "<ISO 8601 UTC end> <MINUTES>" in result.stdout
 
 
 @pytest.mark.parametrize("workflow", ["daily-report.yml"])
-def test_the_report_workflow_passes_the_prepare_start(workflow: str) -> None:
+def test_the_report_workflow_passes_the_prepare_end(workflow: str) -> None:
     """The workflow is the only caller: it holds no lock, so it can read the running runs."""
     root = Path(__file__).resolve().parents[1]
     text = require_path(root / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
     assert "bash scripts/prep-running.sh" in text
-    assert "--prep-started" in text
+    assert "--prep-ends" in text
     # The check must run before the gate decides, so the flag reaches report-gate.sh.
     assert text.index("prep-running.sh") < text.index("report-gate.sh")
 

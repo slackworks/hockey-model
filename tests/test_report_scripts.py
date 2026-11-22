@@ -338,9 +338,9 @@ def test_gate_names_a_failed_report_due_call(fakes: Path, tmp_path: Path) -> Non
 def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
     fakes: Path, tmp_path: Path
 ) -> None:
-    """The wait is not inside the prepare timeout, so the run can start after the puck drop."""
+    """The window of the prepare that holds the group reaches the puck drop, so the run waits."""
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["due"] is False
@@ -355,20 +355,20 @@ def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
 
 def test_gate_passes_the_prepare_start_to_report_due(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path)
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
-    assert f"--prep-started {STARTED}" in _calls(tmp_path)[0]
+    assert f"--prep-ends {STARTED}" in _calls(tmp_path)[0]
 
 
 def test_gate_refuses_a_prepare_start_with_no_value(fakes: Path, tmp_path: Path) -> None:
-    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", DAY, "--prep-started")
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", DAY, "--prep-ends")
     assert result.returncode == 2
-    assert "--prep-started needs an ISO instant" in result.stderr
+    assert "--prep-ends needs an ISO instant" in result.stderr
 
 
 def test_gate_decides_when_no_prepare_run_holds_the_group(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=False))
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["due"] is True
 
@@ -376,7 +376,7 @@ def test_gate_decides_when_no_prepare_run_holds_the_group(fakes: Path, tmp_path:
 def test_gate_does_not_skip_a_forced_run_that_would_wait(fakes: Path, tmp_path: Path) -> None:
     # A forced run is the operator's call. It still queues, and the gate says so, but it runs.
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
-    result = _run("report-gate.sh", env, "--date", DAY, "--force", "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--force", "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["due"] is True
 

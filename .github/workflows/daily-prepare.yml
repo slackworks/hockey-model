@@ -37,6 +37,8 @@ jobs:
       actions: read
     outputs:
       go: ${{ steps.manual.outputs.go }}
+      # A forced run skips the check job and rebuilds, because the operator asked for it.
+      force: ${{ steps.manual.outputs.force }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,7 +47,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
+          DISPATCH_FORCE: ${{ inputs.force }}
         run: |
+          if [[ "$DISPATCH_FORCE" == "true" ]]; then
+            echo "force=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force=false" >> "$GITHUB_OUTPUT"
+          fi
           if [[ "$EVENT" != "schedule" ]]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -61,16 +69,83 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
           fi
 
-  prepare:
+  # The skip check is its own job because it is short and it holds the store group (#311). The
+  # report gate reads the timeout of the job that holds the group, so a prepared day holds it
+  # for the 10 minutes below instead of the 180 minutes of a rebuild. Without the split, a
+  # routine late prepare blocked the report for three hours before the puck drop, which is when
+  # the starters are confirmed. The job writes the store only through the refresh, which ends
+  # in seconds with a warm cache.
+  skip:
     needs: gate
-    if: needs.gate.outputs.go == 'true'
+    if: needs.gate.outputs.go == 'true' && needs.gate.outputs.force != 'true'
+    concurrency:
+      group: hockey-model-store
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --locked
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/hockey-model
+          key: hockey-model-store-${{ github.run_id }}
+          restore-keys: |
+            hockey-model-store-
+      # Exit code 4 means the day needs the rebuild, which is the next job's work. Any other
+      # code stops the run: a failed refresh must not read as "nothing to do".
+      - id: check
+        env:
+          HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
+          DISPATCH_DATE: ${{ inputs.date }}
+        run: |
+          args=(--check-only)
+          if [[ -n "$DISPATCH_DATE" ]]; then
+            args+=(--date "$DISPATCH_DATE")
+          fi
+          rc=0
+          bash scripts/daily-prepare.sh ${args[@]+"${args[@]}"} || rc=$?
+          case "$rc" in
+          0) echo "rebuild=false" >> "$GITHUB_OUTPUT" ;;
+          4) echo "rebuild=true" >> "$GITHUB_OUTPUT" ;;
+          *)
+            echo "::error::The skip check stopped with exit code ${rc}; it reports a rebuild" \
+              "with exit code 4."
+            exit "$rc"
+            ;;
+          esac
+      # A backup beside the store doubles the cache. After a failed upgrade it also stops the
+      # next run at "backup ... already exists". The earlier cache entry holds the store that
+      # the backup copied.
+      - if: always()
+        name: Drop the upgrade backup
+        run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak*
+      # Saved even after a failure, so the refreshed store is not read again.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: ${{ runner.temp }}/hockey-model
+          key: hockey-model-store-${{ github.run_id }}
+    outputs:
+      rebuild: ${{ steps.check.outputs.rebuild }}
+
+  prepare:
+    needs: [gate, skip]
+    # A manual run with force goes straight here, because it always rebuilds. Any other run
+    # rebuilds only when the skip check found that the day needs it.
+    if: >-
+      needs.gate.outputs.go == 'true'
+      && (needs.gate.outputs.force == 'true' || needs.skip.outputs.rebuild == 'true')
     # The same group as daily-report, so only one run writes the cached store at a time.
     concurrency:
       group: hockey-model-store
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # A full prepare takes up to about two hours. The timeout equals PREP_TIMEOUT in
-    # report_trigger.py, which the gate uses to decide whether a running prepare blocks a report.
+    # A full prepare takes up to about two hours. The report gate reads this value from
+    # scripts/prep-running.sh, which the daily-report workflow passes with --timeout prepare=180.
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
