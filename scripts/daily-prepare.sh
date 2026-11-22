@@ -6,7 +6,8 @@
 #   --date   Eastern game day to prepare. Default: today in Eastern time.
 #   --force  Rebuild the backtest and the fit for a day that is already prepared.
 #            Without it, a day with a prepared-DATE marker and a valid backtest-DATE.json
-#            skips both steps and exits 0 after the refresh.
+#            skips both steps and exits 0 after the refresh. It also deletes the season row
+#            cache beside the store, so every season is built again.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The first backfill runs until a marker file
 # next to the store says it finished. The backfill reads one year at a time, newest year
@@ -149,6 +150,11 @@ for stale in "$store_dir"/prepared-* "$store_dir"/backtest-*; do
   fi
 done
 shopt -u nullglob
+
+# A forced rebuild reads no cached season, so a wrong cache file cannot survive a rebuild.
+if [[ "$force" == 1 ]]; then
+  rm -rf "$store_dir/season-rows"
+fi
 
 # The backtest writes beside the final names. The final files and the marker change only after
 # the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
