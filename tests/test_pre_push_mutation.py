@@ -183,6 +183,30 @@ def test_generated_mutants_are_removed(mod: ModuleType, repo: Path) -> None:
     assert not (repo / "mutants").exists()
 
 
+def test_a_run_that_failed_before_its_stats_leaves_a_directory_to_remove(
+    mod: ModuleType, repo: Path
+) -> None:
+    """A failed stats phase writes no mutmut-stats.json, and the next push must still clear it.
+
+    The directory that such a run leaves holds only copied sources and tests (#316).
+    """
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "pyproject.toml").write_text("", encoding="utf-8")
+    (repo / "mutants" / "uv.lock").write_text("", encoding="utf-8")
+    (repo / "mutants" / "src").mkdir()
+    (repo / "mutants" / "tests").mkdir()
+    (repo / "mutants" / ".hypothesis").mkdir()
+    mod.clear_generated_mutants(repo)
+    assert not (repo / "mutants").exists()
+
+
+def test_the_refusal_names_the_name_that_is_not_mutmut_output(mod: ModuleType, repo: Path) -> None:
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "notes.md").write_text("mine", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match=r"\['notes.md'\]"):
+        mod.clear_generated_mutants(repo)
+
+
 @pytest.fixture
 def fake_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mod: ModuleType) -> Path:
     """A stub mutmut. Its output comes from the FAKE_* environment variables."""
@@ -191,6 +215,8 @@ def fake_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mod: ModuleType
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         '  run) echo "run $*" >> "$FAKE_CALLS";'
+        '    printf "%s" "${FAKE_RUN_OUT:-}";'
+        '    printf "%s" "${FAKE_RUN_ERR:-}" >&2;'
         '    [[ -n "${FAKE_CHILD_PID:-}" ]] && { sleep 60 & echo $! > "$FAKE_CHILD_PID"; };'
         '    sleep "${FAKE_SLEEP:-0}";'
         '    exit "${FAKE_RUN_RC:-0}";;\n'
@@ -357,6 +383,26 @@ def test_a_failed_mutmut_run_fails(
     monkeypatch.setenv("FAKE_RUN_RC", "3")
     with pytest.raises(mod.PushCheckError, match="exited 3"):
         mod.run_mutmut(repo, ["run", TOP])
+
+
+def test_a_failed_mutmut_run_names_the_failing_test(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stats phase prints the failed test, and the error carries it (#316)."""
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RUN_RC", "1")
+    monkeypatch.setenv(
+        "FAKE_RUN_OUT",
+        "some progress\n"
+        "FAILED tests/backtest/test_shards_cache.py::test_a_change - AssertionError: x\n"
+        "1 failed, 23 passed in 5.04s\n"
+        "failed to collect stats. runner returned 1\n",
+    )
+    with pytest.raises(mod.PushCheckError) as caught:
+        mod.run_mutmut(repo, ["run", TOP])
+    message = str(caught.value)
+    assert "tests/backtest/test_shards_cache.py::test_a_change" in message
+    assert "failed to collect stats" in message
 
 
 def test_a_run_past_the_timeout_fails_with_the_fix(
