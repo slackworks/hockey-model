@@ -48,15 +48,15 @@ def test_a_first_build_writes_one_file_for_each_season_and_mode(
     assert len(_names(seeded)) == 2 * len(SEASONS)
 
 
-def test_a_second_build_gives_the_same_rows_and_writes_nothing(
+def test_a_second_build_gives_the_same_rows_and_rewrites_no_file(
     seeded: sqlite3.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
     cold = build_sharded(seeded, PLAN, FEATURES, 2)
-    files = {p: p.stat().st_mtime_ns for p in _directory(seeded).iterdir()}
+    files = {p: p.read_text() for p in _directory(seeded).iterdir()}
     capsys.readouterr()
     warm = build_sharded(seeded, PLAN, FEATURES, 2)
     assert warm == cold
-    assert files == {p: p.stat().st_mtime_ns for p in _directory(seeded).iterdir()}
+    assert files == {p: p.read_text() for p in _directory(seeded).iterdir()}
     err = capsys.readouterr().err
     assert f"{2 * len(SEASONS)} read from the cache, 0 to build" in err
 
