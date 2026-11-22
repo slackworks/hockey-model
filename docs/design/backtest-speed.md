@@ -171,7 +171,9 @@ A skater who never played in goal changes no key.
 The backtest builds all candidate features, and the fit builds the features that passed the joint test.
 The rows differ in their notes, so each feature list has its own file for a season, and a new key replaces only the file of its own list.
 
-Only the sharded build reads the cache, so `--workers 1` builds every season (#305).
+A store file with no uncommitted change builds season by season, and reads the cache, for one worker too (`can_shard`, #305).
+The shards then run in the current process.
+A connection with no file or with uncommitted changes gets the full build and no cache, because a shard reads the committed file.
 
 #### Rebuild by hand
 
