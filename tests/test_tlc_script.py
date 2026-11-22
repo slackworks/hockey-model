@@ -376,3 +376,9 @@ def test_a_failed_shard_names_itself(tmp_path: Path) -> None:
     assert result.returncode == 13
     assert len(calls) == 1
     assert "(shard main)" in result.stderr
+
+
+def test_an_empty_shard_name_exits_two() -> None:
+    result = _run("--shard", "")
+    assert result.returncode == 2
+    assert "--shard takes one shard name" in result.stderr

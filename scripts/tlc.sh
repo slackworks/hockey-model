@@ -26,17 +26,19 @@ TLA_TOOLS_DIR="${TLA_TOOLS_DIR:-$HOME/.cache/hockey-model/tla}"
 TLA_URL="https://github.com/tlaplus/tlaplus/releases/download/$TLA_TOOLS_VERSION/tla2tools.jar"
 JAR="$TLA_TOOLS_DIR/tla2tools-$TLA_TOOLS_VERSION.jar"
 
-# The shards are in specs/shards.json, which the workflow reads too. The helper is plain
-# stdlib Python, so the tla job needs no project environment for it. Each shard must
-# pass, and the small shards come first, so a mistake fails in seconds.
-shards() { python3 -I scripts/tlc_shards.py "$@"; }
+# The shards are in specs/shards.json, which the workflow reads too. The helper needs the
+# standard library only, so --no-project skips the sync of the project environment. Each
+# shard must pass, and the small shards come first, so a mistake fails in seconds.
+shards() { uv run --no-project python3 -I scripts/tlc_shards.py "$@"; }
 
 usage() {
+  local listing
+  listing="$(shards rows | awk -F'\t' '{ printf "  %-8s %s\n", $1, $3 }')"
   cat <<EOF
 Usage: bash scripts/tlc.sh [--help | --list | --shard NAME]
 Run TLC on one spec and one config for each shard. TLC must find no violation.
 The shards, in run order, with the config of each:
-$(shards rows | awk -F'\t' '{ printf "  %-8s %s\n", $1, $3 }')
+$listing
   --help        Print this usage and exit 0.
   --list        Print each shard and the paths that start it, as JSON lines.
   --shard NAME  Run the shard NAME alone. An unknown name exits 2.
@@ -59,7 +61,7 @@ sha256_of() {
 shard=""
 case "${1:-}" in
 --shard)
-  if (($# != 2)); then
+  if (($# != 2)) || [[ -z "$2" ]]; then
     echo "tlc.sh: --shard takes one shard name; run with --list to see them" >&2
     exit 2
   fi
@@ -88,7 +90,9 @@ case "${1:-}" in
   ;;
 esac
 # An unknown shard name is a usage error, so it exits before the Java and jar checks.
-rows="$(shards rows ${shard:+--shard "$shard"})" || exit $?
+rows_args=(rows)
+if [[ -n "$shard" ]]; then rows_args+=(--shard "$shard"); fi
+rows="$(shards "${rows_args[@]}")" || exit $?
 
 if ! command -v java >/dev/null 2>&1; then
   echo "tlc.sh: java is not on PATH. Install Java 11 or later." >&2
