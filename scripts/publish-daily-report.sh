@@ -109,7 +109,10 @@ esac
 existing_assets=""
 existing_index=""
 if [[ "$answer" == "published" ]]; then
-  existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+  existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
+    echo "publish-daily-report: cannot list the assets of $tag; gh's error is above. Nothing was published." >&2
+    exit 1
+  }
   if grep -qxF "index-$day.json" <<<"$existing_assets"; then
     gh release download "$tag" --pattern "index-$day.json" --dir "$check_dir" --clobber
     existing_index="$check_dir/index-$day.json"
