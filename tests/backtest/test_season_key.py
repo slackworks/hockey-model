@@ -6,12 +6,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import FETCHED, add_goalie
 from test_runner_store import PLAN, seed
 
 from hockey_model.backtest.season_key import COVERED_TABLES, season_keys, source_digest
 from hockey_model.game_model.features import FEATURES, GoalieMode
 from hockey_model.game_model.training import training_rows
+from hockey_model.store.db import connect
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
 SEASONS = range(1, 8)
@@ -289,3 +292,53 @@ def test_a_read_again_with_the_same_content_changes_no_key(
     seeded.execute(copy, (_LATER,))
     seeded.commit()
     assert _changed(before, _keys(seeded)) == []
+
+
+@settings(max_examples=25)
+@given(season=st.integers(min_value=min(SEASONS), max_value=max(SEASONS)))
+def test_a_changed_game_changes_its_season_and_every_later_season_only(
+    tmp_path_factory: pytest.TempPathFactory, season: int
+) -> None:
+    """The running hash makes one rule: a change reaches its season and the seasons after it."""
+    conn = connect(tmp_path_factory.mktemp("prop") / "store.db")
+    try:
+        seed(conn, SEASONS)
+        conn.commit()
+        before = _keys(conn)
+        conn.execute(_CHANGES["latest_final_games"].format(g=_first_game_of(conn, season)))
+        conn.commit()
+        assert _changed(before, _keys(conn)) == [s for s in SEASONS if s >= season]
+    finally:
+        conn.close()
+
+
+# A read at a season end is the case that a wrong comparison gets wrong, so the drawn times
+# include the microsecond before, the microsecond itself, and the microsecond after.
+_OFFSETS = st.one_of(
+    st.sampled_from([-_MICROSECOND, timedelta(0), _MICROSECOND]),
+    st.timedeltas(min_value=timedelta(days=-400), max_value=timedelta(days=400)),
+)
+
+
+@settings(max_examples=25)
+@given(
+    season=st.integers(min_value=min(SEASONS), max_value=max(SEASONS)),
+    offset=_OFFSETS,
+)
+def test_a_drawn_injury_read_reaches_the_first_season_that_ends_at_or_after_it(
+    tmp_path_factory: pytest.TempPathFactory, season: int, offset: timedelta
+) -> None:
+    """The binning is the rule the key needs: no read reaches a season that ended before it."""
+    conn = connect(tmp_path_factory.mktemp("prop") / "store.db")
+    try:
+        seed(conn, SEASONS)
+        conn.commit()
+        ends = {s: _season_end(conn, s) for s in SEASONS}
+        stamp = ends[season] + offset
+        before = _keys(conn)
+        _read(conn, iso_utc(stamp))
+        changed = _changed(before, _keys(conn))
+    finally:
+        conn.close()
+    expected = [s for s in SEASONS if ends[s] >= stamp]
+    assert changed == expected
