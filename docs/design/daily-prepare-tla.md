@@ -62,9 +62,9 @@ The prose names constants and does not repeat their values, because the values l
    An open day and a due day do not count, because the next run reads them again.
    A day that closed since the last run does not count, because a daily run completes one such day first.
    Without this rule, that day would count as progress, and a run that the budget stops would exit 75 and never fail.
-6. After the loop, `nhl()` adds an error when the loop stopped, `run.out_of_time()` is true, and no unit was finished.
+6. After the loop, `nhl()` adds an error when the first read that stopped the loop timed out, and no unit was finished.
    The error names `--budget-seconds`, so the refresh exits 1 and not 75 (#178).
-   A due day whose re-read resolves its game counts as zero, so a run that spends its budget on due days gets the error once.
+   A due day whose re-read resolves its game counts as zero, so a run that spends its budget on due days gets the error once (#302).
    The next run continues, so this is a single false exit 1 and not a loop.
 
 ### Score days: `store/refresh_nhl.py`, `read_days()`
@@ -194,7 +194,7 @@ Abstractions, and the reason for each:
    No new day arrives, so an endless daily run is not in the model.
 6. In the code, `BACKLOG_BEFORE` leaves out the days that are too recent to count.
    The code uses a date cutoff: the game day of the clock minus `BACKLOG_BEFORE`, which is 2 days.
-   The model uses a tick count: a day is recent while `age < CutoffTicks`, and `CutoffTicks` is 4.
+   The model uses a tick count: a day is recent while `age < CutoffTicks`, and the configs that model the code cutoff set `CutoffTicks` to 4.
    `tests/test_tla_constants.py` ties `CutoffTicks` to `BACKLOG_BEFORE` and `ABANDON_MIN_SPAN_DAYS`.
    The main config sets one tick, as a reduction of its state space (see the counts under Constants).
    The model counts whole ticks, and the code compares game days, so the two cutoffs agree on the rule and not on every boundary.
@@ -238,6 +238,10 @@ TLC finds 31,586 distinct states in it, and every property of the main config ho
 It names `StallOnlyForBacklog` and not the properties of the main config.
 TLC violates the property in it (finding 8), so `scripts/tlc.sh` runs it last and expects the violation.
 
+`specs/daily_prepare_cutoff.cfg` has the properties of the main config and `StallOnlyForBacklog`, at the code cutoff: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
+The main config cuts the cutoff, so this config keeps every property under the full cutoff.
+`StallOnlyForBacklog` holds in it, so the property is not empty: it fails only when no old day waits.
+
 With these values, TLC finds 27,285,528 distinct states in the first model, and 692,896 in the stall model.
 Before the age model (#191), the counts were 27,181,712 and 295,722.
 Before the arrival step, they were 4,000,218 and 16,050.
@@ -245,7 +249,10 @@ The arrival step, the `backlog` flag, and then the age of each day multiply the 
 The first model passed every property in 20 minutes 21 seconds with `-workers auto` on an idle development machine: the search took 11 minutes 25 seconds, and the liveness check took the rest.
 The stall model passed in 24 seconds, and the blocked model passed in 1 second.
 With `CutoffTicks = 4` in the first model, TLC found 62,897,214 distinct states and passed every property in 53 minutes 6 seconds, while other work ran on the same machine.
-That is more than the 60 minute limit of the `tla` job allows on a runner, so the first model keeps the one-tick cutoff.
+The search of the 27 million state model took 29 minutes on a runner, so 2.3 times the states would pass the 60 minute limit of the `tla` job.
+So the first model keeps the one-tick cutoff.
+`specs/daily_prepare_cutoff.cfg` checks every property of the first model at the code cutoff, in a model of 2 windows with 1 day each.
+TLC finds 30,434 distinct states in it, and it passes in 2 seconds.
 The stall model, the blocked model, and the known-failure model check the code cutoff.
 The cut is a reduction of the state space and not a proof that a longer cutoff changes no result: #188 owns the preservation argument.
 After #189 removed `noted` and #279 added `Blocked`, the first model took 19 minutes 59 seconds for 27,181,712 states.
@@ -301,7 +308,7 @@ The break tests ran against the reference spec, and each one failed as listed.
 | `ExitCodeRule` | Action property | Exit 1 if and only if a source failed or the budget stalled. Exit 75 only with no marker. Exit 0 only with the marker. | In `Finish`, test `clean` before `errors`. | Action property violated |
 | `StallExitsOne` | Action property | A run that the budget stops with no finished unit exits 1. | In `EndNhl`, set `errors' = errors`. | Action property violated |
 | `BacklogStallExitsOne` | Action property | A run that the budget stops with no finished backlog unit exits 1. An arrival does not count. | With `ArrivalsCount = TRUE` in the stall `.cfg`: the arrival counts as progress, so the run exits 75 and the property fails. | Action property violated (the daily-cadence stall, #186) |
-| `StallOnlyForBacklog` | Action property | The step that raises the stall error, in a run with no source failure and no due day, finds an old day that is not fully read. | Set `Recent(d) == FALSE`: no day is recent, so the property holds and `tlc.sh` fails with "holds now". Remove the cap in `Tick`: `TypeOK` fails. | Action property violated in `specs/daily_prepare_false_stall.cfg`, in a trace of 11 states. Known failure. |
+| `StallOnlyForBacklog` | Action property | The step that raises the stall error, in a run with no source failure and no due day, finds an old day that is not fully read. | Set `Recent(d) == FALSE`: no day is recent, so the property holds and `tlc.sh` fails with "holds now". Remove the cap in `Tick`: `TypeOK` fails. | Action property violated in `specs/daily_prepare_false_stall.cfg`. Known failure. |
 | `BackfillFinishes` | Liveness | The marker appears eventually, when the budget covers the open days (`BudgetCovers`). | In `ScoreStep`, do not skip gaps. | Temporal property violated |
 | `BackfillFinishes` | Liveness | Same | In the `.cfg`, set `OtherBroken = TRUE`. | Temporal property violated |
 | `FinishesOrFails` | Liveness | Between runs, again and again, the marker exists or the last run exited 1. A budget that is too small ends in exit 1 in every run. | In `EndNhl`, set `errors' = errors`. Run with the stall `.cfg`, and with `StallExitsOne` out of the `.cfg`, because that property fails first. | Temporal property violated |
@@ -357,7 +364,7 @@ The first one was a limit of the code. Issue #178 fixed it.
 8. A false exit 1 from the cutoff (#191, #302).
    The model keeps the age of each day, so a day is recent for `CutoffTicks` ticks, as `BACKLOG_BEFORE` makes it in the code.
    `StallOnlyForBacklog` says that the step that raises the stall error finds an old day that is not fully read, when no source failed and no day is due.
-   TLC violates it in `specs/daily_prepare_false_stall.cfg`, in 11 states.
+   TLC violates it in `specs/daily_prepare_false_stall.cfg`.
    Both days close, and both are recent. The budget is 3, and the work is 4 reads.
    The run reads the score and the boxscore of day 2 and the score of day 1, and the budget stops it before the boxscore of day 1.
    Each read is of a recent day, so the run counts no progress, and it exits 1 with the message about the budget.
@@ -368,17 +375,17 @@ The first one was a limit of the code. Issue #178 fixed it.
    The property covers a run with no source failure, because a failed read makes exit 1 correct.
    It covers a run with no due day, because the weather picks the due set, and the budget can be too small for the due reads.
    The config stays as a known failure.
-   `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 cannot leave the config behind.
+   `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 must move the config to the list of passing configs.
    The script checks the name of the property and not the trace, so any counterexample of that property counts.
    A pinned trace length would break at every edit of the spec.
 
 ## Files to add or change
 
 1. `specs/daily_prepare.tla`: copy the reference spec from the appendix without change.
-2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, and `specs/daily_prepare_false_stall.cfg`: copy the reference `.cfg` files from the appendix without change.
+2. `specs/daily_prepare.cfg`, `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, and `specs/daily_prepare_false_stall.cfg`: copy the reference `.cfg` files from the appendix without change.
 3. `scripts/tlc.sh`: the run script below.
 4. `tests/test_tla_constants.py`: the constants test above.
-5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all four configs run, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The known-failure config must exit 13 and name `StallOnlyForBacklog`: a pass, another exit code, or another property fails the run. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
+5. `tests/test_tlc_script.py`: `--help` exits 0 and prints the usage, and an unknown argument exits 2 and names the argument. A wrong checksum deletes the jar and exits 1, and a failed download exits 1 and names the URL. A copy of the script, with the pinned hash of a fake jar, runs against a fake `java`: all five configs run, the first failure stops the run, and the exits 11, 12, 13, and an unrelated code are returned and named. The known-failure config must exit 13 and name `StallOnlyForBacklog`: a pass, another exit code, or another property fails the run. The tests use a fake `curl`, a fake `java`, and a fake jar, so they do not download TLC.
 The Java version checks run against fake `java` output for versions 8, 9, 11, 17, and 21, and for unreadable output.
 A PATH without `sha256sum` and `shasum` exits 1 and names both.
 6. `.github/workflows/tla.yml`: the CI job below.
@@ -409,7 +416,7 @@ Behavior:
    A version line that cannot be read exits 1.
    If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
-   For `specs/daily_prepare_stall.cfg`, then `specs/daily_prepare_blocked.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
+   For `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    Then run `specs/daily_prepare_false_stall.cfg`, with its output in a file. TLC must exit 13 and the output must say `property StallOnlyForBacklog is violated`. The script prints the head of the output.
    A pass of that config exits 1 and says that the property holds now. Any other exit code is returned.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
@@ -523,7 +530,7 @@ The catalog lives in the nbl-dev plugin, outside this repo, so a catalog entry i
 ## Appendix: reference spec
 
 TLC 1.7.4 checked this spec and these `.cfg` files with no violation.
-Copy all five files byte for byte.
+Copy all six files byte for byte.
 
 ### `specs/daily_prepare.tla`
 
@@ -985,6 +992,41 @@ PROPERTIES
     ExitCodeRule
     StallExitsOne
     BacklogStallExitsOne
+    BackfillFinishes
+```
+
+### `specs/daily_prepare_cutoff.cfg`
+
+```
+SPECIFICATION Spec
+CONSTANTS
+    NWindows = 2
+    DaysPerWindow = 1
+    Budget = 2
+    MaxFails = 1
+    AbandonReads = 2
+    AbandonTicks = 1
+    RetryTicks = 2
+    CutoffTicks = 4
+    OpenDays = {2}
+    BrokenScore = {1}
+    BrokenBox = {}
+    BlockedScore = {}
+    BlockedBox = {}
+    OtherBroken = FALSE
+    ArrivalsCount = FALSE
+    BacklogFirst = FALSE
+INVARIANTS
+    TypeOK
+PROPERTIES
+    MarkerOnlyWhenComplete
+    DoneStaysDone
+    NoRereadOfCompleteDay
+    StoppedNeverMarks
+    ExitCodeRule
+    StallExitsOne
+    BacklogStallExitsOne
+    StallOnlyForBacklog
     BackfillFinishes
 ```
 

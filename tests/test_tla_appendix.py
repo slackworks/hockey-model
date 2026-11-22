@@ -17,6 +17,7 @@ FILES = (
     "specs/daily_prepare.cfg",
     "specs/daily_prepare_stall.cfg",
     "specs/daily_prepare_blocked.cfg",
+    "specs/daily_prepare_cutoff.cfg",
     "specs/daily_prepare_false_stall.cfg",
 )
 for _name in FILES:
