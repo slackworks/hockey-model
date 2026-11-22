@@ -106,6 +106,7 @@ No other ordering rule of the upgrade was found unenforced.
 - A disk that fills, or a rollback that fails. `Fail` and `Crash` stand for both, and the code names the second case in its message.
 - The refusals that end a run before the copy: a stamp above `SCHEMA_VERSION`, a version with no entry in `MIGRATIONS`, and the NULL check (4 to 5). They change nothing, so the order of the refusals and the copy is checked by the unit tests of `upgrade.py`.
 - A directory sync after the rename of the copy.
+- A change that runs twice. `ApplyUnit` treats a re-run as safe, but the changes 5 to 6, 6 to 7, and 7 to 8 are not (`ADD COLUMN`, `DROP COLUMN`, and a select of dropped columns). A second run fails and rolls back, and no current path makes such a store.
 
 ## Break tests
 
