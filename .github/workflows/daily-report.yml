@@ -57,7 +57,8 @@ jobs:
       - id: gate
         env:
           # A prepare run holds the store group. This job holds nothing, so it can read the
-          # running runs; a report run cannot wait for that answer.
+          # running runs; a report run cannot wait for that answer. report-gate.sh reads this
+          # token once and unsets it, then re-exports it for the release read alone.
           GH_TOKEN: ${{ github.token }}
           DISPATCH_FORCE: ${{ inputs.force }}
           DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
