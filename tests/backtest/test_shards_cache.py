@@ -1,7 +1,10 @@
 """The sharded build reads the rows of a season from the cache when its key has not changed."""
 
+import contextlib
+import multiprocessing
+import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from pathlib import Path
 
 import pytest
@@ -162,13 +165,17 @@ def _change_scores_when_the_keys_are_made(
 ) -> None:
     """Make the keys, and change the stored scores before or after that, as a refresh would."""
     real = shards.season_keys
+    # A refresh writes in the process that runs it. A forked worker calls this function again,
+    # and a write from a worker changes the store during the run (#316).
+    parent_pid = os.getpid()
 
     def keys(conn: sqlite3.Connection, burn_in: int, names: Sequence[str]) -> dict[int, str]:
-        if not after:
+        mine = os.getpid() == parent_pid
+        if mine and not after:
             store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
             store.commit()
         made = real(conn, burn_in, names)
-        if after:
+        if mine and after:
             store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
             store.commit()
         return made
@@ -193,3 +200,29 @@ def test_a_change_after_the_keys_are_made_stops_the_workers(
         build_sharded(seeded, PLAN, FEATURES, 2)
     # The seasons before the change keep their keys, so only they may write a file.
     assert {int(n.split("-")[1]) for n in _names(seeded)} <= {2, 3}
+
+
+@contextlib.contextmanager
+def _fork_start_method() -> Generator[None]:
+    """Run the pool under fork, as a mutation run does, then put the previous method back."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("this platform has no fork start method")
+    previous = multiprocessing.get_start_method(allow_none=True)
+    multiprocessing.set_start_method("fork", force=True)
+    try:
+        yield
+    finally:
+        multiprocessing.set_start_method(previous or "spawn", force=True)
+
+
+def test_a_change_before_the_keys_are_made_gives_the_rows_under_fork(
+    seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the fork case (#316). A forked worker inherits the open connection of its parent, so
+    a write from the helper would run again inside a worker and change the store during the
+    run. Only the parent writes, and the build gives the rows of the changed store."""
+    _change_scores_when_the_keys_are_made(seeded, monkeypatch, after=False)
+    with _fork_start_method():
+        actual, guess = build_sharded(seeded, PLAN, FEATURES, 2)
+    assert actual == _full(seeded, GoalieMode.ACTUAL)
+    assert guess == _full(seeded, GoalieMode.GUESS)
