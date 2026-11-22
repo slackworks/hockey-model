@@ -150,6 +150,13 @@ job_holds() {
   printf '%s' "$answer"
 }
 
+# Print the instant that a window ends. The window opens at $1 and lasts $2 minutes. A jq
+# error goes to stdout, so the caller names the cause with the context it holds.
+window_end() {
+  jq -rn --arg start "$1" --argjson m "$2" \
+    '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1
+}
+
 # Print "<END> <MINUTES>" for the latest end of every holder in one run, or nothing when the
 # run has no holder. Both holders of the split prepare can be live in one run, so the answer
 # is the holder that ends last (#311).
@@ -162,8 +169,7 @@ run_answer() {
     if [[ -z "$start" ]]; then
       start="$now"
     fi
-    if ! end="$(jq -rn --arg start "$start" --argjson m "${TIMEOUTS[$job]}" \
-      '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1)"; then
+    if ! end="$(window_end "$start" "${TIMEOUTS[$job]}")"; then
       echo "prep-running: cannot add ${TIMEOUTS[$job]} minutes to '${start}', which run" \
         "${run_id} gave as the start of job ${job}: $end" >&2
       return 1
@@ -203,8 +209,7 @@ status_answer() {
         latest_minutes="${TIMEOUTS[$name]}"
       fi
     done
-    if ! end="$(jq -rn --arg start "$start" --argjson m "$latest_minutes" \
-      '$start | fromdateiso8601 + ($m * 60) | todateiso8601' 2>&1)"; then
+    if ! end="$(window_end "$start" "$latest_minutes")"; then
       echo "prep-running: cannot add ${latest_minutes} minutes to '${start}', which this" \
         "script read as the current time: $end" >&2
       return 1
