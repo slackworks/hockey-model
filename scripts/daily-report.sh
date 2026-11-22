@@ -146,15 +146,35 @@ done
 source "$(dirname "$0")/run-step.sh"
 RUN_STEP_COMMAND=daily-report
 
-# Print the name of the newest published build of the day: the versioned asset with the latest
-# time. The alias report-DATE.json is the fallback for a release with no versioned asset. The
-# alias is uploaded after the versions, so a failed upload can leave it behind the newest build.
+# Print the name of the newest published build of the day. The index of the day names each
+# build with its generated_at, so the build with the latest generated_at is the newest. A build
+# name holds only the UTC time of day, so a sort of the names puts a build after midnight UTC
+# before one of the evening. A release with no index falls back to that sort, and then to the
+# alias report-DATE.json. The alias is uploaded after the versions, so a failed upload can
+# leave it behind the newest build.
 newest_report_asset() {
-  local tag="$1" names newest
+  local tag="$1" names newest index_dir
   names="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
     echo "daily-report: cannot list the assets of release $tag; its error is above" >&2
     return 1
   }
+  if grep -qxF "index-$day.json" <<<"$names"; then
+    index_dir="$(mktemp -d)"
+    if ! gh release download "$tag" --pattern "index-$day.json" --dir "$index_dir"; then
+      echo "daily-report: cannot download index-$day.json from release $tag; its error is above" >&2
+      rm -rf "$index_dir"
+      return 1
+    fi
+    if ! newest="$(jq -er '.builds | max_by(.generated_at) | .file | select(type == "string")' \
+      "$index_dir/index-$day.json")"; then
+      echo "daily-report: index-$day.json of release $tag names no build; check the index of the release" >&2
+      rm -rf "$index_dir"
+      return 1
+    fi
+    rm -rf "$index_dir"
+    printf '%s' "$newest"
+    return 0
+  fi
   newest="$(grep -E "^report-${day}-[0-9]{6}Z\.json$" <<<"$names" | sort | tail -n 1 || true)"
   printf '%s' "${newest:-report-$day.json}"
 }

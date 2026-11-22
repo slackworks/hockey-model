@@ -212,3 +212,42 @@ def test_the_release_token_reaches_only_the_release_calls(fakes: Path, tmp_path:
     assert "gh GH_TOKEN=secret-token" in lines
     assert all(line == "uv GH_TOKEN=unset" for line in lines if line.startswith("uv "))
     assert all(line == "gh GH_TOKEN=secret-token" for line in lines if line.startswith("gh "))
+
+
+def _index(remote: Path, builds: list[tuple[str, str]]) -> None:
+    entries = [{"file": name, "generated_at": at} for name, at in builds]
+    (remote / f"index-{DAY}.json").write_text(json.dumps({"builds": entries}), encoding="utf-8")
+
+
+def test_the_newest_build_follows_generated_at_across_midnight_utc(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """A build after midnight UTC has a smaller name than one of the evening before."""
+    remote = _published(tmp_path, {"inputs_sha256": HASH_B})
+    evening, late = f"report-{DAY}-234400Z.json", f"report-{DAY}-004400Z.json"
+    (remote / evening).write_text(json.dumps({"inputs_sha256": HASH_B}), encoding="utf-8")
+    (remote / late).write_text(json.dumps({"inputs_sha256": HASH_A}), encoding="utf-8")
+    year, month, mday = (int(part) for part in DAY.split("-"))
+    after = f"{year:04d}-{month:02d}-{mday + 1:02d}T00:44:00Z"
+    _index(remote, [(evening, f"{DAY}T23:44:00Z"), (late, after)])
+    assets = "\n".join([evening, late, f"index-{DAY}.json", f"report-{DAY}.json"])
+    env = _env_for(
+        fakes, tmp_path, {"inputs_sha256": HASH_A}, FAKE_RELEASES=TAG, FAKE_ASSETS=assets
+    )
+    code, stderr, out = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 0, stderr
+    assert late in stderr
+    assert not (out / "complete").exists()
+
+
+def test_an_index_with_no_build_stops_the_run(fakes: Path, tmp_path: Path) -> None:
+    remote = _published(tmp_path, {"inputs_sha256": HASH_A})
+    _index(remote, [])
+    assets = "\n".join([f"index-{DAY}.json", f"report-{DAY}.json"])
+    env = _env_for(
+        fakes, tmp_path, {"inputs_sha256": HASH_A}, FAKE_RELEASES=TAG, FAKE_ASSETS=assets
+    )
+    code, stderr, out = _run_report(env, tmp_path, "--skip-unchanged")
+    assert code == 1
+    assert "names no build" in stderr
+    assert not (out / "complete").exists()
