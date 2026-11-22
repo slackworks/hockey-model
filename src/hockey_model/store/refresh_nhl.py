@@ -224,11 +224,13 @@ def read_days(
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
 
+        was_complete = day in due and _day_complete(run, day)
         ok = run.attempt(SCORES, score_day_url(day), unit)
         failures = 0 if ok else failures + 1
         clean = clean and ok
-        # A day that this read completed is finished. An open day, or a due day, is read again.
-        if ok and day not in due and _day_complete(run, day):
+        # A day that this read completed is finished. An open day is read again, and so is a
+        # due day that was complete already.
+        if ok and not was_complete and _day_complete(run, day):
             finished += 1
             progress += backlog_before is None or day < backlog_before
         progress_log.advance()

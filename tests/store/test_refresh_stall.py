@@ -16,7 +16,7 @@ from hockey_model.sources.nhl import boxscore_url, score_day_url
 from hockey_model.store.db import connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
-from hockey_model.store.refresh_nhl import BOXSCORES, SCORES
+from hockey_model.store.refresh_nhl import BOXSCORES, SCORES, read_days
 from hockey_model.store.refresh_old_work import old_work_left
 from hockey_model.store.source_reads import record_failed_read, record_read
 
@@ -166,3 +166,17 @@ def test_old_work_waits_exactly_while_an_old_day_is_neither_read_nor_a_gap(
             record_read(conn, SCORES, score_day_url(day), LATE)
         waiting = old_work_left(_run(conn), FIRST, CUTOFF, gaps)
     assert waiting == bool(set(_OLD_DAYS) - read - gaps)
+
+
+def test_a_due_day_that_this_read_completed_is_finished(conn: sqlite3.Connection) -> None:
+    day = date(2026, 1, 3)
+    record_read(conn, SCORES, score_day_url(day), datetime(2026, 1, 4, 10, tzinfo=UTC))
+    result = read_days(_run(conn), [day], set(), [day], CUTOFF)
+    assert (result.finished, result.progress) == (1, 1)
+
+
+def test_a_due_day_that_was_complete_is_not_finished_again(conn: sqlite3.Connection) -> None:
+    day = date(2026, 1, 3)
+    record_read(conn, SCORES, score_day_url(day), LATE)
+    result = read_days(_run(conn), [day], set(), [day], CUTOFF)
+    assert (result.finished, result.progress) == (0, 0)

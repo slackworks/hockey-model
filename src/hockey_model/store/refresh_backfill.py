@@ -44,8 +44,9 @@ def _budget_stall_error() -> HockeyModelError:
     makes the run exit 1 instead of 75.
     """
     return HockeyModelError(
-        "refresh: the backfill spent its time budget before it read one older day or game, "
-        "so it cannot make progress; give --budget-seconds a larger value "
+        "refresh: the backfill spent its time budget before it finished one day or game, "
+        "or before it read an older one, so it cannot make progress; "
+        "give --budget-seconds a larger value "
         "(BACKFILL_BUDGET_S in scripts/daily-prepare.sh)"
     )
 
