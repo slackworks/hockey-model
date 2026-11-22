@@ -69,6 +69,19 @@ def last_ok_read(conn: sqlite3.Connection, source: str, url: str) -> datetime | 
     return None if row[0] is None else parse_iso_utc(row[0])
 
 
+def last_ok_reads(conn: sqlite3.Connection, source: str) -> dict[str, datetime]:
+    """Return the time of the newest read that worked, for each URL of ``source``.
+
+    One query serves a walk over many URLs, which would cost one round trip each with
+    ``last_ok_read``.
+    """
+    rows = conn.execute(
+        "SELECT url, MAX(fetched_at) FROM source_reads WHERE source = ? AND ok = 1 GROUP BY url",
+        (source,),
+    ).fetchall()
+    return {url: parse_iso_utc(fetched) for url, fetched in rows}
+
+
 def newest_read(conn: sqlite3.Connection, source: str, url: str) -> datetime | None:
     """Return the time of the newest read of ``url``, whether it worked or not, or ``None``."""
     row = conn.execute(

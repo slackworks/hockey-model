@@ -11,7 +11,7 @@ from hockey_model.store.refresh_nhl import (
     SCORES,
     day_is_complete,
 )
-from hockey_model.store.source_reads import failed_since, last_ok_read
+from hockey_model.store.source_reads import failed_since, last_ok_reads
 
 
 def old_work_left(run: RefreshRun, first: date, cutoff: date, gaps: set[date]) -> bool:
@@ -21,9 +21,10 @@ def old_work_left(run: RefreshRun, first: date, cutoff: date, gaps: set[date]) -
     do not wait, because the run skips them. A run that stopped on the budget with no such work
     left has only recent days to finish, and the next run finishes them.
     """
+    score_reads = last_ok_reads(run.conn, SCORES)
     day = first
     while day < cutoff:
-        last = last_ok_read(run.conn, SCORES, score_day_url(day))
+        last = score_reads.get(score_day_url(day))
         if day not in gaps and not day_is_complete(day, last):
             return True
         day += timedelta(days=1)
