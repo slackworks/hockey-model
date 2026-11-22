@@ -64,7 +64,8 @@ def test_the_config_checks_every_invariant_that_the_spec_defines() -> None:
     helpers = {
         "Init", "Next", "Spec", "Total", "Holding", "Other", "Tx", "Procs_", "Versions",
         "TakeLock", "LockBusy", "ReadVersion", "CopyRefused", "CopyBegin", "CopyEnd",
-        "ApplyUnit", "NextVersion", "Views", "Probe", "WriteLedger", "WriteStamp", "Commit",
+        "CopyFails", "DropViews", "ApplyUnit", "NextVersion", "Views", "Probe",
+        "WriteLedger", "WriteStamp", "Commit",
         "Fail", "Crash", "OperatorMovesCopy", "Writer", "Needs", "Cum", "Earned", "StartOf",
     }  # fmt: skip
     cfg = CFG.read_text(encoding="utf-8")

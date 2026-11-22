@@ -41,11 +41,11 @@ VARIABLES
     backup, backupRows, ledgerBackup,           \* the copy of the store
     committedByUpgrade,                         \* an upgrade has committed
     lock, pc, runs, start,                      \* the processes
-    txShape, txNext, txUnit, txRows, txStamp, txLedger
+    txShape, txNext, txUnit, txRows, txStamp, txLedger, txViews
 
 vars == <<stamp, shape, rows, ever, ledger, changes, backup, backupRows, ledgerBackup,
           committedByUpgrade, lock, pc, runs, start, txShape, txNext, txUnit, txRows,
-          txStamp, txLedger>>
+          txStamp, txLedger, txViews>>
 
 Holding == {"locked", "copying", "copied", "applying", "probing", "ledgering", "stamping"}
 
@@ -66,10 +66,11 @@ Init ==
     /\ runs = [p \in Procs |-> 0]
     /\ start = [p \in Procs |-> 0]
     /\ txShape = 0 /\ txNext = 0 /\ txUnit = 0 /\ txRows = {} /\ txStamp = 0 /\ txLedger = 0
+    /\ txViews = FALSE
 
 Other == UNCHANGED <<stamp, shape, rows, ever, ledger, changes, backup, backupRows,
                      ledgerBackup, committedByUpgrade>>
-Tx == UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp, txLedger>>
+Tx == UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp, txLedger, txViews>>
 Procs_ == UNCHANGED <<runs, start>>
 
 \* BEGIN IMMEDIATE. The lock is held until the commit, the rollback, or the end of the process.
@@ -117,31 +118,43 @@ CopyEnd(p) ==
     /\ backup' = "complete" /\ backupRows' = rows
     /\ pc' = [pc EXCEPT ![p] = "applying"]
     /\ txShape' = shape /\ txNext' = start[p] + 1 /\ txUnit' = 0 /\ txRows' = rows
-    /\ txStamp' = stamp /\ txLedger' = ledger
+    /\ txStamp' = stamp /\ txLedger' = ledger /\ txViews' = TRUE
     /\ UNCHANGED <<stamp, shape, rows, ever, ledger, changes, ledgerBackup,
                    committedByUpgrade, lock>> /\ Procs_
+
+\* _drop_views runs first. A view that names a rebuilt table would stop the rebuild.
+DropViews(p) ==
+    /\ pc[p] = "applying" /\ lock = p /\ txViews
+    /\ txViews' = FALSE
+    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp, txLedger>>
+    /\ Other /\ UNCHANGED <<lock, pc>> /\ Procs_
 
 \* One requirement of the version that is being applied. A version that restarts from a partial
 \* shape rebuilds its tables, so the first requirement sets the shape and does not add to it.
 ApplyUnit(p) ==
-    /\ pc[p] = "applying" /\ lock = p /\ txNext <= SchemaVersion
+    /\ pc[p] = "applying" /\ lock = p /\ txNext <= SchemaVersion /\ ~txViews
     /\ txUnit < Needs(txNext)
-    /\ txShape' = Cum(txNext - 1) + txUnit + 1 /\ txUnit' = txUnit + 1
-    /\ UNCHANGED <<txNext, txRows, txStamp, txLedger>>
+    \* A step that only creates what is absent leaves a table with the wrong shape as it is,
+    \* so the shape may stay behind. The probe then refuses the run.
+    /\ \/ txShape' = Cum(txNext - 1) + txUnit + 1
+       \/ txShape' = txShape
+    /\ txUnit' = txUnit + 1
+    /\ UNCHANGED <<txNext, txRows, txStamp, txLedger, txViews>>
     /\ Other /\ UNCHANGED <<lock, pc>> /\ Procs_
 
 NextVersion(p) ==
     /\ pc[p] = "applying" /\ lock = p /\ txNext <= SchemaVersion
     /\ txUnit = Needs(txNext)
     /\ txNext' = txNext + 1 /\ txUnit' = 0
-    /\ UNCHANGED <<txShape, txRows, txStamp, txLedger>>
+    /\ UNCHANGED <<txShape, txRows, txStamp, txLedger, txViews>>
     /\ Other /\ UNCHANGED <<lock, pc>> /\ Procs_
 
 \* The views are rebuilt, then _refuse_a_short_shape reads the probe.
 Views(p) ==
-    /\ pc[p] = "applying" /\ lock = p /\ txNext > SchemaVersion
-    /\ pc' = [pc EXCEPT ![p] = "probing"]
-    /\ Other /\ Tx /\ UNCHANGED <<lock, runs, start>>
+    /\ pc[p] = "applying" /\ lock = p /\ txNext > SchemaVersion /\ ~txViews
+    /\ pc' = [pc EXCEPT ![p] = "probing"] /\ txViews' = TRUE
+    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp, txLedger>>
+    /\ Other /\ UNCHANGED <<lock, runs, start>>
 
 Probe(p) ==
     /\ pc[p] = "probing" /\ lock = p /\ Earned(txShape) >= SchemaVersion
@@ -151,13 +164,13 @@ Probe(p) ==
 WriteLedger(p) ==
     /\ pc[p] = "ledgering" /\ lock = p
     /\ txLedger' = ledger + 1 /\ pc' = [pc EXCEPT ![p] = "stamping"]
-    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp>>
+    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txStamp, txViews>>
     /\ Other /\ UNCHANGED <<lock, runs, start>>
 
 WriteStamp(p) ==
     /\ pc[p] = "stamping" /\ lock = p /\ txStamp # SchemaVersion
     /\ txStamp' = SchemaVersion
-    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txLedger>>
+    /\ UNCHANGED <<txShape, txNext, txUnit, txRows, txLedger, txViews>>
     /\ Other /\ UNCHANGED <<lock, pc, runs, start>>
 
 \* COMMIT. The shape, the rows, the ledger row, and the stamp become visible together.
@@ -191,6 +204,13 @@ OperatorMovesCopy ==
     /\ UNCHANGED <<stamp, shape, rows, ever, ledger, changes, ledgerBackup, committedByUpgrade,
                    lock, pc, runs, start>> /\ Tx
 
+\* The copy raises an error. The partial file is removed, the lock is released, and the run ends.
+CopyFails(p) ==
+    /\ pc[p] = "copied" /\ lock = p /\ backup = "partial"
+    /\ backup' = "absent" /\ lock' = "none" /\ pc' = [pc EXCEPT ![p] = "idle"]
+    /\ UNCHANGED <<stamp, shape, rows, ever, ledger, changes, backupRows, ledgerBackup,
+                   committedByUpgrade>> /\ Tx /\ Procs_
+
 \* A refresh adds a row. It needs the write lock.
 Writer ==
     /\ lock = "none" /\ Cardinality(ever) < MaxRows
@@ -202,7 +222,7 @@ Writer ==
 Next ==
     \/ \E p \in Procs :
         \/ TakeLock(p) \/ LockBusy(p) \/ ReadVersion(p) \/ CopyRefused(p) \/ CopyBegin(p)
-        \/ CopyEnd(p) \/ ApplyUnit(p) \/ NextVersion(p) \/ Views(p) \/ Probe(p)
+        \/ CopyEnd(p) \/ CopyFails(p) \/ DropViews(p) \/ ApplyUnit(p) \/ NextVersion(p) \/ Views(p) \/ Probe(p)
         \/ WriteLedger(p) \/ WriteStamp(p) \/ Commit(p) \/ Fail(p) \/ Crash(p)
     \/ OperatorMovesCopy
     \/ Writer

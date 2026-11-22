@@ -429,6 +429,7 @@ Behavior:
    A version line that cannot be read exits 1.
    If neither `sha256sum` nor `shasum` is on `PATH`, exit 1 and name both tools.
 7. Run TLC from the repository root:
+   The `upgrade` shard runs `specs/store_upgrade.cfg` on `specs/store_upgrade.tla` first (#263).
    For `specs/daily_prepare_stall.cfg`, `specs/daily_prepare_blocked.cfg`, `specs/daily_prepare_cutoff.cfg`, `specs/daily_prepare_recent.cfg`, then `specs/daily_prepare.cfg`, run `java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto -metadir "$tmp/states/NAME" -config CFG specs/daily_prepare.tla`, on one private copy of the jar that the checksum covered. Stop at the first non-zero code.
    `$tmp` comes from `mktemp -d`, with a `trap` that removes it.
 8. Exit with the TLC exit code.
@@ -441,8 +442,9 @@ Run `shellcheck` and `shfmt` on the script.
 
 `specs/shards.json` is the one map of the TLC work, and the script and the workflow both read it through `scripts/tlc_shards.py`.
 Each shard has a name, a spec, and a config, and it runs in the order of the map, with the small shards first.
-The map lists the paths that start every shard (`always`: the specs, the scripts, and the workflow), and the paths of the code that every shard models (`covers`).
-A shard may add paths of its own.
+The map lists the paths that start every shard (`always`: the map and its schema, the scripts, and the workflow), and the paths of the code that a shard models (`covers`).
+A shard may add paths of its own, or name its own `covers` in place of the shared ones, as the `upgrade` shard does for the store upgrade code.
+A change of a spec starts the shards that run it, and a change of a config starts its shard.
 A pattern that ends in `/**` matches every path under that directory.
 `specs/shards.schema.json` describes the map, and a test checks the map against it.
 
@@ -460,7 +462,7 @@ It passes the changed paths to `scripts/tlc_shards.py plan`.
 A manual run, a push with no usable base, and a diff that fails select every shard, and the summary gives the reason.
 A run on `main` is never cancelled by a later push, because the later push would leave the change of the first one unchecked.
 
-Every shard models the same code today, so every shard lists the same code paths.
+The shards of the daily prepare spec model the same code, so they share the same code paths.
 A property split (#188, #191) adds shards to the map, and a shard that models less code lists fewer paths.
 
 ### `.github/workflows/tla.yml`
@@ -468,7 +470,8 @@ A property split (#188, #191) adds shards to the map, and a shard that models le
 ```yaml
 name: tla
 
-# TLC checks the daily prepare spec. The plan job reads specs/shards.json and starts one job
+# TLC checks the daily prepare spec and the store upgrade spec. The plan job reads
+# specs/shards.json and starts one job
 # for each shard that the change reaches. A change that no shard covers starts no TLC job.
 # The job is not a required check, because a pull request can start no TLC job.
 on:

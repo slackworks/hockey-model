@@ -42,20 +42,23 @@ The contents of a migration, and the rule that an unknown new field stays unknow
 | `_backup`: the copy file exists | `CopyRefused`: only a complete copy has the final name |
 | `_backup`: the copy under the temporary name | `CopyBegin`, which replaces a temporary file that a killed run left |
 | `_backup`: the rename | `CopyEnd`: the copy is complete and holds the rows of the store |
+| `_backup`: the copy raises an error | `CopyFails`: the partial file is removed, the lock is released, and the run ends |
+| `_drop_views` | `DropViews`, before the first change. A change cannot rebuild a table that a view names |
 | The loop over `MIGRATIONS[version]` | `ApplyUnit` for each requirement of a version, and `NextVersion` |
-| `_drop_views`, the view script | `Views` |
+| The view script | `Views`, after the last change |
 | `_refuse_a_short_shape` | `Probe` |
 | The `INSERT` into `schema_migrations` | `WriteLedger` |
 | `UPDATE schema_version` | `WriteStamp` |
 | `COMMIT` | `Commit`: shape, rows, ledger row, and stamp become visible together |
-| `_rollback` after a `StoreError` | `Fail`: the transaction ends, the lock is released, the copy stays |
+| `_rollback` after a `StoreError` in the changes | `Fail`: the transaction ends, the lock is released, the copy stays |
 | A killed process | `Crash`: SQLite drops the open transaction and the lock |
 | The operator moves the copy aside | `OperatorMovesCopy` |
 | A refresh adds a row | `Writer`, which needs the lock |
 
 A version adds requirements as `shape.py` lists them.
 The config names each requirement as `10 * version + index`, so the model holds the same version chain as the code, with the two versions that add two requirements.
-A version that restarts from a partial shape rebuilds its tables, so its first requirement sets the shape and does not add to it.
+A change either gives the table the shape of its requirement, or it only creates what is absent and leaves a table with the wrong shape as it is (`CREATE TABLE IF NOT EXISTS`).
+The model lets each change do either, so the shape can stay behind and the probe can refuse the run.
 
 ## State
 
@@ -82,7 +85,7 @@ Each of two processes has a program counter and a run count, and the open transa
 ## Result
 
 TLC finds no violation.
-The check takes seconds on one machine, with 549,273 distinct states and a depth of 37 for the accepted config.
+The check takes seconds on one machine, with 2,700,705 distinct states and a depth of 38 for the accepted config.
 Each break test below stops with the violation that the table names.
 
 ### What the model found
@@ -101,7 +104,8 @@ No other ordering rule of the upgrade was found unenforced.
 - The contents of a change, and the rule that an unknown new field stays unknown instead of backfilled (#81).
 - The read path of a consumer, which `connect()` answers by refusing a stamp that does not match the shape.
 - A disk that fills, or a rollback that fails. `Fail` and `Crash` stand for both, and the code names the second case in its message.
-- The NULL check before the copy (4 to 5), which runs before any change and only refuses.
+- The refusals that end a run before the copy: a stamp above `SCHEMA_VERSION`, a version with no entry in `MIGRATIONS`, and the NULL check (4 to 5). They change nothing, so the order of the refusals and the copy is checked by the unit tests of `upgrade.py`.
+- A directory sync after the rename of the copy.
 
 ## Break tests
 
@@ -117,6 +121,8 @@ The edit is the code change that the break names.
 | The run starts at version 1 and ignores the stored version | `ReadVersion` starts at version 1 | `NoVersionTwice` |
 | The writer ignores the lock | `Writer` drops `lock = "none"` | `CopyMatchesStore` |
 | A change drops a row | `ApplyUnit` empties the rows of the transaction | `NoRowLost` |
+| The probe is skipped | `Probe` has no guard on the shape | `StampNotAhead` |
+| No step drops the views before the changes | `DropViews` is removed, so no change can run | `NeverUpgraded` holds: the upgrade can never commit |
 | Each requirement is committed on its own | `ApplyUnit` commits the shape | `NoVersionTwice` |
 | The migration starts before the copy is complete | `CopyBegin` goes to the changes and no copy ends | `CopyMatchesStore` |
 | Two upgrades start at once | `TakeLock` and the later actions drop the lock | `OneHolder` |
