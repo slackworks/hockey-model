@@ -21,6 +21,21 @@ from hockey_model.types import HockeyModelError
 Interval = tuple[float, float]
 
 
+def require_ordered(interval: Interval) -> Interval:
+    """Return the interval, and refuse one whose ends are swapped or equal.
+
+    A swapped pair makes the half-width negative, so the power rule never fires and a
+    positive low end promotes. Equality carries no spread to judge, so neither end decides.
+    """
+    low, high = interval
+    if not low < high:
+        raise HockeyModelError(
+            f"interval {low!r} to {high!r} must have the lower end first and span more than "
+            "one point; correct the result of this record, then check again"
+        )
+    return low, high
+
+
 def status_for_interval(record: ExperimentRecord, interval: Interval) -> str:
     """Return the status that ``interval`` earns for ``record``.
 
@@ -28,7 +43,7 @@ def status_for_interval(record: ExperimentRecord, interval: Interval) -> str:
     the look number (docs/design/promotion-bar.md). A run whose interval is wider than the
     effect the record expects is underpowered, so it is inconclusive rather than rejected.
     """
-    low, high = interval
+    low, high = require_ordered(interval)
     if record.expected_effect is not None and (high - low) / 2 > abs(record.expected_effect):
         return STATUS_INCONCLUSIVE
     return STATUS_PROMOTED if high < 0.0 else STATUS_REJECTED
@@ -52,7 +67,10 @@ def status_problem(record: ExperimentRecord) -> str | None:
         return _exploration_status_problem(record)
     if record.result is None:
         return None
-    earned = status_for_interval(record, record.result.interval)
+    try:
+        earned = status_for_interval(record, record.result.interval)
+    except HockeyModelError as exc:
+        return f"the result cannot decide a status: {exc}"
     if earned == record.status:
         return None
     low, high = record.result.interval
@@ -107,7 +125,7 @@ def inconclusive_notes(record: ExperimentRecord) -> tuple[str, ...]:
         return ()
     if record.expected_effect is None:
         return ()
-    low, high = record.result.interval
+    low, high = require_ordered(record.result.interval)
     return (
         f"The interval half-width {(high - low) / 2:.4f} is above the expected effect "
         f"{abs(record.expected_effect):.4f}, so the run is inconclusive and the look is spent.",

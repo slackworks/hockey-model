@@ -12,7 +12,12 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from hockey_model.experiments.check import check_all
-from hockey_model.experiments.models import RESULT_STATUSES, STATUS_INCONCLUSIVE, STATUS_REGISTERED
+from hockey_model.experiments.models import (
+    RESULT_STATUSES,
+    STATUS_INCONCLUSIVE,
+    STATUS_REGISTERED,
+    HockeyModelError,
+)
 from hockey_model.experiments.status import (
     inconclusive_notes,
     status_for_interval,
@@ -30,6 +35,8 @@ _INTERVALS = st.tuples(
     st.floats(min_value=-1e6, max_value=1e6),
     st.floats(min_value=-1e6, max_value=1e6),
 )
+# An interval whose ends are ordered decides a status; one with no width or swapped ends does not.
+_ORDERED = _INTERVALS.filter(lambda pair: pair[0] < pair[1])
 _EFFECTS = st.none() | st.floats(min_value=-10.0, max_value=10.0)
 _STATUSES = st.sampled_from([STATUS_REGISTERED, *RESULT_STATUSES])
 
@@ -53,13 +60,22 @@ class TestTheStatusTheIntervalEarns:
             (_PROMOTES, "promoted"),
             (_REJECTS, "rejected"),
             (_STRADDLES, "rejected"),
-            ((0.0, 0.0), "rejected"),
+            ((-0.001, 0.0), "rejected"),
         ],
     )
     def test_the_upper_end_decides(self, interval: tuple[float, float], expected: str):
         """A promotion needs the upper end strictly below zero."""
         record = make_record()
         assert status_for_interval(record, interval) == expected
+
+    @pytest.mark.parametrize("interval", [(0.0, 0.0), (0.002, 0.001)])
+    def test_an_interval_with_no_width_or_with_swapped_ends_is_refused(
+        self, interval: tuple[float, float]
+    ):
+        """A swapped pair hides the power rule and promotes, so the rule refuses it."""
+        record = make_record()
+        with pytest.raises(HockeyModelError, match="lower end first"):
+            status_for_interval(record, interval)
 
     def test_a_wide_interval_is_inconclusive(self):
         """The power rule turns a result into inconclusive when it is too wide."""
@@ -149,7 +165,7 @@ class TestTheStoredStatusMustMatchTheResult:
 class TestTheStatusRuleHoldsOverAnyInterval:
     """The rule is a comparison, so it must hold for every interval and every status."""
 
-    @given(interval=_INTERVALS, expected_effect=_EFFECTS, status=_STATUSES)
+    @given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
     def test_a_confirmation_record_is_clean_exactly_when_it_agrees(
         self,
         interval: tuple[float, float],
@@ -165,6 +181,18 @@ class TestTheStatusRuleHoldsOverAnyInterval:
         assert (problem is None) is (status == earned), problem
         if problem is not None:
             assert repr(earned) in problem
+
+    @given(interval=_INTERVALS, status=_STATUSES)
+    def test_a_record_whose_interval_cannot_decide_is_never_clean(
+        self, interval: tuple[float, float], status: str
+    ) -> None:
+        """A swapped or zero-width interval earns no status, so no stored status agrees."""
+        if interval[0] < interval[1]:
+            return
+        record = make_record({"status": status, "result": _result(interval)})
+        problem = status_problem(record)
+        assert problem is not None
+        assert "cannot decide a status" in problem
 
     def test_a_confirmation_record_with_no_result_is_clean(self) -> None:
         """A record that has not run yet holds no result, so no interval contradicts it."""
@@ -189,7 +217,7 @@ class TestTheStatusRuleHoldsOverAnyInterval:
 class TestTheInconclusiveNote:
     """The note states the two numbers that made the run underpowered."""
 
-    @given(interval=_INTERVALS, expected_effect=_EFFECTS, status=_STATUSES)
+    @given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
     def test_the_note_appears_only_for_an_inconclusive_result_with_an_effect(
         self,
         interval: tuple[float, float],
@@ -207,6 +235,7 @@ class TestTheInconclusiveNote:
         low, high = interval
         assert len(notes) == 1
         assert f"{(high - low) / 2:.4f}" in notes[0]
+        assert expected_effect is not None
         assert f"{abs(expected_effect):.4f}" in notes[0]
 
     @given(expected_effect=_EFFECTS)
