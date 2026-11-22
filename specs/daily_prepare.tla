@@ -332,14 +332,18 @@ StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
 BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
                               => exitCode' = 1]_vars
 
-\* A budget stall exits 1 only when backlog work was left unread. The code counts progress on
-\* backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or none, and
-\* stops on the budget exits 1 while the backlog is already done. That exit 1 is false: more
-\* budget is not needed for the backlog. This property is expected to fail (#191). Its config is
-\* specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check that must fail.
+\* The budget stall error is justified only when backlog work was left unread. The code counts
+\* progress on backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or
+\* none, and stops on the budget raises the stall error while the backlog is already done. When no
+\* source failed, that error is the only cause of exit 1, and the exit 1 is false: more budget is
+\* not needed for the backlog. A run with due days is left out, because the weather picks the due
+\* set and the budget may be too small for the due reads. This property is expected to fail
+\* (#191, #302). Its config is specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check
+\* that must fail.
 BacklogUnread == \E d \in Days : ~Recent(d) /\ ~(ScoreDone(d) /\ BoxDone(d))
-StallOnlyForBacklog == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
-                          => BacklogUnread]_vars
+StallOnlyForBacklog ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ due = {}
+        /\ stopped /\ ~progress /\ reads >= Budget) => BacklogUnread]_vars
 
 \* Liveness
 

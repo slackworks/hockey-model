@@ -218,7 +218,7 @@ Abstractions, and the reason for each:
     It exists as the target of the `ArrivalsCount` mutation, and it is not an independent check.
 12. `StallOnlyForBacklog` is a known failure (finding 8).
     `BacklogUnread` is true when an old day is not fully read.
-    The property says that a budget stall exit needs such a day.
+    The property says that the stall error needs such a day, when no source failed and no day is due.
     It has its own config, and `scripts/tlc.sh` expects TLC to violate it.
 
 ## Constants
@@ -234,8 +234,8 @@ The other configs use the code cutoff.
 `specs/daily_prepare_blocked.cfg` is a small model with a broken score day and a broken boxscore day whose failures are permanent: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}`, `BrokenBox = {2}`, `BlockedScore = {1}`, `BlockedBox = {2}`, `CutoffTicks = 4`, and the other constants as above.
 TLC finds 31,586 distinct states in it, and every property of the main config holds.
 
-`specs/daily_prepare_false_stall.cfg` is the stall config with the property list changed.
-It names `StallOnlyForBacklog` and not the properties of the main config, and it has `CutoffTicks = 4`.
+`specs/daily_prepare_false_stall.cfg` is a small model where both days are open at the start: `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 3`, `OpenDays = {1, 2}`, `BrokenScore = {}`, `BrokenBox = {}`, `BlockedScore = {}`, `BlockedBox = {}`, `CutoffTicks = 4`, and the other constants as above.
+It names `StallOnlyForBacklog` and not the properties of the main config.
 TLC violates the property in it (finding 8), so `scripts/tlc.sh` runs it last and expects the violation.
 
 With these values, TLC finds 27,285,528 distinct states in the first model, and 692,896 in the stall model.
@@ -301,7 +301,7 @@ The break tests ran against the reference spec, and each one failed as listed.
 | `ExitCodeRule` | Action property | Exit 1 if and only if a source failed or the budget stalled. Exit 75 only with no marker. Exit 0 only with the marker. | In `Finish`, test `clean` before `errors`. | Action property violated |
 | `StallExitsOne` | Action property | A run that the budget stops with no finished unit exits 1. | In `EndNhl`, set `errors' = errors`. | Action property violated |
 | `BacklogStallExitsOne` | Action property | A run that the budget stops with no finished backlog unit exits 1. An arrival does not count. | With `ArrivalsCount = TRUE` in the stall `.cfg`: the arrival counts as progress, so the run exits 75 and the property fails. | Action property violated (the daily-cadence stall, #186) |
-| `StallOnlyForBacklog` | Action property | A run that the budget stops with no counted unit exits 1 only when an old day is not fully read. | None. The code does not hold this rule (#302). | Action property violated in `specs/daily_prepare_false_stall.cfg`, in a trace of 38 states. Known failure. |
+| `StallOnlyForBacklog` | Action property | The step that raises the stall error, in a run with no source failure and no due day, finds an old day that is not fully read. | Set `Recent(d) == FALSE`: no day is recent, so the property holds and `tlc.sh` fails with "holds now". Remove the cap in `Tick`: `TypeOK` fails. | Action property violated in `specs/daily_prepare_false_stall.cfg`, in a trace of 11 states. Known failure. |
 | `BackfillFinishes` | Liveness | The marker appears eventually, when the budget covers the open days (`BudgetCovers`). | In `ScoreStep`, do not skip gaps. | Temporal property violated |
 | `BackfillFinishes` | Liveness | Same | In the `.cfg`, set `OtherBroken = TRUE`. | Temporal property violated |
 | `FinishesOrFails` | Liveness | Between runs, again and again, the marker exists or the last run exited 1. A budget that is too small ends in exit 1 in every run. | In `EndNhl`, set `errors' = errors`. Run with the stall `.cfg`, and with `StallExitsOne` out of the `.cfg`, because that property fails first. | Temporal property violated |
@@ -356,17 +356,21 @@ The first one was a limit of the code. Issue #178 fixed it.
    The code covers this with the plain refresh after the marker, so the invariant now checks the step that writes the marker.
 8. A false exit 1 from the cutoff (#191, #302).
    The model keeps the age of each day, so a day is recent for `CutoffTicks` ticks, as `BACKLOG_BEFORE` makes it in the code.
-   `StallOnlyForBacklog` says that the budget stall exit needs an old day that is not fully read.
-   TLC violates it in `specs/daily_prepare_false_stall.cfg`: day 1 is old and fully read, day 2 closed this tick with its boxscore unread, and `Budget = 1`.
-   The run reads the boxscore of day 2, the budget stops it, and the run counts no progress, so it exits 1.
-   The next run would finish, so the exit is false.
+   `StallOnlyForBacklog` says that the step that raises the stall error finds an old day that is not fully read, when no source failed and no day is due.
+   TLC violates it in `specs/daily_prepare_false_stall.cfg`, in 11 states.
+   Both days close, and both are recent. The budget is 3, and the work is 4 reads.
+   The run reads the score and the boxscore of day 2 and the score of day 1, and the budget stops it before the boxscore of day 1.
+   Each read is of a recent day, so the run counts no progress, and it exits 1 with the message about the budget.
+   No backlog exists, and the next run finishes the last read, so the exit 1 is false.
    `nhl()` counts only units older than the cutoff, which is the cause.
-   A run needs a budget that covers almost nothing to reach this, so the risk is low.
+   A run needs a budget that cannot cover the recent days to reach this, so the risk is low.
    #302 tracks the code fix.
+   The first form of the property had no source-failure scope, and TLC found a trace where a failed read made exit 1 correct.
+   The scope on `errors` removes that trace, and the scope on `due` removes a trace where the weather picks due days that the budget cannot cover.
    The config stays as a known failure.
    `scripts/tlc.sh` runs it last and requires exit 13 that names the property, and it fails the run when the property holds, so the fix of #302 cannot leave the config behind.
-The script checks the name of the property and not the trace, so any counterexample of that property counts.
-A pinned trace length would break at every edit of the spec.
+   The script checks the name of the property and not the trace, so any counterexample of that property counts.
+   A pinned trace length would break at every edit of the spec.
 
 ## Files to add or change
 
@@ -858,14 +862,18 @@ StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
 BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
                               => exitCode' = 1]_vars
 
-\* A budget stall exits 1 only when backlog work was left unread. The code counts progress on
-\* backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or none, and
-\* stops on the budget exits 1 while the backlog is already done. That exit 1 is false: more
-\* budget is not needed for the backlog. This property is expected to fail (#191). Its config is
-\* specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check that must fail.
+\* The budget stall error is justified only when backlog work was left unread. The code counts
+\* progress on backlog units alone (BACKLOG_BEFORE), so a run that finishes only recent days, or
+\* none, and stops on the budget raises the stall error while the backlog is already done. When no
+\* source failed, that error is the only cause of exit 1, and the exit 1 is false: more budget is
+\* not needed for the backlog. A run with due days is left out, because the weather picks the due
+\* set and the budget may be too small for the due reads. This property is expected to fail
+\* (#191, #302). Its config is specs/daily_prepare_false_stall.cfg, and tlc.sh runs it as a check
+\* that must fail.
 BacklogUnread == \E d \in Days : ~Recent(d) /\ ~(ScoreDone(d) /\ BoxDone(d))
-StallOnlyForBacklog == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
-                          => BacklogUnread]_vars
+StallOnlyForBacklog ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ due = {}
+        /\ stopped /\ ~progress /\ reads >= Budget) => BacklogUnread]_vars
 
 \* Liveness
 
@@ -987,13 +995,13 @@ SPECIFICATION Spec
 CONSTANTS
     NWindows = 2
     DaysPerWindow = 1
-    Budget = 1
+    Budget = 3
     MaxFails = 1
     AbandonReads = 2
     AbandonTicks = 1
     RetryTicks = 2
     CutoffTicks = 4
-    OpenDays = {2}
+    OpenDays = {1, 2}
     BrokenScore = {}
     BrokenBox = {}
     BlockedScore = {}
