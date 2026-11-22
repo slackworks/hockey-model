@@ -96,6 +96,11 @@ if ! command -v gh >/dev/null; then
   exit 2
 fi
 
+# The standard error of gh goes to a file, so a warning from gh cannot enter the JSON that
+# jq reads, as manual-prepare-pending.sh does.
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
 # Five states can hold the group. `in_progress` runs it. `pending` waits for the group, which
 # is the case when a report build job holds it. `queued`, `waiting`, and `requested` wait for a
 # runner or for approval, and each holds the group once it starts (#163).
@@ -133,8 +138,8 @@ prepare_ids() {
 job_holds() {
   local run_id="$1" answer names
   if ! answer="$(gh api --paginate \
-    "repos/{owner}/{repo}/actions/runs/${run_id}/jobs?per_page=100" 2>&1)"; then
-    echo "prep-running: cannot read the jobs of run ${run_id}: $answer" >&2
+    "repos/{owner}/{repo}/actions/runs/${run_id}/jobs?per_page=100" 2>"$err")"; then
+    echo "prep-running: cannot read the jobs of run ${run_id}: $(cat "$err")" >&2
     return 1
   fi
   if ! names="$(printf '%s\n' "${!TIMEOUTS[@]}" | jq -R . | jq -cs . 2>&1)"; then
@@ -193,8 +198,8 @@ run_answer() {
 status_answer() {
   local status="$1" runs ids id answer start end latest_end="" longest=0 name
   if ! runs="$(gh api --paginate \
-    "repos/{owner}/{repo}/actions/runs?status=${status}&per_page=100" 2>&1)"; then
-    echo "prep-running: cannot read the ${status} workflow runs: $runs" >&2
+    "repos/{owner}/{repo}/actions/runs?status=${status}&per_page=100" 2>"$err")"; then
+    echo "prep-running: cannot read the ${status} workflow runs: $(cat "$err")" >&2
     return 1
   fi
   if ! ids="$(prepare_ids <<<"$runs")"; then

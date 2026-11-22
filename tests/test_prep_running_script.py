@@ -344,6 +344,27 @@ def test_the_script_reads_the_job_that_the_workflow_names_prepare() -> None:
     assert "    timeout-minutes: 180\n" in prepare
 
 
+@pytest.mark.parametrize("warn", ["gh: a deprecation warning", '{"half": "a payload"}'])
+def test_a_warning_from_gh_does_not_enter_the_answer(
+    fakes: Path, tmp_path: Path, warn: str
+) -> None:
+    """gh writes a warning to stderr beside the JSON, so the read keeps the two apart.
+
+    A merged stream stops jq, and a stop publishes no report. Only the payload is the answer.
+    """
+    env = _env_for(
+        fakes,
+        tmp_path,
+        "in_progress",
+        (_PREPARE, _STARTED),
+        FAKE_JOBS_JSON=_jobs(_STARTED),
+        FAKE_GH_WARN=warn,
+    )
+    result = _lookup(env)
+    assert result.returncode == 0, result.stderr
+    assert _printed_end(result) == _end(_STARTED)
+
+
 def test_an_unknown_argument_is_refused(fakes: Path, tmp_path: Path) -> None:
     result = _run("prep-running.sh", _env(fakes, tmp_path), "--nope")
     assert result.returncode == 2

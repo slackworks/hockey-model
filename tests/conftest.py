@@ -53,9 +53,10 @@ def fakes(tmp_path: Path) -> Path:
     `gh api --include .../releases/tags/TAG` answers 200 for a tag in FAKE_RELEASES and 404
     otherwise, as the real command does. `gh release view TAG` answers the same way for the
     asset read. `gh release create` refuses a tag that already exists. FAKE_GH_FAIL makes
-    every gh call fail with an auth error. `gh api .../actions/runs?status=S` answers
-    FAKE_RUNS_JSON_S when it is set and FAKE_RUNS_JSON otherwise, which defaults to no runs,
-    and it fails when FAKE_RUNS_FAIL is set.
+    every gh call fail with an auth error. FAKE_GH_WARN writes one line to stderr before a
+    successful answer, as gh does for a deprecation. `gh api .../actions/runs?status=S`
+    answers FAKE_RUNS_JSON_S when it is set and FAKE_RUNS_JSON otherwise, which defaults to no
+    runs, and it fails when FAKE_RUNS_FAIL is set.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -66,6 +67,7 @@ def fakes(tmp_path: Path) -> Path:
         'echo "gh GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
         ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
+        'if [[ -n "${FAKE_GH_WARN:-}" ]]; then echo "$FAKE_GH_WARN" >&2; fi\n'
         # The mutation report reads the open issue list. The default is an empty list.
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
         'if [[ "$1" == "api" ]]; then\n'
