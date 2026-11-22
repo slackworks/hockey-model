@@ -102,6 +102,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Count a due day as finished when its re-read leaves no unresolved game on it. A backfill run that resolved due days and then stopped on the time budget exited 1 with the budget stall error, though the next run would go on. The TLA+ model counts a due re-read of a score day as a finished unit too. [fix:store]
 - Fix the gate step of `daily-report`, which failed on every run where `due` or `publish` was false, because `jq -e` exits 1 for a false value. `scripts/gate-outputs.sh` checks the type of each gate field and prints the step outputs. [fix:ci]
 - Fix the publish job so two publishes of one day run one at a time, because the index asset is a read-modify-write. The release token now reaches only the publish script step, and the version names are both checked before either upload, so a name collision leaves no half-published build. [fix:ci]
 - Move the store to schema version 5, which makes `source_reads.fetched_at` and `model_fits.created_at` NOT NULL. An earlier change made the two columns NOT NULL in the schema without a migration step, so an upgraded store kept the weaker shape and accepted a row with no timestamp. The upgrade refuses to run when a stored row holds a NULL in either column, and names the table and the count. [fix:store]

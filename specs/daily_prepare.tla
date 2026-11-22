@@ -177,7 +177,10 @@ StartRun ==
 
 \* A finished unit that the run counts. A recent day is not backlog, so the old rule
 \* (ArrivalsCount) is the only case where a recent day counts as progress.
-Finished(u, ok) == ok /\ ~okRead[u] /\ u.day \notin open
+\* A due re-read of a score day resolves its games in calm weather, so it finishes the day
+\* again (#303).
+Finished(u, ok) == /\ ok /\ u.day \notin open
+                   /\ (~okRead[u] \/ (u.kind = "score" /\ u.day \in due))
 Max(a, b) == IF a > b THEN a ELSE b
 
 \* run.attempt(): one read in one transaction. It records the result in source_reads.
