@@ -78,7 +78,7 @@ def _feeds(conn: sqlite3.Connection, now: datetime) -> list[dict[str, Any]]:
     for source in LIVE_FEEDS:
         try:
             newest = newest_read_of_source(conn, source)
-        except ValueError as exc:
+        except (ValueError, HockeyModelError) as exc:
             raise HockeyModelError(
                 f"read the newest read of {source}: a fetched_at value is not a time: {exc}; "
                 "inspect the source_reads rows of that source"

@@ -223,10 +223,13 @@ def test_a_newest_read_a_little_in_the_future_has_no_age(conn: sqlite3.Connectio
     assert (feed["age_hours"], feed["over_limit"]) == (0.0, False)
 
 
-def test_a_fetched_at_that_is_not_a_time_fails_in_the_feed_list(conn: sqlite3.Connection) -> None:
+@pytest.mark.parametrize("stored", ["not a time", "2026-01-01T00:00:00"])
+def test_a_fetched_at_that_is_not_a_time_fails_in_the_feed_list(
+    conn: sqlite3.Connection, stored: str
+) -> None:
     conn.execute(
-        "INSERT INTO source_reads (source, url, fetched_at, ok) VALUES (?, ?, 'not a time', 1)",
-        (SOURCE, URL),
+        "INSERT INTO source_reads (source, url, fetched_at, ok) VALUES (?, ?, ?, 1)",
+        (SOURCE, URL, stored),
     )
     conn.commit()
     with pytest.raises(HockeyModelError, match=f"newest read of {SOURCE}.*not a time"):
