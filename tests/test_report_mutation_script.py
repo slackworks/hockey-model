@@ -3,9 +3,11 @@
 The script runs against fake `gh` and `uv` commands, so no network call and no issue is made.
 """
 
+import fcntl
 import json
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,19 @@ GOOD_RESULTS = [
 
 if not REAL_UV:
     pytest.skip("no uv on PATH, so the script cannot run", allow_module_level=True)
+
+
+@pytest.fixture(autouse=True)
+def _one_script_run_at_a_time(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Hold a lock for each test, because the script writes its body to one fixed path.
+
+    The pytest-xdist workers share the repo root, so two tests at once would read each other's
+    body. The lock file sits in the base directory that the workers share.
+    """
+    lock = tmp_path_factory.getbasetemp().parent / "report-mutation.lock"
+    with lock.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def _run(
