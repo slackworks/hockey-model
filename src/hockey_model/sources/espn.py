@@ -68,43 +68,61 @@ def _starter(probable: Mapping[str, object], event_start_where: str) -> tuple[st
     return name, _STATUS_MAP[label]
 
 
-def _event_reads(event: Mapping[str, object]) -> list[StarterRead]:
+def _event_reads(event: Mapping[str, object]) -> tuple[list[StarterRead], int, int]:
+    """Return the reads of one event, its pregame competitors, and those with no ``probables``."""
     where = f"event {event.get('id', '?')}"
     status = as_mapping(SOURCE, field(SOURCE, event, "status", where), f"{where} status")
     kind = as_mapping(SOURCE, field(SOURCE, status, "type", where), f"{where} status type")
     # ESPN overwrites the morning status once the game starts, so only a pregame read counts.
     if str_field(SOURCE, kind, "state", f"{where} status type") != "pre":
-        return []
+        return [], 0, 0
     start = utc_field(SOURCE, event, "date", where)
     competitions = as_list(SOURCE, field(SOURCE, event, "competitions", where), f"{where} games")
     if not competitions:
         raise SourceParseError(SOURCE, f"{where} has an empty 'competitions' list")
     competition = as_mapping(SOURCE, competitions[0], f"{where} game")
     reads: list[StarterRead] = []
-    for raw in as_list(SOURCE, field(SOURCE, competition, "competitors", where), where):
+    competitors = as_list(SOURCE, field(SOURCE, competition, "competitors", where), where)
+    keyless = 0
+    for raw in competitors:
         competitor = as_mapping(SOURCE, raw, f"{where} competitor")
         team = _team_code(competitor, where)
-        # Every saved competitor has the key, and no saved page holds a game with no announced
-        # goalie. The key is therefore not shown to be required, so a missing key reads as no
-        # goalie (#70). A key that is present must be a list.
+        # A missing key on one competitor reads as no goalie (#70). A key that is present must be
+        # a list. parse_scoreboard_starters refuses a page where no competitor has the key.
+        keyless += "probables" not in competitor
         for item in as_list(SOURCE, competitor.get("probables", []), f"{where} {team} probables"):
             probable = as_mapping(SOURCE, item, f"{where} {team} probable")
             if field(SOURCE, probable, "name", f"{where} {team} probable") != PROBABLE_GOALIE:
                 continue
             name, goalie_status = _starter(probable, f"{where} {team}")
             reads.append(StarterRead(start, team, name, goalie_status, StarterSource.ESPN))
-    return reads
+    return reads, len(competitors), keyless
 
 
 def parse_scoreboard_starters(payload: object) -> list[StarterRead]:
-    """Return the probable starting goalies of the games that have not started."""
+    """Return the probable starting goalies of the games that have not started.
+
+    A page where no pregame competitor has a ``probables`` key raises: ESPN moved the key, and
+    a page of zero reads would otherwise pass as a good read.
+    """
     top = as_mapping(SOURCE, payload, "the scoreboard")
     events = as_list(SOURCE, field(SOURCE, top, "events", "the scoreboard"), "scoreboard events")
-    return [
-        read
-        for raw in events
-        for read in _event_reads(as_mapping(SOURCE, raw, "a scoreboard event"))
-    ]
+    reads: list[StarterRead] = []
+    competitors = keyless = 0
+    for raw in events:
+        event_reads, event_competitors, event_keyless = _event_reads(
+            as_mapping(SOURCE, raw, "a scoreboard event")
+        )
+        reads += event_reads
+        competitors += event_competitors
+        keyless += event_keyless
+    if competitors and keyless == competitors:
+        raise SourceParseError(
+            SOURCE,
+            f"none of the {competitors} pregame competitors on the scoreboard has a 'probables' "
+            "key; ESPN may have moved the goalie list, so update espn.py",
+        )
+    return reads
 
 
 def _return_date(entry: Mapping[str, object], where: str) -> date | None:
