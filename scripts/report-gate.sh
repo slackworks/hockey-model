@@ -102,6 +102,14 @@ if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
   echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
 fi
+# prep-running.sh writes this shape, and every caller passes what it prints. A wrong value
+# would otherwise reach report-due, which stops with its own error after the workflow has
+# already spent a runner and a store checkout.
+if [[ -n "$prep_ends" && ! "$prep_ends" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  echo "report-gate: --prep-ends '$prep_ends' is not an ISO 8601 UTC instant such as" \
+    "2026-11-22T18:00:00Z; see --help" >&2
+  exit 2
+fi
 
 # The schedule read is one HTTP request. Each run then makes one release lookup, so a
 # run after the puck drop is still answered from the release state.
