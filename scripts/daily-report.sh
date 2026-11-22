@@ -202,8 +202,8 @@ skip_if_unchanged() {
     rm -rf "$compare_dir"
     exit 1
   fi
-  answer="$(env -u GH_TOKEN uv run hockey-model report-compare --built "$out_dir/report-$day.json" \
-    --published "$compare_dir/$asset")" || {
+  answer="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-compare \
+    --built "$out_dir/report-$day.json" --published "$compare_dir/$asset")" || {
     echo "daily-report: report-compare failed; its error is above" >&2
     rm -rf "$compare_dir"
     exit 1
@@ -227,9 +227,9 @@ skip_if_unchanged() {
 # The cache may restore a store that older code wrote, because the prepare run can save one.
 # The upgrade keeps every row and writes a backup, so the steps below read a current store.
 start=$SECONDS
-run_step upgrade uv run hockey-model store upgrade
-run_step refresh uv run hockey-model refresh --starters-only
-run_step predict uv run hockey-model daily --date "$day" --out-dir "$out_dir"
+run_step upgrade env -u REPORT_GH_TOKEN uv run hockey-model store upgrade
+run_step refresh env -u REPORT_GH_TOKEN uv run hockey-model refresh --starters-only
+run_step predict env -u REPORT_GH_TOKEN uv run hockey-model daily --date "$day" --out-dir "$out_dir"
 if ((skip_unchanged == 1)); then
   skip_if_unchanged
 fi

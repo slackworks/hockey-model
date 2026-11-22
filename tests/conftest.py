@@ -63,7 +63,8 @@ def fakes(tmp_path: Path) -> Path:
     gh.write_text(
         "#!/usr/bin/env bash\n"
         'echo "gh $*" >> "$FAKE_CALLS"\n'
-        'echo "gh GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
+        'echo "gh GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
         # The mutation report reads the open issue list. The default is an empty list.
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
@@ -148,7 +149,8 @@ def fakes(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
-        'echo "uv GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
+        'echo "uv GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         # The mutation report runs the real helper, so its status is the real decision. The
         # path is absolute, because a bare name would find this fake again on PATH.
         'if [[ "$*" == "run python3 scripts/mutation_report.py"* ]]; then\n'
