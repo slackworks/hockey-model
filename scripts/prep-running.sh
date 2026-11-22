@@ -152,8 +152,7 @@ job_holds() {
     .[].jobs[]
     | select(.status | holds)
     | select(.name as $n | $names | index($n))
-    | "\(.name) \(if .status == "in_progress" or .status == "completed"
-        then (.started_at // "") else "" end)"
+    | "\(.name) \(if .status == "in_progress" then (.started_at // "") else "" end)"
   ' <<<"$answer" 2>&1)"; then
     echo "prep-running: cannot read the job list of run ${run_id}: $answer" >&2
     return 1
