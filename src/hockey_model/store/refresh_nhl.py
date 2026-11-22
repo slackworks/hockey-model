@@ -115,6 +115,23 @@ def _unresolved_games(run: RefreshRun) -> list[tuple[int, datetime]]:
     return [(game_id, start) for game_id, _, _, start in found]
 
 
+def _unresolved_on(run: RefreshRun, day: date) -> int:
+    """Return how many games of ``day`` started long enough ago and are still not final."""
+    return sum(game_day_of(start) == day for _, start in _unresolved_games(run))
+
+
+def _read_finished(run: RefreshRun, day: date, was_complete: bool, open_before: int) -> bool:
+    """Return True when the read that just ended finished ``day``.
+
+    A read finishes a day that it made complete. It also finishes a due day when it resolved a
+    game: ``open_before`` counted the unresolved games before the read. The next run then has
+    fewer due games. An open day is read again, and so is a due day whose games stay open.
+    """
+    if not was_complete and _day_complete(run, day):
+        return True
+    return _unresolved_on(run, day) < open_before
+
+
 def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> list[date]:
     """Return the score days to read again for unresolved games, oldest first and bounded.
 
@@ -201,8 +218,9 @@ def read_days(
 
     A day that was read after it ended is complete and is not read again, unless it is in
     ``due``. A day in ``gaps`` is a known gap, so it counts as read. The read stops when three
-    days in a row fail or the time budget is spent. A day counts as progress when this read
-    completed it and it is before ``backlog_before``, or when ``backlog_before`` is None.
+    days in a row fail or the time budget is spent. A read finishes a day when it made the
+    day complete, or when it resolved a game of a due day. A finished day counts as
+    progress when it is before ``backlog_before``, or when ``backlog_before`` is None.
     """
     failures = 0
     progress = 0
@@ -224,13 +242,13 @@ def read_days(
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
 
-        was_complete = day in due and _day_complete(run, day)
+        is_due = day in due
+        open_before = _unresolved_on(run, day) if is_due else 0
+        before = (is_due and _day_complete(run, day), open_before)
         ok = run.attempt(SCORES, score_day_url(day), unit)
         failures = 0 if ok else failures + 1
         clean = clean and ok
-        # A day that this read completed is finished. An open day is read again, and so is a
-        # due day that was complete already.
-        if ok and not was_complete and _day_complete(run, day):
+        if ok and _read_finished(run, day, *before):
             finished += 1
             progress += backlog_before is None or day < backlog_before
         progress_log.advance()
