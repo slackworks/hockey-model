@@ -183,38 +183,41 @@ def test_a_due_day_that_was_complete_is_not_finished_again(conn: sqlite3.Connect
     assert (result.finished, result.progress) == (0, 0)
 
 
+def _live_client(open_games: int | None = None) -> FakeClient:
+    """Return a client whose score day of 2026-01-10 has ``open_games`` live games (all if None)."""
+    live = json.loads(fixture("nhl/score_2026-01-10.json"))
+    for game in live["games"][:open_games]:
+        game["gameState"] = "LIVE"
+    return FakeClient({f"{SCORE_URL}2026-01-10": json.dumps(live).encode()})
+
+
 def _stuck_live_day(conn: sqlite3.Connection) -> date:
     """Store a complete day whose games are still live in the newest read, and return the day."""
-    live = json.loads(fixture("nhl/score_2026-01-10.json"))
-    for game in live["games"]:
-        game["gameState"] = "LIVE"
-    url = f"{SCORE_URL}2026-01-10"
-    client = FakeClient({url: json.dumps(live).encode()})
-    refresh(
-        conn, client, now=datetime(2026, 1, 12, 12, tzinfo=UTC), backfill_from=date(2026, 1, 10)
-    )
+    when = datetime(2026, 1, 12, 12, tzinfo=UTC)
+    refresh(conn, _live_client(), now=when, backfill_from=date(2026, 1, 10))
     return date(2026, 1, 10)
+
+
+def _due_read(conn: sqlite3.Connection, client: FakeClient, day: date) -> tuple[int, int]:
+    run = RefreshRun(conn, client, datetime(2026, 1, 14, tzinfo=UTC), backfill_from=day)
+    _, due = plan_unresolved(run)
+    assert due == [day]
+    result = read_days(run, due, set(), due, date(2026, 1, 12))
+    return result.finished, result.progress
 
 
 def test_a_due_re_read_that_resolves_the_games_is_finished(conn: sqlite3.Connection) -> None:
     day = _stuck_live_day(conn)
-    run = RefreshRun(conn, FakeClient(), datetime(2026, 1, 14, tzinfo=UTC), backfill_from=day)
-    _, due = plan_unresolved(run)
-    assert due == [day]
-    result = read_days(run, due, set(), due, date(2026, 1, 12))
-    assert (result.finished, result.progress) == (1, 1)
+    assert _due_read(conn, FakeClient(), day) == (1, 1)
+
+
+def test_a_due_re_read_that_resolves_one_game_is_finished(conn: sqlite3.Connection) -> None:
+    day = _stuck_live_day(conn)
+    assert _due_read(conn, _live_client(open_games=1), day) == (1, 1)
 
 
 def test_a_due_re_read_that_leaves_the_games_open_is_not_finished(
     conn: sqlite3.Connection,
 ) -> None:
     day = _stuck_live_day(conn)
-    url = f"{SCORE_URL}2026-01-10"
-    live = json.loads(fixture("nhl/score_2026-01-10.json"))
-    for game in live["games"]:
-        game["gameState"] = "LIVE"
-    client = FakeClient({url: json.dumps(live).encode()})
-    run = RefreshRun(conn, client, datetime(2026, 1, 14, tzinfo=UTC), backfill_from=day)
-    _, due = plan_unresolved(run)
-    result = read_days(run, due, set(), due, CUTOFF)
-    assert (result.finished, result.progress) == (0, 0)
+    assert _due_read(conn, _live_client(), day) == (0, 0)
