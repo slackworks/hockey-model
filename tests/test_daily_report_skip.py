@@ -232,11 +232,12 @@ def test_the_release_token_reaches_only_the_release_calls(fakes: Path, tmp_path:
     code, stderr, _ = _run_report(env, tmp_path, "--skip-unchanged")
     assert code == 0, stderr
     lines = log.read_text(encoding="utf-8").splitlines()
-    # The raw value matters: a step that leaves REPORT_GH_TOKEN set leaks it to the package
-    # code even when GH_TOKEN is unset (#313).
-    assert "gh GH_TOKEN=secret-token REPORT_GH_TOKEN=secret-token" in lines
+    # The raw value matters: the script unsets REPORT_GH_TOKEN once at the top and re-exports
+    # it only as GH_TOKEN, so a `gh` call carries one token and no other command carries any
+    # (#313).
+    assert "gh GH_TOKEN=secret-token REPORT_GH_TOKEN=unset" in lines
     assert "uv GH_TOKEN=unset REPORT_GH_TOKEN=unset" in lines
-    assert not any("REPORT_GH_TOKEN=secret-token" in line for line in lines if "uv " in line)
+    assert not any("REPORT_GH_TOKEN=secret-token" in line for line in lines)
 
 
 def _index(remote: Path, builds: list[tuple[str, str]]) -> None:
