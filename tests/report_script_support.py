@@ -48,6 +48,7 @@ def due_json(**fields: object) -> str:
         "date": DAY,
         "games": 3,
         "games_outside_window": 0,
+        "first_puck_drop_utc": "2026-11-04T23:00:00.000000+00:00",
         "puck_drop_passed": True,
         "prep_blocks_report": False,
     }

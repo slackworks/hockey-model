@@ -136,9 +136,10 @@ required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
 required+=' and (.games_outside_window | type == "number")'
 required+=' and (.prep_blocks_report | type == "boolean")'
+required+=' and (.first_puck_drop_utc | type == "string")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
   echo "report-gate: report-due payload lacks due, tag, games, date, games_outside_window," \
-    "or prep_blocks_report: $status_json" >&2
+    "prep_blocks_report, or first_puck_drop_utc: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
@@ -160,8 +161,7 @@ if [[ "$outside" != "0" ]]; then
   echo "report-gate: warning: $day drops $outside feed game(s) that fall outside its" \
     "window; see report-due's stderr for the game ids" >&2
 fi
-# Optional: only the late-run warning names it.
-first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
+first_drop="$(jq -r '.first_puck_drop_utc' <<<"$status_json")"
 blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
 # A due run would queue behind that prepare and publish after the puck drop. The gate holds no
 # store lock, so it answers here: this run builds nothing, and the next trigger runs again.

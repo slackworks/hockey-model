@@ -331,6 +331,16 @@ def test_gate_fails_on_a_payload_without_the_gate_fields(
     assert "lacks due, tag, games, date, games_outside_window" in result.stderr
 
 
+def test_gate_fails_on_a_payload_without_the_first_puck_drop(fakes: Path, tmp_path: Path) -> None:
+    """The late-run warning names the puck drop, so a payload without it must stop the gate."""
+    payload = json.loads(due_json())
+    del payload["first_puck_drop_utc"]
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=json.dumps(payload))
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert "first_puck_drop_utc" in result.stderr
+
+
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
     fakes: Path, tmp_path: Path
 ) -> None:
