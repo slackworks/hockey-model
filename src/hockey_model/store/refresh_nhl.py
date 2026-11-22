@@ -115,6 +115,23 @@ def _unresolved_games(run: RefreshRun) -> list[tuple[int, datetime]]:
     return [(game_id, start) for game_id, _, _, start in found]
 
 
+def _unresolved_on(run: RefreshRun, day: date) -> bool:
+    """Return True when a game of ``day`` started long enough ago and is still not final."""
+    return any(game_day_of(start) == day for _, start in _unresolved_games(run))
+
+
+def _read_finished(run: RefreshRun, day: date, was_complete: bool, was_unresolved: bool) -> bool:
+    """Return True when the read that just ended finished ``day``.
+
+    A read finishes a day that it made complete. It also finishes a due day whose games were
+    unresolved before the read and are final after it. An open day is read again, and so is a
+    due day that was complete with no open game.
+    """
+    if not was_complete and _day_complete(run, day):
+        return True
+    return was_unresolved and not _unresolved_on(run, day)
+
+
 def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> list[date]:
     """Return the score days to read again for unresolved games, oldest first and bounded.
 
@@ -224,13 +241,12 @@ def read_days(
         def unit(stamp: datetime, current: date = day) -> int:
             return write_games(run.conn, fetch_score_day(run.client, current), stamp)
 
-        was_complete = day in due and _day_complete(run, day)
+        is_due = day in due
+        before = (is_due and _day_complete(run, day), is_due and _unresolved_on(run, day))
         ok = run.attempt(SCORES, score_day_url(day), unit)
         failures = 0 if ok else failures + 1
         clean = clean and ok
-        # A day that this read completed is finished. An open day is read again, and so is a
-        # due day that was complete already.
-        if ok and not was_complete and _day_complete(run, day):
+        if ok and _read_finished(run, day, *before):
             finished += 1
             progress += backlog_before is None or day < backlog_before
         progress_log.advance()

@@ -1,5 +1,6 @@
 """Tests for the budget stall error of a backfill: it needs old work that is still unread (#302)."""
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
@@ -8,7 +9,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from refresh_support import NOW, FakeClient, minute_clock
+from refresh_support import NOW, SCORE_URL, FakeClient, fixture, minute_clock
 from seeding import add_game, fresh_store
 
 from hockey_model.sources.errors import SourceError
@@ -16,7 +17,7 @@ from hockey_model.sources.nhl import boxscore_url, score_day_url
 from hockey_model.store.db import connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
-from hockey_model.store.refresh_nhl import BOXSCORES, SCORES, read_days
+from hockey_model.store.refresh_nhl import BOXSCORES, SCORES, plan_unresolved, read_days
 from hockey_model.store.refresh_old_work import old_work_left
 from hockey_model.store.source_reads import record_failed_read, record_read
 
@@ -179,4 +180,41 @@ def test_a_due_day_that_was_complete_is_not_finished_again(conn: sqlite3.Connect
     day = date(2026, 1, 3)
     record_read(conn, SCORES, score_day_url(day), LATE)
     result = read_days(_run(conn), [day], set(), [day], CUTOFF)
+    assert (result.finished, result.progress) == (0, 0)
+
+
+def _stuck_live_day(conn: sqlite3.Connection) -> date:
+    """Store a complete day whose games are still live in the newest read, and return the day."""
+    live = json.loads(fixture("nhl/score_2026-01-10.json"))
+    for game in live["games"]:
+        game["gameState"] = "LIVE"
+    url = f"{SCORE_URL}2026-01-10"
+    client = FakeClient({url: json.dumps(live).encode()})
+    refresh(
+        conn, client, now=datetime(2026, 1, 12, 12, tzinfo=UTC), backfill_from=date(2026, 1, 10)
+    )
+    return date(2026, 1, 10)
+
+
+def test_a_due_re_read_that_resolves_the_games_is_finished(conn: sqlite3.Connection) -> None:
+    day = _stuck_live_day(conn)
+    run = RefreshRun(conn, FakeClient(), datetime(2026, 1, 14, tzinfo=UTC), backfill_from=day)
+    _, due = plan_unresolved(run)
+    assert due == [day]
+    result = read_days(run, due, set(), due, date(2026, 1, 12))
+    assert (result.finished, result.progress) == (1, 1)
+
+
+def test_a_due_re_read_that_leaves_the_games_open_is_not_finished(
+    conn: sqlite3.Connection,
+) -> None:
+    day = _stuck_live_day(conn)
+    url = f"{SCORE_URL}2026-01-10"
+    live = json.loads(fixture("nhl/score_2026-01-10.json"))
+    for game in live["games"]:
+        game["gameState"] = "LIVE"
+    client = FakeClient({url: json.dumps(live).encode()})
+    run = RefreshRun(conn, client, datetime(2026, 1, 14, tzinfo=UTC), backfill_from=day)
+    _, due = plan_unresolved(run)
+    result = read_days(run, due, set(), due, CUTOFF)
     assert (result.finished, result.progress) == (0, 0)
