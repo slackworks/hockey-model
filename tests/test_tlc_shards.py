@@ -1,5 +1,6 @@
 """Tests for scripts/tlc_shards.py and the shard map specs/shards.json."""
 
+import fnmatch
 import importlib.util
 import json
 import subprocess
@@ -59,9 +60,13 @@ def test_every_config_in_specs_belongs_to_one_shard() -> None:
     assert configs == sorted(f"specs/{path.name}" for path in (ROOT / "specs").glob("*.cfg"))
 
 
-def test_every_covered_path_exists() -> None:
-    for path in DATA["covers"]:
-        assert (ROOT / path).is_file(), f"{path} is in covers of specs/shards.json but is gone"
+def test_every_covered_pattern_matches_a_file() -> None:
+    files = [path.relative_to(ROOT).as_posix() for path in ROOT.glob("src/**/*") if path.is_file()]
+    files += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts").glob("*")]
+    for pattern in DATA["covers"]:
+        assert any(shards.matches(path, [pattern]) for path in files), (
+            f"{pattern} is in covers of specs/shards.json and matches no file"
+        )
 
 
 def test_a_change_of_the_fit_command_selects_no_shard() -> None:
@@ -173,3 +178,61 @@ def test_a_bad_map_raises_an_error_that_names_the_fault(
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         shards.load_map(path)
+
+
+@given(
+    pattern=st.sampled_from(["*.py", "a/*.py", "a/b?.py", "[ab]/c.py", "a/**", "x"]),
+    path=st.text(alphabet="abc/.py", max_size=12),
+)
+def test_a_pattern_matches_like_a_shell_glob_or_a_directory_prefix(pattern: str, path: str) -> None:
+    if pattern.endswith("/**"):
+        expected = path.startswith(pattern[:-2])
+    else:
+        expected = fnmatch.fnmatchcase(path, pattern)
+    assert shards.matches(path, [pattern]) == expected
+
+
+_PATHS = st.sampled_from(
+    [
+        "README.md",
+        "specs/daily_prepare.tla",
+        "scripts/tlc.sh",
+        "scripts/daily-prepare.sh",
+        "src/hockey_model/store/refresh_nhl.py",
+        "src/hockey_model/store_cli.py",
+    ]
+)
+
+
+@given(first=st.lists(_PATHS), second=st.lists(_PATHS))
+def test_the_plan_of_two_changes_is_the_union_of_their_plans(
+    first: list[str], second: list[str]
+) -> None:
+    both = set(shards.plan(DATA, first + second))
+    assert both == set(shards.plan(DATA, first)) | set(shards.plan(DATA, second))
+    assert shards.plan(DATA, first + second) == [name for name in NAMES if name in both]
+
+
+_JSON = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.text(max_size=8),
+    lambda children: (
+        st.lists(children, max_size=3)
+        | st.dictionaries(
+            st.sampled_from(["always", "covers", "shards", "name", "spec", "config"]), children
+        )
+    ),
+    max_leaves=12,
+)
+
+
+@given(value=_JSON)
+def test_load_map_returns_a_checked_map_or_raises_a_value_error(
+    tmp_path_factory: pytest.TempPathFactory, value: object
+) -> None:
+    path = tmp_path_factory.mktemp("map") / "shards.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    try:
+        data = shards.load_map(path)
+    except ValueError:
+        return
+    assert data["shards"] and data["always"] and data["covers"]

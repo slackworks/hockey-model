@@ -444,15 +444,19 @@ A shard may add paths of its own.
 A pattern that ends in `/**` matches every path under that directory.
 `specs/shards.schema.json` describes the map, and a test checks the map against it.
 
-The `covers` list names `store_cli_refresh.py`, because the model covers the exit code of the refresh command and no other store command.
+The `covers` list names the modules that own a rule that the model states: the `refresh*.py` modules of the store, `nhl_writes.py` for the boxscore query, `source_reads.py` for the abandon rule, `daily-prepare.sh` for the exit code and the marker, and `store_cli_refresh.py` for the exit code of the refresh command.
 A change of the fit command, in `store_cli.py`, starts no shard.
-A test checks that every listed file exists and that every config in `specs/` is the config of one shard.
+`store_cli_parsers.py` only declares the flags, such as `--budget-seconds`, and the meaning of a flag lives in a covered module, so a change of a flag declaration starts no shard.
+The model takes the results of the URL shapes, the HTTP status classes, the time parsing, and the game day as constants, so those modules are not listed.
+A test checks that every `covers` pattern matches a file and that every config in `specs/` is the config of one shard.
 
 `scripts/tlc.sh --list` prints each shard as a JSON line.
 `scripts/tlc.sh --shard NAME` runs one shard, and the script names the shard that failed.
 `scripts/tlc-plan.sh` picks the shards for the workflow.
-It compares `HEAD` with the base of the pull request or the commit before the push, and it passes the changed paths to `scripts/tlc_shards.py plan`.
-A manual run, a push with no usable base, and a diff that fails select every shard.
+It compares `HEAD` with the base of the pull request or the commit before the push, without rename detection, so the old path of a renamed file selects its shard.
+It passes the changed paths to `scripts/tlc_shards.py plan`.
+A manual run, a push with no usable base, and a diff that fails select every shard, and the summary gives the reason.
+A run on `main` is never cancelled by a later push, because the later push would leave the change of the first one unchecked.
 
 Every shard models the same code today, so every shard lists the same code paths.
 A property split (#188, #191) adds shards to the map, and a shard that models less code lists fewer paths.
@@ -474,9 +478,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the older run. A run on main finishes, because a
+# cancelled run would leave the change of its push unchecked.
 concurrency:
   group: tla-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   plan:
@@ -489,6 +495,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -512,6 +519,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin

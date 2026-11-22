@@ -1,5 +1,6 @@
 """Tests that the constants in the specs/daily_prepare*.cfg files match the values in the code."""
 
+import json
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -14,12 +15,9 @@ from hockey_model.store.refresh_nhl import BACKLOG_BEFORE, RETRY_FAILED_AFTER
 from hockey_model.store.source_reads import ABANDON_AFTER_FAILED_READS, ABANDON_MIN_SPAN_DAYS
 
 ROOT = Path(__file__).resolve().parents[1]
-CFGS = (
-    ROOT / "specs" / "daily_prepare.cfg",
-    ROOT / "specs" / "daily_prepare_stall.cfg",
-    ROOT / "specs" / "daily_prepare_blocked.cfg",
-    ROOT / "specs" / "daily_prepare_recent.cfg",
-    ROOT / "specs" / "daily_prepare_cutoff.cfg",
+SHARD_MAP = require_path(ROOT / "specs" / "shards.json")
+CFGS = tuple(
+    ROOT / shard["config"] for shard in json.loads(SHARD_MAP.read_text(encoding="utf-8"))["shards"]
 )
 # One shape per line: the name, an equals sign, and the value. Meaning is checked in code.
 _CONSTANT_LINE = re.compile(r"^\s*([A-Za-z]+)\s*=\s*(.+?)\s*$")
@@ -72,15 +70,6 @@ def _load(cfg: Path) -> tuple[dict[str, str], str]:
 
 
 cfgs = pytest.mark.parametrize("cfg", CFGS, ids=lambda path: path.name)
-
-
-def test_every_config_in_specs_is_checked_here() -> None:
-    present = {path.name for path in require_path(ROOT / "specs").glob("*.cfg")}
-    listed = {path.name for path in CFGS}
-    assert present == listed, (
-        f"specs/ and CFGS differ: only in specs/ {sorted(present - listed)}, "
-        f"only in CFGS {sorted(listed - present)}; update CFGS in {Path(__file__).name}"
-    )
 
 
 @cfgs
