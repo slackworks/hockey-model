@@ -25,7 +25,12 @@ JAR="$TLA_TOOLS_DIR/tla2tools-$TLA_TOOLS_VERSION.jar"
 
 SPEC=specs/daily_prepare.tla
 # Each of these must pass. The small configs run first, so a mistake fails in seconds.
-PASSING_CFGS=(specs/daily_prepare_stall.cfg specs/daily_prepare_blocked.cfg specs/daily_prepare.cfg)
+PASSING_CFGS=(
+  specs/daily_prepare_stall.cfg
+  specs/daily_prepare_blocked.cfg
+  specs/daily_prepare_cutoff.cfg
+  specs/daily_prepare.cfg
+)
 # This config must violate the property. The code has the bug that the property finds (#302).
 KNOWN_CFG=specs/daily_prepare_false_stall.cfg
 KNOWN_PROPERTY=StallOnlyForBacklog
@@ -163,11 +168,11 @@ if ((rc == 0)); then
     echo "tlc.sh: $KNOWN_CFG found the expected violation of $KNOWN_PROPERTY."
   else
     # The cause of a crash is at the end of the log, so a failure prints all of it.
-    cat "$known_log"
+    cat "$known_log" >&2
     rc=$known_rc
     if ((known_rc == 0)); then
       echo "tlc.sh: $KNOWN_CFG passed, so $KNOWN_PROPERTY holds now." >&2
-      echo "  Move $KNOWN_PROPERTY into the main config, and delete $KNOWN_CFG." >&2
+      echo "  Add $KNOWN_CFG to PASSING_CFGS, and delete this known-failure block." >&2
       rc=1
     else
       echo "tlc.sh: $KNOWN_CFG ended with exit $known_rc, not a violation of $KNOWN_PROPERTY." >&2
