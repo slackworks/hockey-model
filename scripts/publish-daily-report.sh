@@ -159,7 +159,14 @@ version_status() {
     echo new
     return 0
   fi
-  gh release download "$tag" --pattern "$name" --dir "$check_dir" --clobber
+  if ! gh release download "$tag" --pattern "$name" --dir "$check_dir" --clobber; then
+    echo "publish-daily-report: cannot download $name from $tag to compare it with this build; gh's error is above. Nothing was published. Run the report workflow again." >&2
+    return 1
+  fi
+  if [[ ! -s "$check_dir/$name" ]]; then
+    echo "publish-daily-report: the download of $name from $tag is empty, so it cannot be compared with this build. Nothing was published. Run the report workflow again." >&2
+    return 1
+  fi
   if cmp -s "$file" "$check_dir/$name"; then
     echo "publish-daily-report: $name is already on $tag with the same bytes; skipped." >&2
     echo same

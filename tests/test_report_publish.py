@@ -462,3 +462,29 @@ def test_publish_downloads_overwrite_an_earlier_check_file(fakes: Path, tmp_path
     assert result.returncode == 0, result.stderr
     downloads = [line for line in _calls(tmp_path) if line.startswith("gh release download")]
     assert downloads and all("--clobber" in line for line in downloads)
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"FAKE_DOWNLOAD_FAIL": "1"}, "cannot download"),
+        ({"FAKE_DOWNLOAD_EMPTY": "1"}, "is empty"),
+    ],
+)
+def test_a_failed_version_download_is_not_called_a_collision(
+    fakes: Path, tmp_path: Path, env: dict[str, str], message: str
+) -> None:
+    _write_report(tmp_path / "report")
+    remote = _remote_versions(tmp_path, "a different build\n")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"report-{DAY}-202013Z.md\nreport-{DAY}-202013Z.json",
+        FAKE_REMOTE_DIR=str(remote),
+        **env,
+    )
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "other bytes" not in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", "")
