@@ -345,18 +345,49 @@ def parse_results(text: str) -> dict[str, str]:
 
 
 def clear_generated_mutants(repo: Path) -> None:
-    """Remove the mutants directory only when it holds mutmut output and nothing else."""
+    """Remove the mutants directory only when it holds mutmut output and nothing else.
+
+    A run that fails before its stats phase writes no ``mutmut-stats.json``, and the directory
+    then holds only copied sources and tests. That is still mutmut output, so it is removed
+    (#316). Any other name is left in place, because the hook does not own it.
+    """
     target = repo / MUTANTS_DIR
     if not target.exists():
         return
     names = {entry.name for entry in target.iterdir()} if target.is_dir() else set()
-    generated = {"mutmut-stats.json", PYPROJECT} <= names and names <= MUTANTS_OUTPUT_NAMES
-    if not generated:
+    if not names <= MUTANTS_OUTPUT_NAMES:
         raise PushCheckError(
             f"{MUTANTS_DIR}/ does not hold only mutmut output, so it was not removed. "
-            "Move it aside, then push again."
+            f"Move {sorted(names - MUTANTS_OUTPUT_NAMES)} aside, then push again."
         )
     shutil.rmtree(target)
+
+
+# The lines that name what stopped a mutmut run. The stats phase prints the failed test and a
+# one-line summary; the rest of the output is the traceback and the captured log.
+_CAUSE_PATTERNS = (
+    re.compile(r"^FAILED (\S+)"),
+    re.compile(r"^ERROR (\S+)"),
+    re.compile(r"^failed to .+"),
+    re.compile(r"^Filtered for specific mutants"),
+    re.compile(r"^AssertionError: .+"),
+    re.compile(r"^[Ee]rror: .+"),
+    re.compile(r"^\d+ (?:failed|passed|error)"),
+)
+
+
+def _cause(stdout: str, stderr: str) -> str:
+    """Return the lines of a failed mutmut run that name its cause, or the tail of its output.
+
+    A failure names the test that failed, or the message that stopped the run (#316). The full
+    output stays out of the message, so a push that fails names its cause in one screen.
+    """
+    lines = [line for text in (stdout, stderr) for line in text.splitlines() if line.strip()]
+    named = [line for line in lines if any(p.match(line) for p in _CAUSE_PATTERNS)]
+    if named:
+        return " | ".join(named[-5:])
+    tail = " | ".join(lines[-5:])
+    return tail or "the run printed nothing"
 
 
 def run_mutmut(repo: Path, args: list[str]) -> str:
@@ -384,7 +415,9 @@ def run_mutmut(repo: Path, args: list[str]) -> str:
             "with a reason."
         ) from exc
     if proc.returncode != 0:
-        raise PushCheckError(f"mutmut {' '.join(args)} exited {proc.returncode}: {stderr.strip()}")
+        raise PushCheckError(
+            f"mutmut {' '.join(args)} exited {proc.returncode}: {_cause(stdout, stderr)}"
+        )
     return stdout
 
 
