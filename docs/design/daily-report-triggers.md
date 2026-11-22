@@ -51,7 +51,8 @@ A hash of those values changes exactly when a read changes what the report says,
 `daily-report.sh --skip-unchanged` downloads the newest versioned asset `report-DATE-HHMMSSZ.json` of the release after it predicts, and `hockey-model report-compare` compares the two hashes.
 The versioned asset is the reference, because the publish script uploads the alias `report-DATE.json` after the versions, and a failed alias upload leaves the alias behind the newest build.
 A release with no versioned asset falls back to the alias.
-Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`, and the run clears that variable before any other command.
+Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`. The script unsets that variable once at the top and re-exports it as `GH_TOKEN` inside the compare step, so no other command carries a token.
+The gate reads its own token the same way: `report-gate.sh` unsets `GH_TOKEN` at the top and re-exports it on the release read alone, so the feed read and the decision call carry none.
 Equal hashes end the run with reason `unchanged` and no `complete` marker, so the publish job skips.
 An alias with no `inputs_sha256`, from a build before the field existed, counts as changed once.
 The hash covers `schema_version`, so a build with a new report shape publishes again. The shape and the build index are in [report-contract.md](report-contract.md).
