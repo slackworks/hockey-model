@@ -29,6 +29,16 @@ def _job(name: str) -> str:
     return rest if following is None else rest[: following.start() + 1]
 
 
+def test_a_scheduled_run_stands_aside_while_a_manual_run_waits() -> None:
+    """A newer scheduled run would replace a waiting manual run and cancel it (#296)."""
+    gate = _job("gate")
+    assert "concurrency:" not in gate
+    assert '[[ "$EVENT" != "schedule" ]]' in gate
+    assert "scripts/manual-prepare-pending.sh mutation.yml" in gate
+    assert 'echo "go=false" >> "$GITHUB_OUTPUT"' in gate
+    assert "needs: gate\n    if: needs.gate.outputs.go == 'true'" in _job("shard")
+
+
 def test_the_report_job_runs_on_every_ref() -> None:
     # A manual run on a branch must judge its own stats, so a broken stats file cannot pass.
     report = _job("report")

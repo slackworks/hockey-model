@@ -11,6 +11,7 @@ from report_script_support import _calls, _env
 SCRIPT = require_path(Path(__file__).resolve().parents[1] / "scripts" / "manual-prepare-pending.sh")
 _PREPARE = ".github/workflows/daily-prepare.yml"
 _REPORT = ".github/workflows/daily-report.yml"
+_MUTATION = ".github/workflows/mutation.yml"
 STATUSES = ["in_progress", "pending", "queued", "waiting", "requested"]
 
 
@@ -55,6 +56,55 @@ def test_a_manual_run_of_another_workflow_does_not_count(fakes: Path, tmp_path: 
     assert (result.returncode, result.stdout) == (0, "no\n")
 
 
+def test_the_workflow_argument_reads_the_named_workflow(fakes: Path, tmp_path: Path) -> None:
+    """A scheduled mutation run stands aside for a manual one, so it names its own file (#296)."""
+    runs = _runs((_MUTATION, "workflow_dispatch"))
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "mutation.yml"],
+        cwd=tmp_path,
+        env=_env(fakes, tmp_path, FAKE_RUNS_JSON=runs),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode, result.stdout) == (0, "yes\n")
+
+
+def test_the_workflow_argument_ignores_the_default_workflow(fakes: Path, tmp_path: Path) -> None:
+    runs = _runs((_PREPARE, "workflow_dispatch"))
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "mutation.yml"],
+        cwd=tmp_path,
+        env=_env(fakes, tmp_path, FAKE_RUNS_JSON=runs),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode, result.stdout) == (0, "no\n")
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("mutation.yml", "other.yml"), "only one workflow name"),
+        (("mutation",), "is not a workflow file name"),
+    ],
+)
+def test_a_bad_workflow_argument_is_refused(
+    fakes: Path, tmp_path: Path, args: tuple[str, ...], message: str
+) -> None:
+    result = subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=tmp_path,
+        env=_env(fakes, tmp_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
 def test_the_run_list_asks_for_manual_runs_of_each_status(fakes: Path, tmp_path: Path) -> None:
     _run(fakes, tmp_path)
     calls = _calls(tmp_path)
@@ -81,6 +131,7 @@ def test_help_prints_the_usage() -> None:
     )
     assert result.returncode == 0
     assert result.stdout.startswith("Say whether a manual daily-prepare run")
+    assert "[WORKFLOW]" in result.stdout
 
 
 def test_an_unknown_argument_is_refused() -> None:

@@ -17,7 +17,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # GitHub keeps one waiting run for a concurrency group, and a newer waiting run replaces an
+  # older one. A scheduled run that joined the group would cancel a manual run that waits
+  # there, so this job has no group and a scheduled run stands aside while a manual run waits
+  # or runs (#296), as the gate job of daily-prepare.yml does (#285).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.manual.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" != "schedule" ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pending="$(bash scripts/manual-prepare-pending.sh mutation.yml)" || {
+            echo "::error::The lookup of manual mutation runs failed, so this run stops."
+            exit 1
+          }
+          if [[ "$pending" == "yes" ]]; then
+            echo "::warning::A manual mutation run waits or runs, so this run stands aside."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
   shard:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
