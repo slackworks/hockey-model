@@ -9,8 +9,10 @@ from __future__ import annotations
 from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun
 from hockey_model.experiments.looks import CONFIRMATION
 from hockey_model.experiments.models import (
+    RESULT_STATUSES,
     STATUS_INCONCLUSIVE,
     STATUS_PROMOTED,
+    STATUS_REGISTERED,
     STATUS_REJECTED,
     ExperimentRecord,
 )
@@ -43,9 +45,12 @@ def confirmation_status(record: ExperimentRecord, report: BacktestReport) -> str
 def status_problem(record: ExperimentRecord) -> str | None:
     """Return why the stored status is not the one its result earns, or None.
 
-    An exploration record cannot promote, so its status is not derived from a result.
+    An exploration record cannot promote, because no confirmation interval decided anything
+    for it, so it may hold no status that a result earns.
     """
-    if record.cohort != CONFIRMATION or record.result is None:
+    if record.cohort != CONFIRMATION:
+        return _exploration_status_problem(record)
+    if record.result is None:
         return None
     earned = status_for_interval(record, record.result.interval)
     if earned == record.status:
@@ -54,6 +59,21 @@ def status_problem(record: ExperimentRecord) -> str | None:
     return (
         f"the stored status {record.status!r} does not support its result: the interval "
         f"{low!r} to {high!r} earns {earned!r}; set the status to {earned!r}"
+    )
+
+
+def _exploration_status_problem(record: ExperimentRecord) -> str | None:
+    """Return why an exploration record may not hold a result status, or None.
+
+    Only a confirmation run decides a feature. A status beside an exploration result would read
+    as a decision that no confirmation interval made.
+    """
+    if record.status not in RESULT_STATUSES:
+        return None
+    return (
+        f"an exploration record cannot hold the status {record.status!r}, because only a "
+        f"confirmation run decides a feature; set the status to {STATUS_REGISTERED!r} and "
+        "register a confirmation record for the decision"
     )
 
 

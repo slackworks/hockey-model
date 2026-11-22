@@ -114,3 +114,19 @@ class TestTheStoredStatusMustMatchTheResult:
         error = check_all(repo_root=registry_dir.parent)["errors"][0]
         assert "the stored status" in error
         assert "does not support" in error
+
+    @pytest.mark.parametrize("status", ["promoted", "rejected", "inconclusive"])
+    def test_an_exploration_record_cannot_claim_the_status_of_a_result(
+        self, registry_dir: Path, status: str
+    ):
+        """Only a confirmation run decides a feature, so its exploration look earns no status.
+
+        The result of an exploration run gates nothing, so a status beside it would read as a
+        decision that no interval made.
+        """
+        register(
+            registry_dir,
+            {"cohort": "exploration", "status": status, "result": _result(_PROMOTES)},
+        )
+        errors = check_all(repo_root=registry_dir.parent)["errors"]
+        assert any("exploration" in error for error in errors), errors
