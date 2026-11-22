@@ -405,6 +405,23 @@ def test_a_failed_mutmut_run_names_the_failing_test(
     assert "failed to collect stats" in message
 
 
+def test_a_failed_run_writes_its_full_output_to_a_log(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The error names the cause and its log, so the traceback is one file away (#316)."""
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RUN_RC", "1")
+    monkeypatch.setenv("FAKE_RUN_OUT", "failed to collect stats. runner returned 1\n")
+    monkeypatch.setenv("FAKE_RUN_ERR", "".join(f"  frame {n} in the worker\n" for n in range(40)))
+    with pytest.raises(mod.PushCheckError, match=r"\.tmp/mutation-changed\.log") as caught:
+        mod.run_mutmut(repo, ["run", TOP])
+    assert "failed to collect stats" in str(caught.value)
+    log = (repo / ".tmp" / "mutation-changed.log").read_text(encoding="utf-8")
+    assert "failed to collect stats" in log
+    assert "frame 39 in the worker" in log
+    assert "frame 39" not in str(caught.value)
+
+
 def test_a_run_past_the_timeout_fails_with_the_fix(
     mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

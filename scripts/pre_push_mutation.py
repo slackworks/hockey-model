@@ -51,6 +51,8 @@ MUTANTS_DIR = "mutants"
 # A changed-code run that passes this many seconds fails with an actionable message.
 MUTMUT_TIMEOUT_S = 900
 MUTMUT_COMMAND = ("uv", "run", "mutmut")
+# The full output of a failed run. A push that fails names this file, and git ignores it.
+MUTATION_LOG = Path(".tmp") / "mutation-changed.log"
 # Top-level names that mutmut writes into its output directory. Any other name is refused.
 MUTANTS_OUTPUT_NAMES = frozenset(
     {"mutmut-stats.json", "pyproject.toml", "src", "tests", "uv.lock", ".hypothesis"}
@@ -390,6 +392,18 @@ def _cause(stdout: str, stderr: str) -> str:
     return tail or "the run printed nothing"
 
 
+def _write_log(repo: Path, args: list[str], stdout: str, stderr: str) -> str:
+    """Write the full output of a failed run to ``.tmp/mutation-changed.log``, and return its name.
+
+    The message names the cause in one screen, and the traceback goes to the log (#316).
+    """.strip()
+    path = repo / MUTATION_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = f"$ mutmut {' '.join(args)}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
+    path.write_text(body, encoding="utf-8")
+    return MUTATION_LOG.as_posix()
+
+
 def run_mutmut(repo: Path, args: list[str]) -> str:
     """Run one mutmut command and return its stdout.
 
@@ -408,15 +422,18 @@ def run_mutmut(repo: Path, args: list[str]) -> str:
         stdout, stderr = proc.communicate(timeout=MUTMUT_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
+        stdout, stderr = proc.communicate()
+        log = _write_log(repo, args, stdout or "", stderr or "")
         raise PushCheckError(
             f"mutmut {args[0]} ran past {MUTMUT_TIMEOUT_S}s and was stopped. Push fewer "
             "functions per change, or raise MUTMUT_TIMEOUT_S in scripts/pre_push_mutation.py "
-            "with a reason."
+            f"with a reason. The full output is in {log}."
         ) from exc
     if proc.returncode != 0:
+        log = _write_log(repo, args, stdout, stderr)
         raise PushCheckError(
-            f"mutmut {' '.join(args)} exited {proc.returncode}: {_cause(stdout, stderr)}"
+            f"mutmut {' '.join(args)} exited {proc.returncode}: {_cause(stdout, stderr)}. "
+            f"The full output is in {log}."
         )
     return stdout
 
