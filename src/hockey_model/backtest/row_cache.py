@@ -113,7 +113,7 @@ class SeasonFile:
         except (ValueError, HockeyModelError) as exc:
             _warn(
                 f"cannot encode the rows of {self.path.name!r} ({exc}); the next run builds "
-                "the season again; fix the feature value that the message names"
+                "the season again; fix the value that the message names"
             )
             return
         try:
@@ -143,7 +143,8 @@ class SeasonFile:
         """Remove the files of the same slot under another key, and the temporary files."""
         for pattern in (f"{self._slot}-*.json", f".{self._slot}-*.tmp"):
             for old in self.directory.glob(pattern):
-                if old == self.path:
+                # A temporary file of this exact name belongs to a writer that is still at work.
+                if old == self.path or old.name.startswith(f".{self.path.name}."):
                     continue
                 try:
                     old.unlink(missing_ok=True)

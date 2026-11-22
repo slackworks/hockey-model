@@ -109,6 +109,16 @@ def test_no_temporary_file_stays_and_a_stale_one_is_removed(
     assert list(directory.iterdir()) == [file.path]
 
 
+def test_a_temporary_file_of_a_writer_at_work_is_not_removed(
+    tmp_path: Path, rows: list[TrainingRow]
+) -> None:
+    file = _file(tmp_path)
+    live = tmp_path / f".{file.path.name}.running.tmp"
+    live.write_text("[")
+    file.save(rows)
+    assert live.exists()
+
+
 def test_a_feature_name_does_not_reach_the_file_name(tmp_path: Path) -> None:
     assert ".." not in _file(tmp_path, names=("../../x",)).path.name
 
@@ -243,6 +253,7 @@ def test_a_row_that_cannot_be_encoded_is_a_warning_that_does_not_blame_the_disk(
     _file(directory).save([TrainingRow(first.game, bad, True)])
     err = capsys.readouterr().err
     assert "cannot encode the rows" in err
+    assert f"game {first.game.game_id}: elo_logit is nan" in err
     assert "writable" not in err
     assert not directory.exists()
 

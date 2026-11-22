@@ -237,6 +237,31 @@ def test_a_constant_that_json_reads_but_a_row_never_holds_is_refused(
         decode_rows(bad)
 
 
+def test_a_text_nested_deeper_than_the_parser_allows_is_a_named_error() -> None:
+    with pytest.raises(HockeyModelError, match="not valid JSON"):
+        decode_rows("[" * 200_000)
+
+
+def test_a_start_that_overflows_when_it_moves_to_utc_is_a_named_error(
+    store: sqlite3.Connection,
+) -> None:
+    seed(store, range(1, 3))
+    store.commit()
+    rows = training_rows(store, 2, 2, GoalieMode.ACTUAL, PLAN.burn_in, names=FEATURES)
+    tree = json.loads(encode_rows(rows))
+    tree[0]["game"]["start"] = "0001-01-01T00:00:00+23:59"
+    with pytest.raises(HockeyModelError, match="row 0"):
+        decode_rows(json.dumps(tree))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_value_that_a_row_cannot_hold_is_named_with_its_game_and_feature(bad: float) -> None:
+    game = GameRow(7, 2, 2, datetime(2020, 1, 1, tzinfo=UTC), "TOR", "BOS", "OFF", 3, 2, "REG")
+    row = TrainingRow(game, FeatureRow(7, 0.0, {"rest": bad}, (), False), True)
+    with pytest.raises(ValueError, match="game 7: rest is"):
+        encode_rows([row])
+
+
 def test_a_number_with_thousands_of_digits_is_a_named_error_and_not_a_crash() -> None:
     with pytest.raises(HockeyModelError, match="not valid JSON"):
         decode_rows("[" + "9" * 5000 + "]")

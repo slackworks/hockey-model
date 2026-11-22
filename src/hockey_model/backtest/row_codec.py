@@ -35,11 +35,17 @@ def _game(row: GameRow) -> dict[str, Any]:
     }
 
 
+def _finite(number: float, game_id: int, label: str) -> float:
+    if not math.isfinite(number):
+        raise ValueError(f"game {game_id}: {label} is {number}, which a row cannot hold")
+    return number
+
+
 def _features(row: FeatureRow) -> dict[str, Any]:
     return {
         "game_id": row.game_id,
-        "elo_logit": row.elo_logit,
-        "values": dict(row.values),
+        "elo_logit": _finite(row.elo_logit, row.game_id, "elo_logit"),
+        "values": {name: _finite(v, row.game_id, name) for name, v in row.values.items()},
         "missing": [{"kind": m.kind.value, "team": m.team, "note": m.note} for m in row.missing],
         "uses_moneypuck": row.uses_moneypuck,
         "imputed": [
@@ -145,7 +151,7 @@ def decode_rows(text: str) -> list[TrainingRow]:
     """Return the rows that ``encode_rows`` wrote, or raise a named error for a damaged text."""
     try:
         data = json.loads(text, parse_constant=_reject_constant)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise HockeyModelError(
             f"decode season rows: the text is not valid JSON of rows: {exc}; delete the cache file"
         ) from exc
@@ -158,7 +164,14 @@ def decode_rows(text: str) -> list[TrainingRow]:
     for index, item in enumerate(data):
         try:
             rows.append(_decode_row(item))
-        except (KeyError, TypeError, ValueError, AttributeError, HockeyModelError) as exc:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OverflowError,
+            HockeyModelError,
+        ) as exc:
             raise HockeyModelError(
                 f"decode season rows: row {index} is damaged ({type(exc).__name__}: {exc}); "
                 "delete the cache file"
