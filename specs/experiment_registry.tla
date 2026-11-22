@@ -31,7 +31,13 @@ Names == Valid
 Num(n) == n \div 10
 
 Looks == 1 .. (MaxLooks + 1)
-Statuses == {"reg", "ran", "wd"}
+RanStatuses == {"promoted", "rejected"}
+Statuses == {"reg", "wd"} \cup RanStatuses
+
+\* The status that a stored result earns (experiments/status.py). res is 1 when the upper end of
+\* the interval is below zero, so the record promotes, and 2 when it is not. The model has no
+\* interval width, so it has no "inconclusive" and no power rule.
+Earns(res) == IF res = 1 THEN "promoted" ELSE "rejected"
 
 Blob(id, hyp, look, st, res) ==
     [id |-> id, hyp |-> hyp, look |-> look, st |-> st, res |-> res]
@@ -135,6 +141,10 @@ WithdrawnError(Cs, Rs, x) ==
         \/ BlobAt(Cs, Rs, x, i).st = "wd" /\ T[x].st # "wd"
         \/ T[x].st = "wd" /\ BlobAt(Cs, Rs, x, i).st \notin {"reg", "wd"}
 
+\* experiments/status.py: the stored status is the one that its result earns.
+StatusError(T, x) ==
+    T[x].res # 0 /\ T[x].st # Earns(T[x].res)
+
 RecordError(Cs, Rs, x) ==
     LET T == At(Cs, Len(Cs))
     IN \/ T[x].id # x
@@ -142,6 +152,7 @@ RecordError(Cs, Rs, x) ==
        \/ ImmutableError(Cs, Rs, x)
        \/ OneShotError(Cs, Rs, x)
        \/ WithdrawnError(Cs, Rs, x)
+       \/ StatusError(T, x)
 
 \* A commit i deleted the file y, and git did not report a rename of it.
 Deleted(Cs, Rs, i, y) ==
@@ -188,8 +199,12 @@ Edits(T) ==
     \* Withdraw a record, or return it to registered. This also clears a result by hand.
     \cup { [T EXCEPT ![x].st = s, ![x].res = 0] :
         <<x, s>> \in {p \in Present(T) \X {"reg", "wd"} : p[2] # T[p[1]].st} }
+    \* Edit the status of a record that holds a result. The model has no rule that stops this,
+    \* so the check must catch it.
+    \cup { [T EXCEPT ![x].st = s] :
+        <<x, s>> \in {p \in Present(T) \X Statuses : p[2] # T[p[1]].st /\ T[p[1]].res # 0} }
     \* Run the experiment. The run writes the status and the result.
-    \cup { [T EXCEPT ![x].st = "ran", ![x].res = r] :
+    \cup { [T EXCEPT ![x].st = Earns(r), ![x].res = r] :
         <<x, r>> \in {v \in Present(T) : RunOK(T, v)} \X {1, 2} }
     \* Delete a record.
     \cup { [T EXCEPT ![x] = NONE] : x \in Present(T) }
@@ -277,6 +292,11 @@ DistinctLooks ==
 LookCap ==
     OnMain /\ Passes(commits, renames) =>
         Cardinality({x \in PresentIn(commits) : Tip[x].st # "wd"}) <= MaxLooks
+
+\* A record keeps the status that its result earns, so a hand edit cannot promote it.
+StatusFollowsResult ==
+    OnMain /\ Passes(commits, renames) =>
+        \A x \in PresentIn(commits) : Tip[x].res # 0 => Tip[x].st = Earns(Tip[x].res)
 
 \* A record that ran is never withdrawn, so a withdrawn record spent no look.
 WithdrawnNeverRan ==

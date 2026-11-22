@@ -111,7 +111,7 @@ class TestCheckAll:
         register(
             registry_dir,
             {
-                "status": "rejected",
+                "status": "promoted",
                 "result": {
                     "games": 100,
                     "difference": -0.005,

@@ -18,6 +18,9 @@ The promotion bar for look `k` is the interval from the `BASE_TAIL / (k * (k + 1
 A record promotes only when the upper end of that interval lies below zero.
 The names `BASE_TAIL`, `MIN_TAIL_RESAMPLES`, and `MAX_LOOKS` are in `src/hockey_model/experiments/looks.py`.
 
+The checker recomputes the status of a confirmation record from its stored `result.interval`, with the same rule that the run uses (`status_for_interval` in `src/hockey_model/experiments/status.py`).
+A record whose `status` is not the one its result earns fails the check, so a commit cannot change `rejected` to `promoted` and keep the same result.
+
 ## The schedule
 
 The tail of look `k` is `BASE_TAIL / (k * (k + 1))`.

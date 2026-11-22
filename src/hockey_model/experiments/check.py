@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from hockey_model.backtest.game_records import GameRecord, write_game_records
-from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun, run_backtest
+from hockey_model.backtest.runner import BacktestReport, run_backtest
 from hockey_model.experiments.cohort import (
     floor_notes,
     plan_for,
@@ -34,7 +34,6 @@ from hockey_model.experiments.history import (
 )
 from hockey_model.experiments.looks import CONFIRMATION, look_problem
 from hockey_model.experiments.models import (
-    STATUS_INCONCLUSIVE,
     STATUS_PROMOTED,
     STATUS_REGISTERED,
     STATUS_REJECTED,
@@ -52,6 +51,13 @@ from hockey_model.experiments.registry import (
 )
 from hockey_model.experiments.registry_checks import registry_errors, registry_notes
 from hockey_model.experiments.schemas import CHECK_OUTPUT_SCHEMA, EXPERIMENT_SCHEMA
+from hockey_model.experiments.status import (
+    confirmation_status,
+    inconclusive_notes,
+    interval_of,
+    require_interval,
+    status_problem,
+)
 from hockey_model.experiments.withdrawn import check_withdrawn
 from hockey_model.game_model.features import feature_name_problem
 from hockey_model.game_model.seasons import exploration_plan, scored_label
@@ -178,7 +184,7 @@ def run_experiment(
     )
     # The checks come before any write, so a refused run leaves no file behind.
     if record.cohort == CONFIRMATION:
-        require_scored_cohort(record, _require_interval(record, report).games, cohort_games)
+        require_scored_cohort(record, require_interval(record, report).games, cohort_games)
     # The caller's export goes first. A write failure then leaves the look unspent.
     if games_out is not None:
         write_game_records(games_out, game_records)
@@ -189,7 +195,7 @@ def run_experiment(
         write_game_records(csv_path, game_records)
         updated = record_with_result(record, report, csv_path, root)
         updated.save(registry_dir(root) / f"{updated.id}.json")
-        notes = report.notes + tuple(plan_notes) + _inconclusive_notes(updated)
+        notes = report.notes + tuple(plan_notes) + inconclusive_notes(updated)
     else:
         updated = record
         notes = report.notes + ("This run is exploratory: it cannot promote a feature.",)
@@ -219,6 +225,9 @@ def _check_one(record_id: str, repo_root: Path) -> CheckEntry:
     _check_look(record, repo_root)
     _check_features_known(record)
     _check_status_matches_result(record)
+    problem = status_problem(record)
+    if problem is not None:
+        raise HockeyModelError(f"experiment {record.id!r}: {problem}")
     entry: CheckEntry = {"id": record.id, "status": record.status, "valid": True}
 
     commit = registration_commit(record.id, repo_root)
@@ -301,43 +310,6 @@ def _check_confirmation_can_run(record: ExperimentRecord) -> None:
         )
 
 
-def _model_run(report: BacktestReport) -> ScoredRun | None:
-    """Return the scored run of the model with the goalie who started, or None."""
-    return next((run for run in report.runs if run.name == MODEL_ACTUAL), None)
-
-
-def _interval_of(model: ScoredRun) -> tuple[float, float]:
-    """Return the interval of a scored run that has one."""
-    if model.diff_vs_elo_ci is None:
-        raise HockeyModelError(f"scored run {model.name!r} has no interval")
-    return model.diff_vs_elo_ci
-
-
-def _require_interval(record: ExperimentRecord, report: BacktestReport) -> ScoredRun:
-    """Return the model run, and refuse a run that produced no interval."""
-    model = _model_run(report)
-    if model is None or model.diff_vs_elo_ci is None:
-        why = "; ".join(report.ineligible_reasons) or "the model run is missing"
-        raise HockeyModelError(
-            f"experiment {record.id!r}: the run produced no interval ({why}), so there is no "
-            "result to record; the record is unchanged. Refresh the store and run again"
-        )
-    return model
-
-
-def _inconclusive_notes(record: ExperimentRecord) -> tuple[str, ...]:
-    """Say why a run is inconclusive when the interval is wider than the expected effect."""
-    if record.status != STATUS_INCONCLUSIVE or record.result is None:
-        return ()
-    if record.expected_effect is None:
-        return ()
-    low, high = record.result.interval
-    return (
-        f"The interval half-width {(high - low) / 2:.4f} is above the expected effect "
-        f"{abs(record.expected_effect):.4f}, so the run is inconclusive and the look is spent.",
-    )
-
-
 def _check_look(record: ExperimentRecord, repo_root: Path) -> None:
     """Raise when the look number of a confirmation record breaks the registry rule."""
     number = record.id[:4]
@@ -362,23 +334,6 @@ def _check_look(record: ExperimentRecord, repo_root: Path) -> None:
         raise HockeyModelError(f"experiment {record.id!r}: {problem}")
 
 
-def _confirmation_status(record: ExperimentRecord, report: BacktestReport) -> str:
-    """Return the status a confirmation run earns.
-
-    Promotion needs the upper end of the interval below zero. The interval tail shrinks with
-    the look number (docs/design/promotion-bar.md). A run whose
-    interval is wider than the effect the record expects is underpowered, so it is
-    inconclusive rather than rejected.
-    """
-    model = _model_run(report)
-    if model is None or model.diff_vs_elo_ci is None:
-        return STATUS_INCONCLUSIVE
-    low, high = model.diff_vs_elo_ci
-    if record.expected_effect is not None and (high - low) / 2 > abs(record.expected_effect):
-        return STATUS_INCONCLUSIVE
-    return STATUS_PROMOTED if high < 0.0 else STATUS_REJECTED
-
-
 def record_with_result(
     record: ExperimentRecord, report: BacktestReport, csv_path: Path, repo_root: Path
 ) -> ExperimentRecord:
@@ -387,13 +342,13 @@ def record_with_result(
     A run with no interval has no result to record. The run then fails before it
     saves, so the look is not spent on a run that scored nothing.
     """
-    model = _require_interval(record, report)
+    model = require_interval(record, report)
     data = record.to_dict()
-    data["status"] = _confirmation_status(record, report)
+    data["status"] = confirmation_status(record, report)
     data["result"] = {
         "games": model.games,
         "difference": model.mean_diff_vs_elo,
-        "interval": list(_interval_of(model)),
+        "interval": list(interval_of(model)),
         "csv_path": csv_path.relative_to(repo_root).as_posix(),
         "csv_hash": _file_hash(csv_path),
     }

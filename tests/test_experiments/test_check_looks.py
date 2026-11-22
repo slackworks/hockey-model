@@ -23,6 +23,7 @@ from hockey_model.experiments.cohort import (
 )
 from hockey_model.experiments.looks import BASE_TAIL, MAX_LOOKS
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
+from hockey_model.experiments.status import confirmation_status
 from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
 
@@ -279,7 +280,7 @@ def test_the_status_follows_the_upper_end_and_the_power_rule(
 ) -> None:
     high = low + width
     record = make_record({"expected_effect": effect})
-    status = check._confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+    status = confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
     underpowered = effect is not None and (high - low) / 2 > abs(effect)
     if underpowered:
         assert status == "inconclusive"
