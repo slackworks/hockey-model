@@ -78,7 +78,18 @@ def test_a_forced_run_rebuilds_even_though_the_skip_job_is_skipped() -> None:
     """A skipped job fails the jobs that need it, so the force test needs always() (#311)."""
     prepare = _job(PREPARE.read_text(encoding="utf-8"), "prepare")
     condition = prepare[prepare.index("    if: >-") : prepare.index("    concurrency:")]
-    assert condition.index("always()") < condition.index("needs.gate.outputs.force")
+    assert condition.index("always()") < condition.index("inputs.force == true")
+
+
+def test_the_force_flag_comes_from_the_dispatch_input() -> None:
+    """The input reaches a job `if` directly, so one value answers every reader (FAQ: contexts).
+
+    A gate output that copies the input is a second place to keep right. The platform reads
+    the input in `jobs.<job_id>.if`, as the reference table of contexts says.
+    """
+    text = PREPARE.read_text(encoding="utf-8")
+    assert "force: ${{ steps.manual.outputs.force }}" not in text
+    assert "outputs.force" not in text
 
 
 def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
@@ -87,7 +98,7 @@ def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
     assert "needs: gate" in skip
     assert "timeout-minutes: 10" in skip
     assert "needs.gate.outputs.go == 'true'" in skip
-    assert "needs.gate.outputs.force != 'true'" in skip
+    assert "inputs.force != true" in skip
 
 
 def test_the_skip_job_asks_the_script_whether_the_day_needs_the_rebuild() -> None:
