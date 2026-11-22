@@ -138,7 +138,7 @@ The main config keeps `Blocked` empty, because a blocked day there raised the co
    So a stop after `MAX_UNIT_FAILURES` failures exits 1, not 75.
 3. With exit 0 from refresh, the script writes the marker when `backfill_complete` is true, and exits 75 when it is false.
    Exit 75 happens for a budget stop or a boxscore retry skip, with no error from any source.
-   A budget stop adds the stall error when `nhl()` finishes no unit, or leaves old work unread (see the loop above).
+   A budget stop adds the stall error when `nhl()` finished no older unit, and either finished no unit at all or leaves old work unread (see item 6 of the loop above).
    A budget stop can also happen in the MoneyPuck step (#136).
    The MoneyPuck step tries its first stale file in each run, whatever the time. When that file is the team file, the run reads no goalie file after a spent budget, and the next run reads them, because the team file is then fresh.
    The TLA+ model does not include this stop.
@@ -210,7 +210,7 @@ Abstractions, and the reason for each:
    A second run in the same tick, such as a retry after exit 75, sees the same ages as the first run, as it does in the code.
 7. `Progress` is what the code counts, and it follows `ArrivalsCount`.
    `Backlog` is the ground truth: a finished unit that is not recent.
-   The code chooses the exit code from `progress`.
+   The code chooses the stall error from `progress`, from `finished`, and from `old_work_left()` (item 12).
    The property `BacklogStallExitsOne` uses `Backlog`.
 8. `BacklogFirst` reads the oldest window first, so the backlog comes before the open days.
    This is the reorder fix from #186.
@@ -230,8 +230,11 @@ Abstractions, and the reason for each:
     `StallError` is the stall condition: the budget stopped a run with no progress, and either `BacklogUnread` holds or no unit finished (`Headway` is false).
     `EndNhl` raises the error when `StallError` holds.
     `StallNeedsBacklogOrNoHeadway` checks that rule, and `StallExitsOne` and `BacklogStallExitsOne` use it in their condition.
-    The model cannot reach a run that finishes nothing while no old work waits, because its budget is fixed and the code reads old units before the open days.
-    The code can reach it after a change of the budget, so `tests/store/test_refresh_stall.py` covers that case, and the model keeps the same condition.
+    The model cannot reach a run that finishes nothing while no old work waits: its budget is fixed, and no tick opens a new day.
+    The code can reach it after a change of the budget, or when a new open day arrives each day, so `tests/store/test_refresh_stall.py` covers that case, and the model keeps the same condition.
+    At the hourly cadence of `daily-prepare`, a second run on one day finishes nothing, so it raises the error and the stall is loud.
+    `StallNeedsBacklogOrNoHeadway`, `StallExitsOne`, and `BacklogStallExitsOne` restate `StallError` for the step that uses it.
+    They fail when an edit of `EndNhl` changes the rule, as the break tests show, and they do not check the code.
 
 ## Constants
 
@@ -296,10 +299,10 @@ The two middle rows are from before the age model (#191) and were not run again.
 
 | Config | Distinct states | Time |
 | --- | --- | --- |
-| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`, with the age model) | 692,896 | 24 s |
+| `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 1`, `OpenDays = {2}` (the stall `.cfg`, with the age model) | 699,690 | 24 s |
 | `NWindows = 2`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {2}`, `BrokenScore = {1}` | 10,982 | 1 s |
 | `NWindows = 3`, `DaysPerWindow = 1`, `Budget = 2`, `OpenDays = {3}`, `BrokenScore = {1}`, `BrokenBox = {2}` | 1,504,428 | 1 min 35 s |
-| Full `.cfg` (`CutoffTicks = 1`) | 27,285,528 | 20 min 21 s |
+| Full `.cfg` (`CutoffTicks = 1`) | 27,288,524 | 29 min 12 s (loaded machine) |
 | Full `.cfg` with `CutoffTicks = 4` | 62,897,214 | 53 min 6 s (upper bound) |
 
 Every config in the sweep passes.
@@ -381,7 +384,7 @@ The first one was a limit of the code. Issue #178 fixed it.
    The run reads the score and the boxscore of day 2 and the score of day 1, and the budget stops it before the boxscore of day 1.
    Each read is of a recent day, so the run counted no progress, and it exited 1 with the message about the budget, though no backlog waited and the next run finished.
    Old work alone cannot decide the error: with no old work left, a budget below the cost of the open days gives exit 75 in every run (#178).
-   So `nhl()` adds the stall error when `old_work_left()` is true, or when the run finished no unit of any age.
+   So `nhl()` adds the stall error when no older unit finished and either `old_work_left()` is true or the run finished no unit of any age.
    `EndNhl` has the same condition (`StallError`).
    `specs/daily_prepare_recent.cfg` holds the case of a run that finished recent days, and `StallNeedsBacklogOrNoHeadway` checks the rule.
    The property covers a run with no source failure, because a failed read makes exit 1 correct, and it is an action property of `EndNhl`, where only the stall raises an error.
