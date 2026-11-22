@@ -195,3 +195,38 @@ def test_a_record_moved_away_and_back_keeps_the_commits_of_its_path(repo_root: P
     _git(repo_root, "commit", "-m", "move it back")
     with pytest.raises(HockeyModelError, match="one-shot"):
         check_one_shot(_record(), repo_root)
+
+
+def _init_main(root: Path) -> None:
+    (root / "experiments").mkdir(exist_ok=True)
+    _git(root, "init", "-b", "main")
+
+
+def test_a_result_on_a_side_branch_that_a_merge_discarded_stays_in_the_history(
+    repo_root: Path,
+) -> None:
+    """Git hides a side branch from a path log when the merge keeps the other side."""
+    _init_main(repo_root)
+    _commit(repo_root, _record())
+    _git(repo_root, "switch", "-c", "side")
+    _commit(repo_root, _record("a"))
+    _git(repo_root, "switch", "main")
+    _git(repo_root, "merge", "-s", "ours", "--no-ff", "side", "-m", "keep main")
+    with pytest.raises(HockeyModelError, match="one-shot"):
+        check_one_shot(_record(), repo_root)
+
+
+def test_a_record_that_a_merge_deleted_is_a_deleted_record(repo_root: Path) -> None:
+    """A deletion that only the merge commit holds is a deletion of the record."""
+    _init_main(repo_root)
+    _commit(repo_root, _record("a"))
+    _git(repo_root, "switch", "-c", "side")
+    (repo_root / "experiments" / "0002-other.json").write_text("{}\n")
+    _git(repo_root, "add", "experiments")
+    _git(repo_root, "commit", "-m", "side work")
+    _git(repo_root, "switch", "main")
+    _git(repo_root, "commit", "--allow-empty", "-m", "main work")
+    _git(repo_root, "merge", "--no-ff", "--no-commit", "side")
+    _git(repo_root, "rm", "-q", f"experiments/{_ID}.json")
+    _git(repo_root, "commit", "-m", "merge and drop the record")
+    assert deleted_record_ids([], repo_root) == [_ID]

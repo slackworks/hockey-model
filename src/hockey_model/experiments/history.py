@@ -129,7 +129,8 @@ def path_in_history(relative: str, repo_root: Path) -> bool:
     """Return True when any commit touched the path. Outside a repository it is False."""
     if not _is_work_tree(repo_root) or not _has_head(repo_root):
         return False
-    return bool(_git(["log", "--format=%H", "--", relative], repo_root).strip())
+    log = _git(["log", "--full-history", "--format=%H", "--", relative], repo_root)
+    return bool(log.strip())
 
 
 def history_unavailable_reason(repo_root: Path) -> str | None:
@@ -155,34 +156,25 @@ def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
     """
     if history_unavailable_reason(repo_root) is not None:
         return []
-    deleted = _git(
-        [
-            "log",
-            "--no-renames",
-            "--diff-filter=D",
-            "--name-only",
-            "--format=",
-            "--",
-            f"{REGISTRY_DIR_NAME}/",
-        ],
-        repo_root,
-    ).split()
-    deleted += _git(["ls-tree", "--name-only", "HEAD", f"{REGISTRY_DIR_NAME}/"], repo_root).split()
-    names = {Path(name).stem for name in deleted if name.endswith(".json")}
+    deletions = _deletions(repo_root)
+    tracked = _git(["ls-tree", "--name-only", "HEAD", f"{REGISTRY_DIR_NAME}/"], repo_root).split()
+    names = {record_id for _, record_id in deletions}
+    names |= {Path(name).stem for name in tracked if name.endswith(".json")}
     gone = [n for n in names if n not in present and RECORD_STEM.fullmatch(n)]
-    below = _deleted_below_a_confirmation(set(gone), repo_root)
+    below = _deleted_below_a_confirmation(set(gone), deletions, repo_root)
     return sorted(n for n in gone if n in below or _ever_had_result(n, repo_root))
 
 
-def _deleted_below_a_confirmation(gone: set[str], repo_root: Path) -> set[str]:
-    """Return the deleted confirmation records that a higher confirmation record outlived.
+def _deletions(repo_root: Path) -> list[tuple[str, str]]:
+    """Return ``(commit, record_id)`` for each deletion on the first-parent line of HEAD.
 
-    Each commit that deleted a record is read with its own tree, so a deletion that
-    happened before any higher record existed stays allowed.
+    A merge commit lists the files that it removed from its first parent, so a record that
+    only a merge deleted, and a record that a side branch deleted, both show up.
     """
     log = _git(
         [
             "log",
+            "--first-parent",
             "--no-renames",
             "--diff-filter=D",
             "--name-only",
@@ -192,8 +184,19 @@ def _deleted_below_a_confirmation(gone: set[str], repo_root: Path) -> set[str]:
         ],
         repo_root,
     )
+    return parse_deletion_log(log)
+
+
+def _deleted_below_a_confirmation(
+    gone: set[str], deletions: list[tuple[str, str]], repo_root: Path
+) -> set[str]:
+    """Return the deleted confirmation records that a higher confirmation record outlived.
+
+    Each commit that deleted a record is read with its own tree, so a deletion that
+    happened before any higher record existed stays allowed.
+    """
     found: set[str] = set()
-    for commit, record_id in parse_deletion_log(log):
+    for commit, record_id in deletions:
         if record_id in gone and _was_outlived(record_id, commit, repo_root):
             found.add(record_id)
     return found
@@ -271,7 +274,7 @@ def _ever_had_result(record_id: str, repo_root: Path) -> bool:
     stored version that is not valid JSON, raises: a skipped version could hide a result.
     """
     relative = record_relative_path(record_id)
-    for commit in _git(["log", "--format=%H", "--", relative], repo_root).split():
+    for commit in _git(["log", "--full-history", "--format=%H", "--", relative], repo_root).split():
         if not _git(["ls-tree", "--name-only", commit, "--", relative], repo_root).strip():
             continue
         if _field_at(commit, relative, "result", repo_root) is not None:
@@ -292,13 +295,16 @@ def _history(record_id: str, repo_root: Path) -> list[tuple[str, str]]:
 
     A commit that deleted the file is left out, because it holds no copy to read.
 
-    The history is the history of one path. Git does not follow a rename, because it pairs a
+    The history is the history of one path, and it holds the commits of every branch that a merge
+    brought in, because git hides a side branch from a path log when the merge keeps one side.
+    Git does not follow a rename, because it pairs a
     removed file with an added file by how alike the two are. A record that moves to another
     name is a deleted record and a new record (docs/design/experiment-registry-tla.md).
     """
     out = _git(
         [
             "log",
+            "--full-history",
             "--diff-filter=d",
             "--name-only",
             "--format=commit:%H",
