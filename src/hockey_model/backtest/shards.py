@@ -187,8 +187,8 @@ def actual_rows(
 ) -> list[TrainingRow]:
     """Return the rows of the games from ``first`` through ``last`` with the goalie who started.
 
-    One worker runs the full build. More workers build one season at a time, and the rows are
-    the same. The fit command uses this.
+    One worker runs the full build and reads no cache. More workers build one season at a time,
+    read the season row cache, and give the same rows. The fit command uses this.
     """
     if check_workers(workers) == 1:
         return training_rows(conn, first, last, GoalieMode.ACTUAL, burn_in, names=names)
