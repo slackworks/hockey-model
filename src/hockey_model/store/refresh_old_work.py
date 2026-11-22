@@ -1,4 +1,4 @@
-"""Tell a backfill that the budget stopped before the backlog from one that only has recent work."""
+"""Tell a backfill that the budget stopped before the backlog from one with recent work only."""
 
 from datetime import date, timedelta
 
@@ -31,6 +31,8 @@ def old_work_left(run: RefreshRun, first: date, cutoff: date, gaps: set[date]) -
     retry_after = run.now - RETRY_FAILED_AFTER
     for game_id in games_missing_boxscore(run.conn, first, cutoff - timedelta(days=1)):
         url = boxscore_url(game_id)
-        if url not in known_gaps and not failed_since(run.conn, BOXSCORES, url, retry_after):
+        if game_id in run.boxscores_read or url in known_gaps:
+            continue
+        if not failed_since(run.conn, BOXSCORES, url, retry_after):
             return True
     return False

@@ -6,8 +6,10 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from refresh_support import NOW, FakeClient, minute_clock
-from seeding import add_game
+from seeding import add_game, fresh_store
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import boxscore_url, score_day_url
@@ -99,11 +101,26 @@ def test_a_budget_stop_before_an_older_window_is_an_error_that_names_the_budget(
     assert any("--budget-seconds" in str(error) for error in report.errors)
 
 
-def test_a_budget_stop_with_only_recent_days_left_is_not_an_error(
+def test_a_game_that_this_run_read_does_not_wait(conn: sqlite3.Connection) -> None:
+    _read_every_old_day(conn)
+    add_game(conn, 2025020004, "2026-01-03T00:00:00Z")
+    run = _run(conn)
+    run.boxscores_read.add(2025020004)
+    assert old_work_left(run, FIRST, CUTOFF, set()) is False
+
+
+def test_a_first_day_from_the_cutoff_on_leaves_no_old_work(conn: sqlite3.Connection) -> None:
+    assert old_work_left(_run(conn), CUTOFF, CUTOFF, set()) is False
+
+
+def test_a_budget_stop_after_a_recent_day_finished_is_not_an_error(
     conn: sqlite3.Connection,
 ) -> None:
+    # The first run leaves the day of the cutoff incomplete. The second run finishes that day,
+    # which is recent, and the budget stops it. No old work waits, and the next run goes on.
     start = date(2026, 1, 6)
-    refresh(conn, FakeClient(), now=NOW, backfill_from=start)
+    evening = datetime(2026, 1, 8, 20, 0, tzinfo=UTC)
+    refresh(conn, FakeClient(), now=evening, backfill_from=start)
     report = refresh(
         conn,
         FakeClient(),
@@ -115,3 +132,37 @@ def test_a_budget_stop_with_only_recent_days_left_is_not_an_error(
     assert report.errors == ()
     assert report.backfill_complete is False
     assert any("run it again" in note for note in report.notes)
+    done = refresh(conn, FakeClient(), now=NOW, backfill_from=start)
+    assert done.backfill_complete is True
+
+
+@pytest.mark.parametrize("start", [date(2026, 1, 6), date(2026, 1, 9)])
+def test_a_budget_stop_that_finished_no_unit_is_an_error_even_with_no_old_work(
+    conn: sqlite3.Connection, start: date
+) -> None:
+    # Every later run with this budget reads the open days again and stops at the same place.
+    refresh(conn, FakeClient(), now=NOW, backfill_from=start)
+    report = refresh(
+        conn,
+        FakeClient(),
+        now=NOW,
+        backfill_from=start,
+        clock=minute_clock(),
+        budget=timedelta(minutes=1),
+    )
+    assert report.backfill_complete is False
+    assert any("--budget-seconds" in str(error) for error in report.errors)
+
+
+_OLD_DAYS = [FIRST + timedelta(days=n) for n in range((CUTOFF - FIRST).days)]
+
+
+@given(read=st.sets(st.sampled_from(_OLD_DAYS)), gaps=st.sets(st.sampled_from(_OLD_DAYS)))
+def test_old_work_waits_exactly_while_an_old_day_is_neither_read_nor_a_gap(
+    tmp_path_factory: pytest.TempPathFactory, read: set[date], gaps: set[date]
+) -> None:
+    with fresh_store(tmp_path_factory.mktemp("store")) as conn:
+        for day in read:
+            record_read(conn, SCORES, score_day_url(day), LATE)
+        waiting = old_work_left(_run(conn), FIRST, CUTOFF, gaps)
+    assert waiting == bool(set(_OLD_DAYS) - read - gaps)

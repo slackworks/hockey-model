@@ -40,8 +40,8 @@ def _budget_stall_error() -> HockeyModelError:
     """Return the error for a run that the time budget stopped before it reached the backlog.
 
     Every later run with the same budget reads the same open days and the days that closed
-    since the last run, and it stops at the same place while older days wait. The backfill
-    never finishes. The error makes the run exit 1 instead of 75.
+    since the last run, and it stops at the same place. The backfill never finishes. The error
+    makes the run exit 1 instead of 75.
     """
     return HockeyModelError(
         "refresh: the backfill spent its time budget before it read one older day or game, "
@@ -80,6 +80,7 @@ def nhl(run: RefreshRun) -> None:
     complete = True
     stopped_by_budget = False
     progress = 0
+    finished = 0
     for start, end in windows(run.backfill_from, last_day):
         days = {start + timedelta(days=n) for n in range((end - start).days + 1)}
         window_due = [day for day in due if start <= day <= end]
@@ -91,6 +92,7 @@ def nhl(run: RefreshRun) -> None:
             boxes = read_boxscores(run, missing, _recent_games(run, start, end, cutoff))
         complete = complete and days_read.clean and boxes.clean
         progress += days_read.progress + boxes.progress
+        finished += days_read.finished + boxes.finished
         if days_read.stopped or boxes.stopped:
             run.notes.append(f"backfill: stopped in the window {start} to {end}")
             # The first read that stopped the window gives the reason, so a boxscore read that
@@ -99,7 +101,10 @@ def nhl(run: RefreshRun) -> None:
             break
     if not complete:
         run.notes.append("backfill: some days or games are unread; run it again")
-    if progress == 0 and stopped_by_budget and old_work_left(run, run.backfill_from, cutoff, gaps):
-        run.errors.append(_budget_stall_error())
+    if progress == 0 and stopped_by_budget:
+        # A run that finished a recent day moves the next run on. A run that finished
+        # nothing, or that leaves old work behind, repeats itself with the same budget.
+        if finished == 0 or old_work_left(run, run.backfill_from, cutoff, gaps):
+            run.errors.append(_budget_stall_error())
     note_unresolved(run, unresolved)
     run.backfill_complete = complete
