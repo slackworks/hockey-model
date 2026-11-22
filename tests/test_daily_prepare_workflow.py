@@ -74,6 +74,13 @@ def test_the_prepare_job_waits_for_the_gate_and_the_skip_check() -> None:
     assert "needs.skip.outputs.rebuild == 'true'" in prepare
 
 
+def test_a_forced_run_rebuilds_even_though_the_skip_job_is_skipped() -> None:
+    """A skipped job fails the jobs that need it, so the force test needs always() (#311)."""
+    prepare = _job(PREPARE.read_text(encoding="utf-8"), "prepare")
+    condition = prepare[prepare.index("    if: >-") : prepare.index("    concurrency:")]
+    assert condition.index("always()") < condition.index("needs.gate.outputs.force")
+
+
 def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
     """A prepared day holds the group for minutes, and a forced run rebuilds at once (#311)."""
     skip = _job(PREPARE.read_text(encoding="utf-8"), "skip")
