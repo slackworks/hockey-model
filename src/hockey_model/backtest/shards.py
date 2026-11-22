@@ -105,12 +105,16 @@ def can_shard(conn: sqlite3.Connection, workers: int) -> bool:
     More than one worker always shards, and a store with no file then fails with a named error.
     One worker shards when the store is a file with no uncommitted change, because a shard reads
     the committed file. Any other store gets the full build, which reads the connection itself.
+    A read cursor that is still open on the connection is not a change that this check sees. A
+    shard that reads newer data then stops with the store-changed error.
     """
     if workers > 1:
         return True
-    if conn.in_transaction:
+    try:
+        database_path(conn)
+    except HockeyModelError:
         return False
-    return any(name == "main" and file for _, name, file in conn.execute("PRAGMA database_list"))
+    return True
 
 
 def _read_cached(

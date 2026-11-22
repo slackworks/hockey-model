@@ -106,10 +106,13 @@ def test_a_changed_old_game_builds_its_season_and_every_later_one(
     assert guess == _full(seeded, GoalieMode.GUESS)
 
 
-def test_a_fit_reads_the_actual_rows_that_a_backtest_wrote(seeded: sqlite3.Connection) -> None:
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_fit_reads_the_actual_rows_that_a_backtest_wrote(
+    seeded: sqlite3.Connection, workers: int
+) -> None:
     build_sharded(seeded, PLAN, FEATURES, 2)
     before = _names(seeded)
-    rows = actual_rows(seeded, PLAN.fit_first, PLAN.scored[1], FEATURES, 2, PLAN.burn_in)
+    rows = actual_rows(seeded, PLAN.fit_first, PLAN.scored[1], FEATURES, workers, PLAN.burn_in)
     assert rows == _full(seeded, GoalieMode.ACTUAL)
     assert _names(seeded) == before
 

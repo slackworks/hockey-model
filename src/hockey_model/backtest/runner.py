@@ -409,9 +409,9 @@ def run_backtest(
     The feature builds, the fits, and the bootstrap runs are named units, and each logs its
     wall time. ``workers`` above 1 builds the rows one season at a time in worker processes,
     each with its own read-only store connection, because the builds take more than 99.9% of
-    the time. The report and the records are the same for every worker count. A store file
-    without uncommitted changes always builds this way, even with one worker, and reads a
-    season from the season row cache (``row_cache``) when its key has not changed.
+    the time. The report and the records are the same for every worker count. ``can_shard``
+    says which stores build this way, and a season then comes from the season row cache
+    (``row_cache``) when its key has not changed.
     """
     check_workers(workers)
     started = time.monotonic()

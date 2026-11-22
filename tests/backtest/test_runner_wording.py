@@ -202,10 +202,20 @@ def test_each_record_names_the_teams_of_its_own_game(seeded: sqlite3.Connection)
     assert {r.run for r in records} == set(runner.RECORDED_RUNS)
 
 
+@pytest.mark.parametrize(
+    ("full_build", "units"),
+    [
+        (True, ("build actual rows", "build guess rows")),
+        (False, ("build actual rows 2", "build guess rows 7")),
+    ],
+    ids=["full build", "season shards"],
+)
 def test_a_serial_run_logs_each_build_by_name_and_all_stages_in_this_process(
     seeded: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    full_build: bool,
+    units: tuple[str, str],
 ) -> None:
     workers: list[int] = []
     real = runner.run_units
@@ -215,31 +225,12 @@ def test_a_serial_run_logs_each_build_by_name_and_all_stages_in_this_process(
         return real(units, count, label)
 
     monkeypatch.setattr(runner, "run_units", spy)
-    monkeypatch.setattr(runner, "can_shard", lambda conn, workers: False)
+    if full_build:
+        monkeypatch.setattr(runner, "can_shard", lambda conn, workers: False)
     runner.run_backtest(seeded, PLAN, candidates=FEATURES)
     err = capsys.readouterr().err
-    assert "backtest: unit build actual rows took " in err
-    assert "backtest: unit build guess rows took " in err
-    assert set(workers) == {1}
-
-
-def test_a_run_of_one_worker_on_a_store_file_logs_each_season_in_this_process(
-    seeded: sqlite3.Connection,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    workers: list[int] = []
-    real = runner.run_units
-
-    def spy(units, count, label):
-        workers.append(count)
-        return real(units, count, label)
-
-    monkeypatch.setattr(runner, "run_units", spy)
-    runner.run_backtest(seeded, PLAN, candidates=FEATURES)
-    err = capsys.readouterr().err
-    assert "backtest: unit build actual rows 2 took " in err
-    assert "backtest: unit build guess rows 7 took " in err
+    for unit in units:
+        assert f"backtest: unit {unit} took " in err
     assert set(workers) == {1}
 
 
