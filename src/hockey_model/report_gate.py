@@ -6,10 +6,10 @@ answer depends on the release and the caller has not read it yet. Design:
 docs/design/daily-report-triggers.md
 """
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from hockey_model.report_schema import read_json_object
 from hockey_model.types import HockeyModelError
 
 REASON_DRY_RUN = "dry-run"
@@ -78,19 +78,7 @@ def warning(
 
 
 def _read_report(path: Path, role: str) -> dict[str, object]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise HockeyModelError(
-            f"report-compare: cannot read the {role} report {path}: {error}; "
-            "pass the path of a report JSON file"
-        ) from error
-    if not isinstance(payload, dict):
-        raise HockeyModelError(
-            f"report-compare: the {role} report {path} is not a JSON object; "
-            "pass the path of a report JSON file"
-        )
-    return payload
+    return read_json_object(path, "report-compare", f"{role} report")
 
 
 def compare_inputs(built_path: Path, published_path: Path) -> dict[str, object]:

@@ -91,13 +91,19 @@ def add_build(index: Mapping[str, Any] | None, report: Mapping[str, Any]) -> dic
     return result
 
 
-def _read_json(path: Path, role: str) -> Any:
+def read_json_object(path: Path, command: str, role: str) -> dict[str, Any]:
+    """Return the JSON object in the file ``path``. ``command`` and ``role`` name it in an error."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
         raise HockeyModelError(
-            f"report-index: cannot read the {role} {path}: {exc}; pass a JSON file"
-        ) from exc
+            f"{command}: cannot read the {role} {path}: {error}; pass the path of a JSON file"
+        ) from error
+    if not isinstance(payload, dict):
+        raise HockeyModelError(
+            f"{command}: the {role} {path} is not a JSON object; pass the path of a JSON file"
+        )
+    return payload
 
 
 def write_index(report_path: Path, day: str, existing: Path | None, out: Path) -> tuple[int, str]:
@@ -106,8 +112,8 @@ def write_index(report_path: Path, day: str, existing: Path | None, out: Path) -
     Return the number of builds and the file name of the added build. The report must belong
     to ``day``, the day of the release that receives the index.
     """
-    index = _read_json(existing, "index") if existing is not None else None
-    report = _read_json(report_path, "report")
+    index = read_json_object(existing, "report-index", "index") if existing is not None else None
+    report = read_json_object(report_path, "report-index", "report")
     result = add_build(index, report)
     if report["date"] != day:
         raise HockeyModelError(

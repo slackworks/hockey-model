@@ -4,13 +4,11 @@ One line names each game, the favorite, its win chance in whole percent, and the
 win chance. The range is model uncertainty only, and the header line says so.
 """
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from hockey_model.report_schema import check_report
-from hockey_model.types import HockeyModelError
+from hockey_model.report_schema import check_report, read_json_object
 
 NO_GAMES = "No games start on this day."
 
@@ -62,17 +60,6 @@ def release_summary(report: Mapping[str, Any]) -> list[str]:
 
 def summarize_file(path: Path) -> list[str]:
     """Return the summary lines of the report file at ``path``, after the schema check."""
-    try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise HockeyModelError(
-            f"report-summary: cannot read the report {path}: {error}; "
-            "pass the path of a report JSON file"
-        ) from error
-    if not isinstance(report, dict):
-        raise HockeyModelError(
-            f"report-summary: the report {path} is not a JSON object; "
-            "pass the path of a report JSON file"
-        )
+    report = read_json_object(path, "report-summary", "report")
     check_report(report)
     return release_summary(report)
