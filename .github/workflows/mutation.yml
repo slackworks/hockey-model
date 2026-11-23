@@ -221,6 +221,14 @@ jobs:
     # Only the default branch may write an issue. This job is the only holder of that token.
     # A gate that stood aside leaves no status, and the script rejects an empty one (#296).
     if: always() && needs.gate.outputs.go == 'true' && github.ref == 'refs/heads/main'
+    # The script lists the open reports and then creates one, so two file jobs that run
+    # together can both find none and both create an issue. The group serializes them. A
+    # newer waiting run replaces an older one, and that run does the same lookup, so a
+    # replaced run loses nothing. Only this job joins the group, so the gate still stands
+    # aside for a waiting manual run (#296).
+    concurrency:
+      group: mutation-file-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

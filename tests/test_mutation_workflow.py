@@ -44,6 +44,17 @@ def test_a_scheduled_run_stands_aside_while_a_manual_run_waits() -> None:
     assert "needs: gate\n    if: needs.gate.outputs.go == 'true'" in _job("shard")
 
 
+def test_only_the_file_job_joins_a_group() -> None:
+    """The script lists the open reports and then creates one, so two file jobs can both
+    create an issue. The group serializes them. Every other job stays out of a group, so
+    the gate still stands aside for a waiting manual run (#296).
+    """
+    assert "concurrency:" in _job("file")
+    assert "cancel-in-progress: false" in _job("file")
+    for name in ("gate", "shard", "merge", "report"):
+        assert "concurrency:" not in _job(name), name
+
+
 def test_the_report_job_runs_on_every_ref() -> None:
     # A manual run on a branch must judge its own stats, so a broken stats file cannot pass.
     report = _job("report")
