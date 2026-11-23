@@ -416,8 +416,9 @@ def test_the_report_workflow_passes_the_prepare_end(workflow: str) -> None:
     text = require_path(root / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
     assert "bash scripts/prep-running.sh" in text
     assert "--prep-ends" in text
-    # The check must run before the gate decides, so the flag reaches report-gate.sh.
-    assert text.index("prep-running.sh") < text.index("report-gate.sh")
+    # The check must run before the gate decides, so the flag reaches report-gate.sh. The
+    # lines compare, because a comment above the step can name either script.
+    assert text.index("bash scripts/prep-running.sh") < text.index("bash scripts/report-gate.sh")
 
 
 def test_the_store_group_is_on_the_build_job_not_the_workflow() -> None:
