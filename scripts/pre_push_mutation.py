@@ -54,8 +54,19 @@ MUTMUT_COMMAND = ("uv", "run", "mutmut")
 # The full output of a failed run. A push that fails names this file, and git ignores it.
 MUTATION_LOG = Path(".tmp") / "mutation-changed.log"
 # Top-level names that mutmut writes into its output directory. Any other name is refused.
+# The coverage reports are here because mutmut runs pytest from inside the copy, and the
+# project's addopts name those two files (#316).
 MUTANTS_OUTPUT_NAMES = frozenset(
-    {"mutmut-stats.json", "pyproject.toml", "src", "tests", "uv.lock", ".hypothesis"}
+    {
+        "mutmut-stats.json",
+        "pyproject.toml",
+        "src",
+        "tests",
+        "uv.lock",
+        ".hypothesis",
+        "coverage.json",
+        "lcov.info",
+    }
 )
 # A directory that names only the generic part of the allowlist can be a directory of the user.
 # mutmut always writes the stats file or the copied sources, so the clean needs one of these.

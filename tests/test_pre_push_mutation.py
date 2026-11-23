@@ -183,6 +183,22 @@ def test_generated_mutants_are_removed(mod: ModuleType, repo: Path) -> None:
     assert not (repo / "mutants").exists()
 
 
+def test_the_coverage_reports_of_the_run_are_removed_with_the_tree(
+    mod: ModuleType, repo: Path
+) -> None:
+    """mutmut runs pytest inside the copy, so the project's coverage reports land there.
+
+    The addopts write ``coverage.json`` and ``lcov.info``. A push that left them would block
+    every later push with a file the user never wrote (#316).
+    """
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "mutmut-stats.json").write_text("{}", encoding="utf-8")
+    (repo / "mutants" / "coverage.json").write_text("{}", encoding="utf-8")
+    (repo / "mutants" / "lcov.info").write_text("", encoding="utf-8")
+    mod.clear_generated_mutants(repo)
+    assert not (repo / "mutants").exists()
+
+
 def test_a_run_that_failed_before_its_stats_leaves_a_directory_to_remove(
     mod: ModuleType, repo: Path
 ) -> None:
