@@ -134,12 +134,15 @@ The lookup therefore refuses no job name at run time, and an hour that finds a n
 A run that has started no holder yet names the longest timeout instead, because the group can admit the rebuild job first.
 A forced dispatch skips the `skip` job and goes straight to the rebuild, so the long window is the one to plan for.
 
-One case remains.
-A `skip` job that reads a prepared store at minute 14 can find that the day needs the rebuild, and then the `prepare` job takes the group for up to 180 minutes.
-A report gate at minute 44 read a 10-minute window at the moment it ran.
-The report runs at minute 44, in the middle of the gap between two prepares, so the rebuild starts at most 30 minutes after the gate read.
-The gate reads the window of a `skip` job only while that job runs, and such a job ends in seconds on a warm cache.
-A `skip` job that finds a rebuild is therefore rare, and a report hour that loses that race publishes nothing and retries at the next hour (#295).
+A rebuild day is the remaining case.
+The `skip` job at minute 14 can find that the day needs the rebuild, and then the `prepare` job takes the group for up to 180 minutes.
+The report gate at minute 44 reads only the window of `skip`, because `prepare` does not exist in the job list while `skip` runs.
+A `skip` job ends in seconds on a warm cache, so its window never stops the report, and the gate can admit a report build for a day that needs the rebuild.
+The race runs in the gap between the end of `skip` and the start of `prepare`, while `build` is the only run that waits.
+A `build` that runs when `prepare` arrives keeps running, and `prepare` waits behind it.
+A `build` that still waits when `prepare` arrives is cancelled, because the newer waiting run replaces it.
+A cancelled build changes no release: a day with a release keeps it, and a day with none is built by the next hour.
+The split from #311 accepts that race to keep the hold of a prepared day to minutes.
 
 
 ## Job overheads
