@@ -237,10 +237,11 @@ fi
 # because it would then have no report at all. The build job shares the store group with a
 # prepare run, and it would take the one waiting slot that the group keeps, so a manual
 # prepare that waits there is lost (#295). A failed lookup stops the run: a wrong "no" loses
-# the manual run, and the next hour tries again.
+# the manual run, and the next hour tries again. The lookup is a gh call, so it reads the
+# token that the top of the script took back.
 reason="$(jq -r '.reason' <<<"$decision")"
 if [[ "$reason" == "replace" ]]; then
-  pending="$(bash "$(dirname "$0")/manual-prepare-pending.sh")" || {
+  pending="$(GH_TOKEN="$read_token" bash "$(dirname "$0")/manual-prepare-pending.sh")" || {
     echo "report-gate: the manual prepare lookup failed; its error is above" >&2
     exit 1
   }

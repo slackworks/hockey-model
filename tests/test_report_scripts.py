@@ -341,6 +341,34 @@ def test_gate_fails_on_a_payload_without_the_first_puck_drop(fakes: Path, tmp_pa
     assert "first_puck_drop_utc" in result.stderr
 
 
+def test_a_replace_run_carries_the_token_into_the_manual_prepare_lookup(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The lookup is a gh call, and the top of the script unsets the token for every other one.
+
+    A replace run is the normal case once a day is published, and it runs every hour until
+    puck drop. Without the token the lookup exits 2, so the gate failed red instead of
+    standing aside (#295).
+    """
+    log = tmp_path / "env.log"
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_ENV_LOG=str(log),
+        GH_TOKEN="a-token",
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "manual-wait"
+    gh_calls = [
+        line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("gh ")
+    ]
+    assert gh_calls, "the gate made no gh call"
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
+
+
 def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None:
     """The gate reads the schedule and the decision in Python, so it carries no token.
 
