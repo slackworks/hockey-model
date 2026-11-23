@@ -162,84 +162,80 @@ class TestTheStoredStatusMustMatchTheResult:
         assert any("exploration" in error for error in errors), errors
 
 
-class TestTheStatusRuleHoldsOverAnyInterval:
-    """The rule is a comparison, so it must hold for every interval and every status."""
-
-    @given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
-    def test_a_confirmation_record_is_clean_exactly_when_it_agrees(
-        self,
-        interval: tuple[float, float],
-        expected_effect: float | None,
-        status: str,
-    ) -> None:
-        """The check is silent for a status the interval earns, and names it otherwise."""
-        record = make_record(
-            {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
-        )
-        earned = status_for_interval(record, interval)
-        problem = status_problem(record)
-        assert (problem is None) is (status == earned), problem
-        if problem is not None:
-            assert repr(earned) in problem
-
-    @given(interval=_INTERVALS, status=_STATUSES)
-    def test_a_record_whose_interval_cannot_decide_is_never_clean(
-        self, interval: tuple[float, float], status: str
-    ) -> None:
-        """A swapped or zero-width interval earns no status, so no stored status agrees."""
-        if interval[0] < interval[1]:
-            return
-        record = make_record({"status": status, "result": _result(interval)})
-        problem = status_problem(record)
-        assert problem is not None
-        assert "cannot decide a status" in problem
-
-    def test_a_confirmation_record_with_no_result_is_clean(self) -> None:
-        """A record that has not run yet holds no result, so no interval contradicts it."""
-        record = make_record({"status": "registered"})
-        assert status_problem(record) is None
-
-    @given(status=_STATUSES)
-    def test_an_exploration_record_may_hold_no_status_that_a_result_earns(
-        self, status: str
-    ) -> None:
-        """Only a result status fails, and the note names the status to use instead."""
-        record = make_record(
-            {"cohort": "exploration", "status": status, "result": _result(_PROMOTES)}
-        )
-        problem = status_problem(record)
-        assert (problem is None) is (status not in RESULT_STATUSES), problem
-        if problem is not None:
-            assert repr(status) in problem
-            assert repr(STATUS_REGISTERED) in problem
+# The status rule is a comparison, so these hold for every interval and every status. Each
+# is a module-level function, because Hypothesis refuses one method on two class instances
+# and mutmut runs the same test twice in one process (stats, then clean).
+@given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
+def test_a_confirmation_record_is_clean_exactly_when_it_agrees(
+    interval: tuple[float, float],
+    expected_effect: float | None,
+    status: str,
+) -> None:
+    """The check is silent for a status the interval earns, and names it otherwise."""
+    record = make_record(
+        {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
+    )
+    earned = status_for_interval(record, interval)
+    problem = status_problem(record)
+    assert (problem is None) is (status == earned), problem
+    if problem is not None:
+        assert repr(earned) in problem
 
 
-class TestTheInconclusiveNote:
-    """The note states the two numbers that made the run underpowered."""
+@given(interval=_INTERVALS, status=_STATUSES)
+def test_a_record_whose_interval_cannot_decide_is_never_clean(
+    interval: tuple[float, float], status: str
+) -> None:
+    """A swapped or zero-width interval earns no status, so no stored status agrees."""
+    if interval[0] < interval[1]:
+        return
+    record = make_record({"status": status, "result": _result(interval)})
+    problem = status_problem(record)
+    assert problem is not None
+    assert "cannot decide a status" in problem
 
-    @given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
-    def test_the_note_appears_only_for_an_inconclusive_result_with_an_effect(
-        self,
-        interval: tuple[float, float],
-        expected_effect: float | None,
-        status: str,
-    ) -> None:
-        record = make_record(
-            {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
-        )
-        notes = inconclusive_notes(record)
-        quiet = status != STATUS_INCONCLUSIVE or expected_effect is None
-        assert (notes == ()) is quiet, notes
-        if quiet:
-            return
-        low, high = interval
-        assert len(notes) == 1
-        assert f"{(high - low) / 2:.4f}" in notes[0]
-        assert expected_effect is not None
-        assert f"{abs(expected_effect):.4f}" in notes[0]
 
-    @given(expected_effect=_EFFECTS)
-    def test_a_record_with_no_result_gets_no_note(self, expected_effect: float | None) -> None:
-        """A status alone cannot say the interval was wide, because there is no interval."""
-        record = make_record({"status": STATUS_INCONCLUSIVE, "expected_effect": expected_effect})
-        assert inconclusive_notes(record) == ()
+def test_a_confirmation_record_with_no_result_is_clean() -> None:
+    """A record that has not run yet holds no result, so no interval contradicts it."""
+    record = make_record({"status": "registered"})
+    assert status_problem(record) is None
+
+
+@given(status=_STATUSES)
+def test_an_exploration_record_may_hold_no_status_that_a_result_earns(status: str) -> None:
+    """Only a result status fails, and the note names the status to use instead."""
+    record = make_record({"cohort": "exploration", "status": status, "result": _result(_PROMOTES)})
+    problem = status_problem(record)
+    assert (problem is None) is (status not in RESULT_STATUSES), problem
+    if problem is not None:
+        assert repr(status) in problem
+        assert repr(STATUS_REGISTERED) in problem
+
+
+# The note states the two numbers that made the run underpowered.
+@given(interval=_ORDERED, expected_effect=_EFFECTS, status=_STATUSES)
+def test_the_note_appears_only_for_an_inconclusive_result_with_an_effect(
+    interval: tuple[float, float],
+    expected_effect: float | None,
+    status: str,
+) -> None:
+    record = make_record(
+        {"status": status, "expected_effect": expected_effect, "result": _result(interval)}
+    )
+    notes = inconclusive_notes(record)
+    quiet = status != STATUS_INCONCLUSIVE or expected_effect is None
+    assert (notes == ()) is quiet, notes
+    if quiet:
+        return
+    low, high = interval
+    assert len(notes) == 1
+    assert f"{(high - low) / 2:.4f}" in notes[0]
+    assert expected_effect is not None
+    assert f"{abs(expected_effect):.4f}" in notes[0]
+
+
+@given(expected_effect=_EFFECTS)
+def test_a_record_with_no_result_gets_no_note(expected_effect: float | None) -> None:
+    """A status alone cannot say the interval was wide, because there is no interval."""
+    record = make_record({"status": STATUS_INCONCLUSIVE, "expected_effect": expected_effect})
+    assert inconclusive_notes(record) == ()
