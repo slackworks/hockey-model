@@ -210,6 +210,15 @@ def build_body(
 _MUTANT_NAME = re.compile(r"[\w.]{1,300}")
 
 
+def _is_finite(value: int | float) -> bool:
+    # A JSON integer has no size limit. An integer past the float range has no float value, so
+    # math.isfinite raises OverflowError for it.
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _timeout_entry(item: object) -> tuple[str, float, int]:
     """Return one validated entry of the list. Raise ValueError that names the bad part."""
     if not isinstance(item, dict):
@@ -219,7 +228,7 @@ def _timeout_entry(item: object) -> tuple[str, float, int]:
         raise ValueError(f"the mutant name {name!r} is not a dotted name")
     if isinstance(seconds, bool) or not isinstance(seconds, int | float):
         raise ValueError(f"the estimate of {name} is not a number")
-    if not math.isfinite(seconds) or seconds < 0:
+    if not _is_finite(seconds) or seconds < 0:
         raise ValueError(f"the estimate of {name} is not a finite number of 0 or more")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
         raise ValueError(f"the limit of {name} is not a whole number of 0 or more")
