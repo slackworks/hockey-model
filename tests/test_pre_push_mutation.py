@@ -722,6 +722,23 @@ def test_an_extra_glob_never_takes_a_covered_path_away(
     assert mod.is_covered(path, [path, other])
 
 
+@given(parts=st.lists(_PYTHON_NAME, min_size=1, max_size=4))
+def test_a_module_name_round_trips_with_its_path(mod: ModuleType, parts: list[str]) -> None:
+    """The dotted name is the path under ``src/`` with its folders and suffix swapped.
+
+    A name that does not round-trip selects no mutant, so a changed function reads as
+    uncovered. ``__init__`` is the package itself, so it is dropped.
+    """
+    path = "src/" + "/".join(parts) + ".py"
+    assert mod.module_name(path) == ".".join(parts)
+
+
+@given(parts=st.lists(_PYTHON_NAME, min_size=1, max_size=4))
+def test_a_package_module_name_drops_the_init_suffix(mod: ModuleType, parts: list[str]) -> None:
+    path = "src/" + "/".join(parts) + "/__init__.py"
+    assert mod.module_name(path) == ".".join(parts)
+
+
 def test_a_glob_entry_still_matches_the_files_it_names(mod: ModuleType) -> None:
     assert mod.is_covered("src/hockey_model/sources/nhl.py", ["src/hockey_model/sources/*.py"])
     assert not mod.is_covered("src/hockey_model/other/nhl.py", ["src/hockey_model/sources/*.py"])
