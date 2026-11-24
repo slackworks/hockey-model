@@ -693,3 +693,35 @@ def test_mutant_names_follow_mutmut_for_functions_and_methods(
     assert mod.mutant_glob("src/hockey_model/a/b.py", f"{owner}.{name}") == (
         f"hockey_model.a.b.xǁ{owner}ǁ{name}__mutmut_*"
     )
+
+
+# A path segment as a source folder holds it. A bracket is in the set, because a folder name
+# can hold one, and fnmatch reads a bracket in a pattern as a character class.
+_SEGMENT = st.from_regex(r"[a-z_][a-z0-9_.\-\[\]]{0,10}", fullmatch=True)
+_PATH = st.builds(
+    lambda parts: "src/" + "/".join(parts) + ".py",
+    st.lists(_SEGMENT, min_size=1, max_size=4),
+)
+
+
+@given(path=_PATH)
+def test_a_literal_entry_covers_its_own_path(mod: ModuleType, path: str) -> None:
+    """A literal path must match itself, whatever characters it holds.
+
+    ``fnmatch`` reads a ``[`` in the pattern as a character class, so a covered path that
+    holds a bracket did not match its own literal entry.
+    """
+    assert mod.is_covered(path, [path])
+
+
+@given(path=_PATH, other=_PATH)
+def test_an_extra_glob_never_takes_a_covered_path_away(
+    mod: ModuleType, path: str, other: str
+) -> None:
+    """A list is a union, so one more entry can add a match and never remove one."""
+    assert mod.is_covered(path, [path, other])
+
+
+def test_a_glob_entry_still_matches_the_files_it_names(mod: ModuleType) -> None:
+    assert mod.is_covered("src/hockey_model/sources/nhl.py", ["src/hockey_model/sources/*.py"])
+    assert not mod.is_covered("src/hockey_model/other/nhl.py", ["src/hockey_model/sources/*.py"])

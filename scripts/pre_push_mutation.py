@@ -253,8 +253,13 @@ def covered_globs(repo: Path) -> list[str]:
 
 
 def is_covered(path: str, globs: list[str]) -> bool:
-    """Return True when ``path`` matches one of the covered globs."""
-    return any(fnmatch.fnmatchcase(path, glob) for glob in globs)
+    """Return True when ``path`` matches one of the covered globs.
+
+    An entry of ``[tool.mutmut] only_mutate`` is often a literal path, and a literal path
+    must match itself. ``fnmatch`` reads a ``[`` in the pattern as a character class, so a
+    literal equal is checked first, and only an entry that the literal check missed is a glob.
+    """
+    return any(path == glob or fnmatch.fnmatchcase(path, glob) for glob in globs)
 
 
 def changed_lines(repo: Path, base: str, path: str) -> set[int]:
