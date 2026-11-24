@@ -161,13 +161,19 @@ job_holds() {
 # Print the longest of the --timeout values. A run with no job start can reach the group with
 # whichever job it admits first, so the longest window is the one to plan for (#311).
 longest_timeout() {
-  local name longest=0
-  for name in "${!TIMEOUTS[@]}"; do
-    if ((${TIMEOUTS[$name]} > longest)); then
-      longest="${TIMEOUTS[$name]}"
-    fi
-  done
-  printf '%s' "$longest"
+  printf '%s\n' "${TIMEOUTS[@]}" | sort -n | tail -n 1
+}
+
+# Print the later of two ISO 8601 UTC instants. An empty instant is younger than any value, so
+# a caller can start from nothing and pass every end through this. ISO 8601 UTC strings
+# compare correctly as text while both sides end in `Z`.
+latest_of() {
+  local first="$1" second="$2" later
+  later="$second"
+  if [[ -z "$second" || "$first" > "$second" ]]; then
+    later="$first"
+  fi
+  printf '%s' "$later"
 }
 
 # Print the instant that a window ends. The window opens at $1 and lasts $2 minutes. A jq
@@ -186,7 +192,7 @@ window_end() {
 # longest window from now. Without this, a run seconds after its start reads as no prepare, and
 # the report gate lets a replace build run into the puck drop (#311).
 run_answer() {
-  local run_id="$1" holds job start end latest_end="" listed="" gate_done=""
+  local run_id="$1" holds job start end latest_end="" listed="" gate_done="" longest
   holds="$(job_holds "$run_id")" || return 1
   while read -r job start; do
     [[ -n "$job" ]] || continue
@@ -203,14 +209,13 @@ run_answer() {
         "${run_id} gave as the start of job ${job}: $end" >&2
       return 1
     fi
-    if [[ -z "$latest_end" || "$end" > "$latest_end" ]]; then
-      latest_end="$end"
-    fi
+    latest_end="$(latest_of "$end" "$latest_end")"
   done <<<"$holds"
   if [[ -z "$latest_end" && "$listed" == 0 && "$gate_done" == 0 ]]; then
-    if ! latest_end="$(window_end "$now" "$(longest_timeout)")"; then
-      echo "prep-running: cannot add $(longest_timeout) minutes to '${now}', which this" \
-        "script read as the current time: $latest_end" >&2
+    longest="$(longest_timeout)"
+    if ! latest_end="$(window_end "$now" "$longest")"; then
+      echo "prep-running: cannot add ${longest} minutes to '${now}', which this script" \
+        "read as the current time: $latest_end" >&2
       return 1
     fi
   fi
@@ -219,9 +224,9 @@ run_answer() {
 
 # Print the end of the window of one status, or nothing when that status holds no prepare run.
 # A status that holds a prepare run breaks the caller's loop, because an earlier status holds
-# the group first. ISO 8601 UTC strings compare correctly as text while both sides end in `Z`.
+# the group first.
 status_answer() {
-  local status="$1" ids id answer start end latest_end="" longest=0 name
+  local status="$1" ids id answer start end latest_end="" longest
   # The run list holds every event, so this read keeps the runs of any event.
   if ! ids="$(run_list_ids "$workflow" "" "" "$status")"; then
     return 1
@@ -235,11 +240,7 @@ status_answer() {
   # check job, so the longest window is the one that the report must plan for (#311).
   if [[ "$status" != "in_progress" ]]; then
     start="$now"
-    for name in "${!TIMEOUTS[@]}"; do
-      if ((${TIMEOUTS[$name]} > longest)); then
-        longest="${TIMEOUTS[$name]}"
-      fi
-    done
+    longest="$(longest_timeout)"
     if ! end="$(window_end "$start" "$longest")"; then
       echo "prep-running: cannot add ${longest} minutes to '${start}', which this script" \
         "read as the current time: $end" >&2
@@ -253,9 +254,7 @@ status_answer() {
     # run_answer names the cause on stderr, so this level adds nothing.
     answer="$(run_answer "$id")" || return 1
     [[ -n "$answer" ]] || continue
-    if [[ -z "$latest_end" || "$answer" > "$latest_end" ]]; then
-      latest_end="$answer"
-    fi
+    latest_end="$(latest_of "$answer" "$latest_end")"
   done <<<"$ids"
   printf '%s' "$latest_end"
 }
