@@ -136,7 +136,7 @@ job_holds() {
     echo "prep-running: cannot read the jobs of run ${run_id}: $(cat "$run_list_err")" >&2
     return 1
   fi
-  if ! names="$(printf '%s\n' "${!TIMEOUTS[@]}" | jq -R . | jq -cs . 2>&1)"; then
+  if ! names="$(jq -cn '$ARGS.positional' --args "${!TIMEOUTS[@]}" 2>&1)"; then
     echo "prep-running: cannot build the list of job names: $names" >&2
     return 1
   fi
