@@ -4,7 +4,6 @@ The backtest uses no price data. It scores the model against the results of the 
 home win rate, and the results-only Elo.
 """
 
-import math
 import sqlite3
 import sys
 import time
@@ -38,7 +37,12 @@ from hockey_model.game_model.imputation import (
     check_imputation,
     feature_quality,
 )
-from hockey_model.game_model.logistic import LogisticFit, fit_logistic, predict_logistic
+from hockey_model.game_model.logistic import (
+    LogisticFit,
+    fit_logistic,
+    predict_logistic,
+    sigmoid,
+)
 from hockey_model.game_model.seasons import DEFAULT_PLAN, SeasonPlan, in_cohort, scored_label
 from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
@@ -274,7 +278,7 @@ def _score_seasons(
                 _Scored(
                     row,
                     {
-                        ELO: 1.0 / (1.0 + math.exp(-row.features.elo_logit)),
+                        ELO: sigmoid(row.features.elo_logit),
                         HOME_RATE: home_rate,
                         MODEL_ACTUAL: predict_logistic(fit, row.features),
                         MODEL_GUESS: predict_logistic(fit, by_game[row.game.game_id].features),
