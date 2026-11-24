@@ -15,9 +15,17 @@ _MUTATION = ".github/workflows/mutation.yml"
 STATUSES = ["in_progress", "pending", "queued", "waiting", "requested"]
 
 
-def _runs(*runs: tuple[str, str]) -> str:
-    """Return a run list payload. Each pair is the workflow path and the event."""
-    rows = [{"id": 1000 + n, "path": path, "event": event} for n, (path, event) in enumerate(runs)]
+def _runs(*runs: tuple[str, str] | tuple[str, str, str]) -> str:
+    """Return a run list payload. Each tuple is the workflow path, the event, and the branch."""
+    rows = [
+        {
+            "id": 1000 + n,
+            "path": run[0],
+            "event": run[1],
+            "head_branch": run[2] if len(run) > 2 else "main",
+        }
+        for n, run in enumerate(runs)
+    ]
     return json.dumps({"workflow_runs": rows})
 
 
@@ -81,6 +89,55 @@ def test_the_workflow_argument_ignores_the_default_workflow(fakes: Path, tmp_pat
         check=False,
     )
     assert (result.returncode, result.stdout) == (0, "no\n")
+
+
+def _run_with(
+    fakes: Path, tmp_path: Path, args: tuple[str, ...], runs: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=tmp_path,
+        env=_env(fakes, tmp_path, FAKE_RUNS_JSON=runs),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("branch", "expected"),
+    [("main", "yes\n"), ("feat/x", "no\n")],
+)
+def test_the_branch_argument_keeps_only_the_runs_of_that_branch(
+    fakes: Path, tmp_path: Path, branch: str, expected: str
+) -> None:
+    """A manual run on a feature branch must not make the scheduled run of main stand aside."""
+    runs = _runs((_MUTATION, "workflow_dispatch", branch))
+    result = _run_with(fakes, tmp_path, ("mutation.yml", "--branch", "main"), runs)
+    assert (result.returncode, result.stdout) == (0, expected)
+
+
+def test_without_a_branch_argument_a_run_of_any_branch_counts(fakes: Path, tmp_path: Path) -> None:
+    """The store group is shared by every branch, so the prepare answer reads all of them."""
+    runs = _runs((_PREPARE, "workflow_dispatch", "feat/x"))
+    result = _run_with(fakes, tmp_path, (), runs)
+    assert (result.returncode, result.stdout) == (0, "yes\n")
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("--branch",), "--branch needs a branch name"),
+        (("--branch", ""), "--branch needs a branch name"),
+        (("--branch", "main", "--branch", "x"), "only one --branch is allowed"),
+    ],
+)
+def test_a_bad_branch_argument_is_refused(
+    fakes: Path, tmp_path: Path, args: tuple[str, ...], message: str
+) -> None:
+    result = _run_with(fakes, tmp_path, args, _runs())
+    assert result.returncode == 2
+    assert message in result.stderr
 
 
 @pytest.mark.parametrize(

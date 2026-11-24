@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Say whether a manual daily-prepare run waits for the store group or holds it.
 #
-# Usage: manual-prepare-pending.sh [WORKFLOW] [--help]
-#   WORKFLOW  File name of the workflow to read, such as daily-prepare.yml. The default is
-#             daily-prepare.yml. A value that holds a slash is refused.
+# Usage: manual-prepare-pending.sh [WORKFLOW] [--branch NAME] [--help]
+#   WORKFLOW      File name of the workflow to read, such as daily-prepare.yml. The default is
+#                 daily-prepare.yml. A value that holds a slash is refused.
+#   --branch NAME Count only the runs on this branch. Without it, a run on any branch counts.
+#                 The prepare workflows leave it out, because one store group serves every
+#                 branch. The mutation workflow names main, because only a run on main files
+#                 a report, so a manual run on another branch must not stop the scheduled one.
 #
 # Prints `yes` when a run of that workflow that a person started (event workflow_dispatch) is
 # pending, queued, waiting, requested, or running. Prints `no` otherwise. A scheduled run
@@ -21,6 +25,8 @@ set -euo pipefail
 source "$(dirname "$0")/usage.sh"
 
 workflow="daily-prepare.yml"
+branch=""
+branch_given=0
 # A count of the positional arguments, because a guard that compares the value with the
 # default accepts the default twice.
 named=0
@@ -29,6 +35,19 @@ while (($# > 0)); do
   -h | --help)
     usage
     exit 0
+    ;;
+  --branch)
+    if ((branch_given > 0)); then
+      echo "manual-prepare-pending: only one --branch is allowed; see --help" >&2
+      exit 2
+    fi
+    if (($# < 2)) || [[ -z "$2" ]]; then
+      echo "manual-prepare-pending: --branch needs a branch name; see --help" >&2
+      exit 2
+    fi
+    branch="$2"
+    branch_given=1
+    shift 2
     ;;
   -*)
     echo "manual-prepare-pending: unknown argument '$1'; see --help" >&2
@@ -70,9 +89,10 @@ for status in in_progress pending queued waiting requested; do
     echo "manual-prepare-pending: cannot read the ${status} workflow runs: $(cat "$err")" >&2
     exit 2
   fi
-  if ! found="$(jq -rs --arg workflow "/${workflow}" '
+  if ! found="$(jq -rs --arg workflow "/${workflow}" --arg branch "$branch" '
     [.[].workflow_runs[]
       | select((.path // "") | endswith($workflow))
+      | select($branch == "" or .head_branch == $branch)
       | select(.event == "workflow_dispatch")] | length
   ' <<<"$runs" 2>"$err")"; then
     echo "manual-prepare-pending: cannot read the ${status} workflow run list: $(cat "$err")" >&2

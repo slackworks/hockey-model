@@ -38,7 +38,8 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pending="$(bash scripts/manual-prepare-pending.sh mutation.yml)" || {
+          # Only a manual run on main files a report, so a run on another branch does not count.
+          pending="$(bash scripts/manual-prepare-pending.sh mutation.yml --branch main)" || {
             echo "::error::The lookup of manual mutation runs failed, so this run stops."
             exit 1
           }

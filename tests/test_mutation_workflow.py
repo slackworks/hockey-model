@@ -155,3 +155,9 @@ def test_the_merge_job_uploads_the_timeout_list_beside_the_stats() -> None:
 def test_a_cancelled_run_files_no_report(name: str) -> None:
     """A job whose `if` holds always() ignores a cancel, so a cancelled run would file an issue."""
     assert "always()" not in job_condition(_text(), name)
+
+
+def test_the_gate_stands_aside_only_for_a_manual_run_of_main() -> None:
+    """A manual run on a feature branch writes no report, so it must not stop the main run."""
+    gate = _job("gate")
+    assert "scripts/manual-prepare-pending.sh mutation.yml --branch main" in gate
