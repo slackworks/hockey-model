@@ -202,6 +202,25 @@ def test_a_change_after_the_keys_are_made_stops_the_workers(
     assert {int(n.split("-")[1]) for n in _names(seeded)} <= {2, 3}
 
 
+def test_the_fork_helper_puts_the_default_start_method_back() -> None:
+    """A worker that keeps spawn changes every later test in the same worker.
+
+    CI on Linux runs the default method, which is forkserver. A helper that puts spawn back
+    after a fork test hides a difference between that test and CI.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("this platform has no fork start method")
+    previous = multiprocessing.get_start_method(allow_none=True)
+    # A reset context answers None, which is the case that the helper got wrong.
+    multiprocessing.set_start_method(None, force=True)
+    try:
+        with _fork_start_method():
+            assert multiprocessing.get_start_method() == "fork"
+        assert multiprocessing.get_start_method(allow_none=True) is None
+    finally:
+        multiprocessing.set_start_method(previous or "spawn", force=True)
+
+
 @contextlib.contextmanager
 def _fork_start_method() -> Generator[None]:
     """Run the pool under fork, as a mutation run does, then put the previous method back."""
@@ -212,7 +231,9 @@ def _fork_start_method() -> Generator[None]:
     try:
         yield
     finally:
-        multiprocessing.set_start_method(previous or "spawn", force=True)
+        # None with force resets the context to the platform default, so a later test in the
+        # same worker runs under the method that CI uses.
+        multiprocessing.set_start_method(previous, force=True)
 
 
 # The test forks on purpose, as a mutation run does. A pytest-xdist worker holds its own
