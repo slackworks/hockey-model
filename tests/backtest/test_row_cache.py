@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from test_runner_store import PLAN, seed
 
 from hockey_model.backtest.row_cache import KEEP_FEATURE_LISTS, SeasonFile, cache_dir
@@ -390,6 +392,42 @@ def test_lists_with_the_same_file_time_are_ranked_by_tag_and_not_by_the_listing(
     newcomer.save(rows)
     by_tag = sorted(files, key=lambda f: f.path.name.split("-")[2])
     assert [f.path.exists() for f in by_tag] == [True] * (KEEP_FEATURE_LISTS - 1) + [False] * 2
+
+
+# A file time comes from the filesystem, so the test sets each file to a whole second instead.
+_MOMENT = 1_700_000_000
+_MAX_LISTS = 12
+# A drawn list of (age in seconds, list name) pairs, with no name twice and many ages equal.
+_ENTRIES = st.lists(
+    st.tuples(st.integers(min_value=0, max_value=1000), st.integers(min_value=0, max_value=9999)),
+    min_size=1,
+    max_size=_MAX_LISTS,
+    unique_by=lambda pair: pair[1],
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(entries=_ENTRIES)
+def test_a_save_keeps_the_newest_feature_lists_and_the_one_it_saved(
+    tmp_path_factory: pytest.TempPathFactory, entries: list[tuple[int, str]]
+) -> None:
+    """The retention rule: the saved list stays, and the rest rank by file time, then tag."""
+    directory = tmp_path_factory.mktemp("retention")
+    files = [_file(directory, names=(f"list{name}",)) for _, name in entries]
+    stamps: dict[SeasonFile, int] = {}
+    for (age, _), file in zip(entries, files, strict=True):
+        file.path.write_text("")
+        stamps[file] = _MOMENT - age
+        os.utime(file.path, (stamps[file], stamps[file]))
+    # The saved list holds the oldest file time, so only its own place keeps it.
+    newcomer = _file(directory, names=("newcomer",))
+    newcomer.path.write_text("")
+    stamps[newcomer] = _MOMENT - max(age for age, _ in entries) - 1
+    os.utime(newcomer.path, (stamps[newcomer], stamps[newcomer]))
+    newcomer._remove_other_lists()
+    ranked = sorted([*files, newcomer], key=lambda f: (f is not newcomer, -stamps[f], f._tag))
+    survivors = {f._tag for f in [*files, newcomer] if f.path.exists()}
+    assert survivors == {f._tag for f in ranked[:KEEP_FEATURE_LISTS]}
 
 
 def test_a_file_that_another_run_removed_before_the_mark_is_not_a_warning(

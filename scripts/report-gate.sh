@@ -2,16 +2,18 @@
 # Decide whether this scheduled trigger publishes the daily report.
 #
 # Usage: report-gate.sh [--date YYYY-MM-DD] [--force] [--dry-run]
-#                       [--margin-seconds N] [--prep-started ISO] [--help]
+#                       [--margin-seconds N] [--prep-ends ISO] [--help]
 #   --date   Eastern game day to check. Default: the game day that holds now.
 #   --force  Publish even outside the trigger slot. A day that is already
 #            published is still skipped.
 #   --margin-seconds  Seconds the build needs after this run starts. A published day is replaced
 #            only when the run can finish before the first puck drop. Default: 0.
-#   --prep-started ISO
-#            Start of the daily-prepare run that holds the store group now, or empty when no
-#            run holds it. The report queues behind that run, and GitHub counts the prepare
-#            timeout from its start, so a late prepare can hold the group past the puck drop.
+#   --prep-ends ISO
+#            End of the window of the daily-prepare job that holds the store group now, or
+#            empty when no run holds it, as prep-running.sh prints it. The report queues
+#            behind that run, so a prepare that holds the group past the puck drop is a
+#            prepare that blocks the report. A skip job of a prepared day holds the group
+#            for minutes, and a rebuild job for hours (#311).
 #   --dry-run  Build a report that the caller does not publish. This implies --force,
 #            and the published-release check is skipped, so a published day is due again.
 #
@@ -28,16 +30,24 @@
 #   dry-run             the report is built and not published
 #   prepare-wait        a prepare run holds the store group and can run past the puck drop, so
 #                       this run would publish after it; the run is skipped and not built
+#   manual-wait         a manual prepare run waits or runs, and this run would replace a
+#                       published day; the run is skipped and not built (#295)
 # Exits non-zero when the schedule payload is malformed, the release lookup fails, the
-# decision step fails or prints a payload that lacks a field, or the day has no game inside
-# its window while the feed lists a game outside it.
+# decision step fails or prints a payload that lacks a field, the manual-run lookup fails,
+# or the day has no game inside its window while the feed lists a game outside it.
 set -euo pipefail
+
+# The gate reads the feed and the release, and the release read is the only call that needs a
+# token. read_token holds the value for that call, and the export goes away here, so the feed
+# read and the decision step never see it (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
 
 day=""
 have_date=false
 force=false
 dry_run=false
-prep_started=""
+prep_ends=""
 margin_s=0
 
 # shellcheck source=scripts/usage.sh
@@ -66,12 +76,12 @@ while (($# > 0)); do
     force=true
     shift
     ;;
-  --prep-started)
+  --prep-ends)
     if (($# < 2)); then
-      echo "report-gate: --prep-started needs an ISO instant; see --help" >&2
+      echo "report-gate: --prep-ends needs an ISO instant; see --help" >&2
       exit 2
     fi
-    prep_started="$2"
+    prep_ends="$2"
     shift 2
     ;;
   --dry-run)
@@ -98,6 +108,19 @@ if [[ "$have_date" == true ]] && ! is_valid_day "$day"; then
   echo "report-gate: --date '$day' is not a real date YYYY-MM-DD; see --help" >&2
   exit 2
 fi
+# prep-running.sh writes this shape, and every caller passes what it prints. A wrong value
+# would otherwise reach report-due, which stops with its own error after the workflow has
+# already spent a runner and a store checkout. The shape check alone accepts 2026-02-30, so
+# the round trip through fromdateiso8601 reads the value as a real instant too (#313).
+if [[ -n "$prep_ends" ]]; then
+  if [[ ! "$prep_ends" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+    ! jq -en --arg d "$prep_ends" '($d | fromdateiso8601 | todateiso8601) == $d' \
+      >/dev/null 2>&1; then
+    echo "report-gate: --prep-ends '$prep_ends' is not a real ISO 8601 UTC instant such as" \
+      "2026-11-22T18:00:00Z; see --help" >&2
+    exit 2
+  fi
+fi
 
 # The schedule read is one HTTP request. Each run then makes one release lookup, so a
 # run after the puck drop is still answered from the release state.
@@ -110,8 +133,10 @@ if [[ "$force" == true ]]; then
   args+=(--force)
 fi
 args+=(--margin-seconds "$margin_s")
-args+=(--prep-started "$prep_started")
-status_json="$(uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
+args+=(--prep-ends "$prep_ends")
+# The token is unset at the top of this script, and REPORT_GH_TOKEN goes here, because a read
+# of the schedule needs no credential and this step must never use a write scope.
+status_json="$(env -u REPORT_GH_TOKEN uv run hockey-model report-due ${args[@]+"${args[@]}"})" || {
   echo "report-gate: report-due failed; its error is above" >&2
   exit 1
 }
@@ -119,9 +144,10 @@ required='(.due | type == "boolean") and (.tag | type == "string")'
 required+=' and (.games | type == "number") and (.date | type == "string")'
 required+=' and (.games_outside_window | type == "number")'
 required+=' and (.prep_blocks_report | type == "boolean")'
+required+=' and (.first_puck_drop_utc | type == "string")'
 if ! jq -e "$required" <<<"$status_json" >/dev/null; then
   echo "report-gate: report-due payload lacks due, tag, games, date, games_outside_window," \
-    "or prep_blocks_report: $status_json" >&2
+    "prep_blocks_report, or first_puck_drop_utc: $status_json" >&2
   exit 1
 fi
 tag="$(jq -r '.tag' <<<"$status_json")"
@@ -143,25 +169,26 @@ if [[ "$outside" != "0" ]]; then
   echo "report-gate: warning: $day drops $outside feed game(s) that fall outside its" \
     "window; see report-due's stderr for the game ids" >&2
 fi
-# Optional: only the late-run warning names it.
-first_drop="$(jq -r '.first_puck_drop_utc // ""' <<<"$status_json")"
+first_drop="$(jq -r '.first_puck_drop_utc' <<<"$status_json")"
 blocks="$(jq -r '.prep_blocks_report' <<<"$status_json")"
 # A due run would queue behind that prepare and publish after the puck drop. The gate holds no
 # store lock, so it answers here: this run builds nothing, and the next trigger runs again.
 # A forced run is the operator's call, and it still queues, so it is not refused here.
 if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
   echo "::warning::report-gate: a daily-prepare run holds the hockey-model-store group, and its" \
-    "timeout reaches past the first puck drop of $day. This run would wait behind it and" \
+    "window ends at or after the first puck drop of $day. This run would wait behind it and" \
     "publish after the puck drop, so it builds nothing (#163)." >&2
-  jq -c --arg tag "$tag" --arg date "$day" \
-    '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}' <<<"{}"
+  jq -nc --arg tag "$tag" --arg date "$day" \
+    '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}'
   exit 0
 fi
 
 # The decision is in report_gate.py. This script reads the facts: the schedule above, and the
 # release below. A dry run and a day with no games never reach the release lookup.
 decide() {
-  uv run hockey-model report-decide --due "$due" --games "$games" --date "$day" \
+  # GH_TOKEN is unset at the top of this script, and REPORT_GH_TOKEN could still be set here.
+  env -u REPORT_GH_TOKEN uv run hockey-model report-decide \
+    --due "$due" --games "$games" --date "$day" \
     --first-puck-drop "$first_drop" --margin-seconds "$margin_s" --published "$1" \
     ${force_flag[@]+"${force_flag[@]}"} ${dry_flag[@]+"${dry_flag[@]}"}
 }
@@ -190,7 +217,8 @@ decision="$(decided unknown)" || exit 1
 if [[ "$(jq -r '.lookup_needed' <<<"$decision")" == "true" ]]; then
   # Ask for the one tag. A 404 means the day is not published yet; any other answer (auth,
   # network) stops the run.
-  answer="$(release_status "$tag")"
+  # The release read is the one call of this script that needs the token.
+  answer="$(GH_TOKEN="$read_token" release_status "$tag")"
   case "$answer" in
   published) published=true ;;
   missing) published=false ;;
@@ -205,5 +233,28 @@ warning="$(jq -r '.warning // ""' <<<"$decision")"
 if [[ -n "$warning" ]]; then
   echo "$warning" >&2
 fi
+
+# A run that only replaces a published day can stand aside. A day with no release does not,
+# because it would then have no report at all. The build job shares the store group with a
+# prepare run, and it would take the one waiting slot that the group keeps, so a manual
+# prepare that waits there is lost (#295). A failed lookup stops the run: a wrong "no" loses
+# the manual run, and the next hour tries again. The lookup is a gh call, so it reads the
+# token that the top of the script took back.
+reason="$(jq -r '.reason' <<<"$decision")"
+if [[ "$reason" == "replace" ]]; then
+  pending="$(GH_TOKEN="$read_token" bash "$(dirname "$0")/manual-prepare-pending.sh")" || {
+    echo "report-gate: the manual prepare lookup failed; its error is above" >&2
+    exit 1
+  }
+  if [[ "$pending" == "yes" ]]; then
+    echo "::warning::report-gate: a manual daily-prepare run waits or runs, and $day already" \
+      "has a release. This run would replace the day, and its build would take the one" \
+      "waiting slot of the hockey-model-store group, so it stands aside (#295)." >&2
+    jq -nc --arg tag "$tag" --arg date "$day" \
+      '{due: false, publish: false, tag: $tag, reason: "manual-wait", date: $date}'
+    exit 0
+  fi
+fi
+
 jq -c --arg tag "$tag" --arg date "$day" '{due, publish, tag: $tag, reason, date: $date}' \
   <<<"$decision"

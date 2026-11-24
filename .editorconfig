@@ -18,3 +18,12 @@ indent_style = unset
 
 [*.{tla,cfg}]
 indent_size = unset
+
+# A webarchive is a binary property list, so no text rule applies to it.
+[*.webarchive]
+charset = unset
+end_of_line = unset
+indent_size = unset
+indent_style = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

@@ -54,7 +54,8 @@ It compares only when the release is complete for its newest build: `index-DATE.
 The publish script uploads the versions, then the alias and the index, then the notes, so a failed step leaves the release behind its newest build (#318).
 A release that is behind, which includes a release from before the index, builds and publishes again, and that publish repairs it.
 A complete release goes to `hockey-model report-compare`, which compares the hash of the build with the hash in `report-DATE.json`.
-Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`.
+Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`. The script unsets that variable once at the top and re-exports it as `GH_TOKEN` inside the compare step, so no other command carries a token.
+The gate reads its own token the same way: `report-gate.sh` unsets `GH_TOKEN` at the top and re-exports it on the release read alone, so the feed read and the decision call carry none.
 Equal hashes end the run with reason `unchanged` and no `complete` marker, so the publish job skips.
 An alias with no `inputs_sha256`, from a build before the field existed, counts as changed once.
 The hash covers `schema_version`, so a build with a new report shape publishes again. The shape and the build index are in [report-contract.md](report-contract.md).
@@ -98,26 +99,54 @@ A prepare that fails every hour shows as red `daily-prepare` runs. The green rep
 
 Both workflows share one concurrency group, and GitHub keeps one waiting run for a group.
 A newer waiting run replaces an older one, so a manual `force` prepare that waits behind a running prepare could be replaced by the next run that joins the group (#285).
-The `prepare` job of `daily-prepare.yml` holds the group, and a `gate` job before it has none.
+The `skip` and `prepare` jobs of `daily-prepare.yml` hold the group, and a `gate` job before them has none.
 On a scheduled run the gate calls `scripts/manual-prepare-pending.sh`, and the run stands aside while a manual `daily-prepare` run is pending, queued, waiting, or running.
 A manual dispatch never stands aside.
 A failed lookup fails the gate, so the hourly run turns red and the next hour retries.
-Two cases remain.
-The `build` job of `daily-report.yml` can still take the waiting slot of a manual prepare, because the report must not wait for an operator's rebuild (#295).
-A scheduled gate and a manual dispatch that start in the same few seconds can also race.
+A report run that would only replace a published day stands aside in the same way (#295).
+Its gate calls the same script before it decides, and it skips with reason `manual-wait` while a manual `daily-prepare` run is pending, queued, waiting, or running.
+The report keeps the slot only when the day has no release, because a day with no report is worse than a delayed rebuild.
+A report hour that stands aside leaves the published report in place, and the next hour tries again.
+A failed lookup fails the gate, for the same reason as on the prepare side.
+One case remains.
+A scheduled gate and a manual dispatch that start in the same few seconds can race.
 
 Both workflows share one concurrency group, because both write the cached store.
 The group is on the `build` job of `daily-report.yml`, not on the workflow, so the gate job starts at the trigger.
 A workflow-level group holds the gate back until the prepare ends, and the gate then reads an empty group (#163).
-GitHub counts a job timeout from the job start, so a full prepare can hold the group for `PREP_TIMEOUT` (the prepare job timeout, 180 minutes) past its start.
-The gate reads the start of the prepare run that holds the group, and it skips a due run that would wait, with reason `prepare-wait`.
-The wait ends when the prepare ends, so the report's own budget starts then and adds to the prepare's timeout.
+GitHub counts a job timeout from the job start, so a job can hold the group for its own timeout past its start.
+The prepare is two jobs, because a prepared day and a rebuild hold the group for very different times (#311).
+The `skip` job restores the cache, runs `daily-prepare.sh --check-only`, and saves the cache, with a 10-minute timeout.
+Exit code 4 means the day needs the rebuild, and the `prepare` job then runs with the 180-minute timeout.
+A prepared day ends in the `skip` job, so it holds the group for minutes.
+The group frees only after every holder ends, so the holder that ends last is the one the report waits for.
+`scripts/prep-running.sh` reads the job list of each live `daily-prepare` run and prints the end of the window of that holder.
+The gate passes the end to `report-due` as `--prep-ends`, and a due run whose first puck drop falls at or before that end skips with reason `prepare-wait`.
+The wait ends when that job ends, so the report's own budget starts then and adds to the job window.
 A forced run still queues, because the operator asked for it.
 The concurrency group allows one running run and at most one waiting run.
 A newer waiting run replaces the older one, so a replaced run never publishes.
 Whichever run survives checks the release before it builds, so correctness does not depend on the queue.
-A prepare that skips a prepared day holds the group for seconds, so an hourly prepare does not block the report.
-Only the one prepare of a new day holds the group for hours.
+Only the `prepare` job of a day that needs the rebuild holds the group for hours.
+All three commands name the job timeouts, so `daily-report.yml` passes `--timeout skip=10` and `--timeout prepare=180`.
+A job name that the workflow does not carry matches nothing, and the answer then reads as no prepare.
+A test compares those flags with the `timeout-minutes` of each job, so a rename that misses the workflow fails the gate.
+
+The `prepare` job of the split prepare does not exist in the job list while `skip` runs, and it never exists when the day needs no rebuild.
+The lookup therefore refuses no job name at run time, and an hour that finds a name matches nothing.
+A run that has started no holder yet names the longest timeout instead, because the group can admit the rebuild job first.
+A forced dispatch skips the `skip` job and goes straight to the rebuild, so the long window is the one to plan for.
+
+A rebuild day is the remaining case.
+The `skip` job at minute 14 can find that the day needs the rebuild, and then the `prepare` job takes the group for up to 180 minutes.
+The report gate at minute 44 reads only the window of `skip`, because `prepare` does not exist in the job list while `skip` runs.
+A `skip` job ends in seconds on a warm cache, so its window never stops the report, and the gate can admit a report build for a day that needs the rebuild.
+The race runs in the gap between the end of `skip` and the start of `prepare`, while `build` is the only run that waits.
+A `build` that runs when `prepare` arrives keeps running, and `prepare` waits behind it.
+A `build` that still waits when `prepare` arrives is cancelled, because the newer waiting run replaces it.
+A cancelled build changes no release: a day with a release keeps it, and a day with none is built by the next hour.
+The split from #311 accepts that race to keep the hold of a prepared day to minutes.
+
 
 ## Job overheads
 

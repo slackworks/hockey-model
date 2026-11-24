@@ -117,6 +117,71 @@ def test_prepare_help_names_force(fakes: Path, tmp_path: Path) -> None:
     assert "--force" in result.stdout
 
 
+def test_prepare_help_names_the_check_only_mode(fakes: Path, tmp_path: Path) -> None:
+    """The workflow passes --check-only, and the exit code 4 is its contract with the workflow."""
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--help")
+    assert result.returncode == 0
+    assert "--check-only" in result.stdout
+    assert "Exit code 4" in result.stdout
+
+
+def test_a_check_only_run_of_a_prepared_day_exits_zero(fakes: Path, tmp_path: Path) -> None:
+    _prepare_day(tmp_path)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--check-only")
+    assert result.returncode == 0, result.stderr
+    assert SKIP_WORDS in result.stderr
+    assert not _ran_backtest_or_fit(tmp_path)
+
+
+def test_a_check_only_run_says_the_rebuild_is_needed_with_exit_code_4(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The short job names the rebuild, and the long job then runs the script again (#311)."""
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--check-only")
+    assert result.returncode == 4, result.stderr
+    assert f"{DAY} needs the backtest and the fit" in result.stderr
+    assert not _ran_backtest_or_fit(tmp_path)
+
+
+def test_a_check_only_run_leaves_the_earlier_day_files_in_place(
+    fakes: Path,
+    tmp_path: Path,
+) -> None:
+    """The short job must not remove a file that the report of the day may still read."""
+    _prepare_day(tmp_path, day=EARLIER_DAY)
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--check-only")
+    assert result.returncode == 4, result.stderr
+    assert (_store_dir(tmp_path) / f"prepared-{EARLIER_DAY}").exists()
+
+
+def test_a_check_only_run_says_a_marker_without_a_valid_backtest_needs_the_rebuild(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _prepare_day(tmp_path, backtest="{not json")
+    result = _run("daily-prepare.sh", _prepare_env(fakes, tmp_path), "--date", DAY, "--check-only")
+    assert result.returncode == 4, result.stderr
+    assert "rebuilding" in result.stderr
+    assert not _ran_backtest_or_fit(tmp_path)
+
+
+def test_a_check_only_run_of_a_store_with_no_backfill_exits_4_before_the_refresh(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The backfill needs the long window, so the short job stops before it reads a source."""
+    store = store_path(tmp_path)
+    _store_dir(tmp_path)
+    result = _run(
+        "daily-prepare.sh",
+        _env(fakes, tmp_path, HOCKEY_MODEL_DB=str(store)),
+        "--date",
+        DAY,
+        "--check-only",
+    )
+    assert result.returncode == 4, result.stderr
+    assert "no finished backfill" in result.stderr
+    assert "uv run hockey-model refresh" not in _calls(tmp_path)
+
+
 def test_a_run_for_a_past_day_keeps_the_files_of_today(fakes: Path, tmp_path: Path) -> None:
     """A manual run for an earlier day must not remove the marker of a later day."""
     _prepare_day(tmp_path, day=OTHER_DAY)

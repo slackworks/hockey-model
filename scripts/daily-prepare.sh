@@ -2,12 +2,18 @@
 # Prepare one game day: refresh every source, run the backtest, and fit the model on the
 # features that the backtest kept.
 #
-# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--force] [--help]
+# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--force] [--check-only] [--help]
 #   --date   Eastern game day to prepare. Default: today in Eastern time.
 #   --force  Rebuild the backtest and the fit for a day that is already prepared.
 #            Without it, a day with a prepared-DATE marker and a valid backtest-DATE.json
 #            skips both steps and exits 0 after the refresh. It also deletes the season row
 #            cache beside the store, so every season is built again.
+#   --check-only
+#            Refresh and report whether the day needs a rebuild, then stop. Exit code 0 means
+#            the day is prepared and nothing else is needed. Exit code 4 means the caller must
+#            run this script again without --check-only. The check takes minutes, so the
+#            workflow puts it in a short job that the report gate measures (#311). A store with
+#            no finished backfill exits 4 at once, because the backfill needs the long window.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The first backfill runs until a marker file
 # next to the store says it finished. The backfill reads one year at a time, newest year
@@ -25,6 +31,10 @@ set -euo pipefail
 
 day=""
 force=0
+check_only=0
+# A --check-only run stops at 4 when the day needs a rebuild. The exit code is a contract with
+# daily-prepare.yml, so it sits in one place.
+REBUILD_NEEDED=4
 
 # shellcheck source=scripts/usage.sh
 source "$(dirname "$0")/usage.sh"
@@ -41,6 +51,10 @@ while (($# > 0)); do
     ;;
   --force)
     force=1
+    shift
+    ;;
+  --check-only)
+    check_only=1
     shift
     ;;
   -h | --help)
@@ -85,6 +99,12 @@ if ! command -v jq >/dev/null; then
   exit 1
 fi
 marker="$HOCKEY_MODEL_DB.backfilled"
+# A check-only run cannot run the backfill, because the backfill needs the long window. It
+# reports the rebuild at once, and the long job then reads the store again.
+if [[ "$check_only" == 1 && ! -f "$marker" ]]; then
+  echo "daily-prepare: the store has no finished backfill; the rebuild needs the long job" >&2
+  exit "$REBUILD_NEEDED"
+fi
 if [[ ! -f "$marker" ]]; then
   echo "daily-prepare: the store has no finished backfill; backfilling from 2014-10-01." >&2
   echo "daily-prepare: the backfill reads one year per window, newest first." >&2
@@ -138,6 +158,13 @@ if [[ -f "$store_dir/prepared-$day" ]]; then
   if [[ -n "$why" ]]; then
     echo "daily-prepare: prepared-$day exists but $why; rebuilding" >&2
   fi
+fi
+# A day that reaches this line needs the backtest and the fit. A check-only run says so and
+# stops before it removes any file, so the short job never rebuilds the store. The upgrade
+# and the refresh above already ran, and the check-only run reports from the store they left.
+if [[ "$check_only" == 1 ]]; then
+  echo "daily-prepare: $day needs the backtest and the fit; the rebuild runs in the long job" >&2
+  exit "$REBUILD_NEEDED"
 fi
 
 # Files of earlier days are stale. The release of each day already holds its own copy. A file of

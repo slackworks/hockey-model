@@ -53,9 +53,10 @@ def fakes(tmp_path: Path) -> Path:
     `gh api --include .../releases/tags/TAG` answers 200 for a tag in FAKE_RELEASES and 404
     otherwise, as the real command does. `gh release view TAG` answers the same way for the
     asset read. `gh release create` refuses a tag that already exists. FAKE_GH_FAIL makes
-    every gh call fail with an auth error. `gh api .../actions/runs?status=S` answers
-    FAKE_RUNS_JSON_S when it is set and FAKE_RUNS_JSON otherwise, which defaults to no runs,
-    and it fails when FAKE_RUNS_FAIL is set.
+    every gh call fail with an auth error. FAKE_GH_WARN writes one line to stderr before a
+    successful answer, as gh does for a deprecation. `gh api .../actions/runs?status=S`
+    answers FAKE_RUNS_JSON_S when it is set and FAKE_RUNS_JSON otherwise, which defaults to no
+    runs, and it fails when FAKE_RUNS_FAIL is set.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -63,8 +64,10 @@ def fakes(tmp_path: Path) -> Path:
     gh.write_text(
         "#!/usr/bin/env bash\n"
         'echo "gh $*" >> "$FAKE_CALLS"\n'
-        'echo "gh GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
+        'echo "gh GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ -n "${FAKE_GH_FAIL:-}" ]]; then echo "auth failed" >&2; exit 4; fi\n'
+        'if [[ -n "${FAKE_GH_WARN:-}" ]]; then echo "$FAKE_GH_WARN" >&2; fi\n'
         # The mutation report reads the open issue list. The default is an empty list.
         'if [[ "$1 $2" == "issue list" ]]; then printf "%s\\n" "${FAKE_ISSUES:-[]}"; exit 0; fi\n'
         'if [[ "$1" == "api" ]]; then\n'
@@ -129,7 +132,17 @@ def fakes(tmp_path: Path) -> Path:
         '  echo "release not found" >&2\n'
         "  exit 1\n"
         "fi\n"
-        'if [[ "$1 $2" == "release list" ]]; then printf "%s\\n" "${FAKE_DRAFTS:-}"; exit 0; fi\n'
+        # FAKE_DRAFTS lists tag names, one per line, and each one is a draft. The --json form
+        # answers the shape that gh prints: one object per release.
+        'if [[ "$1 $2" == "release list" ]]; then\n'
+        '  if [[ "$*" == *"--json"* ]]; then\n'
+        '    printf "%s\\n" "${FAKE_DRAFTS:-}" | jq -R -s '
+        "'split(\"\\n\") | map(select(length > 0) | {tagName: ., isDraft: true})'\n"
+        "  else\n"
+        '    printf "%s\\n" "${FAKE_DRAFTS:-}"\n'
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
         'if [[ "$1 $2" == "release create" ]]; then\n'
         '  if grep -qxF "$3" <<<"${FAKE_RELEASES:-}"; then\n'
         '    echo "a release with the same tag name already exists" >&2\n'
@@ -152,7 +165,8 @@ def fakes(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
-        'echo "uv GH_TOKEN=${GH_TOKEN-unset}" >> "${FAKE_ENV_LOG:-/dev/null}"\n'
+        'echo "uv GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         # The mutation report runs the real helper, so its status is the real decision. The
         # path is absolute, because a bare name would find this fake again on PATH.
         'if [[ "$*" == "run python3 scripts/mutation_report.py"* ]]; then\n'

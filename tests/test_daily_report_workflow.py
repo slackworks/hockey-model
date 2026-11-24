@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from mutation_copy import require_path
+from workflow_support import job_condition, job_env, job_text
 
 from hockey_model.report_trigger import TRIGGER_MINUTE_UTC
 
@@ -61,6 +62,18 @@ def test_an_over_budget_report_is_uploaded_and_published() -> None:
     assert "report_complete: ${{ steps.state.outputs.report_complete }}" in text
 
 
+def test_the_gate_job_can_read_the_prepare_runs_it_asks_about() -> None:
+    """The gate lists workflow runs, so it needs the actions scope (#311).
+
+    A token without it gets an empty list, and the gate then reads an idle store group.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    gate = text[text.index("\n  gate:\n") : text.index("\n  build:\n")]
+    permissions = gate[gate.index("    permissions:\n") : gate.index("    outputs:\n")]
+    assert "contents: read" in permissions
+    assert "actions: read" in permissions
+
+
 def test_the_gate_step_checks_each_output_before_it_writes_it() -> None:
     """A jq failure inside an echo argument would pass, and an empty output skips the build."""
     text = WORKFLOW.read_text(encoding="utf-8")
@@ -82,3 +95,25 @@ def test_the_publish_job_runs_one_at_a_time_for_a_day_and_holds_the_token_for_th
     step = publish[publish.index("      - run: bash scripts/publish-daily-report.sh") :]
     assert "GH_TOKEN: ${{ github.token }}" in step
     assert 'UV_NO_SYNC: "1"' in step
+
+
+def test_the_check_job_holds_no_token_outside_the_game_day_step() -> None:
+    """The live feed check reads the store, and a job-level token reaches it anyway.
+
+    `env -u GH_TOKEN` inside that script cannot remove a token that the job sets for every
+    step, so only the step that reads the release may carry it.
+    """
+    check_file = require_path(WORKFLOW.with_name("daily-report-check.yml"))
+    text = check_file.read_text(encoding="utf-8")
+    assert "GH_TOKEN" not in job_env(text, "check")
+    step = job_text(text, "check")
+    step = step[step.index("- name: Check the game day") :]
+    step = step[: step.index("- id: restore")]
+    assert "GH_TOKEN: ${{ github.token }}" in step
+
+
+def test_a_cancelled_run_does_not_publish() -> None:
+    """A job whose `if` holds always() ignores a cancel, so a cancelled run would still publish."""
+    condition = job_condition(WORKFLOW.read_text(encoding="utf-8"), "publish")
+    assert "always()" not in condition
+    assert "!cancelled()" in condition

@@ -38,6 +38,10 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # The gate reads the live prepare runs, which the script reads from the runs API.
+      actions: read
     outputs:
       due: ${{ steps.gate.outputs.due }}
       publish: ${{ steps.gate.outputs.publish }}
@@ -53,7 +57,8 @@ jobs:
       - id: gate
         env:
           # A prepare run holds the store group. This job holds nothing, so it can read the
-          # running runs; a report run cannot wait for that answer.
+          # running runs; a report run cannot wait for that answer. report-gate.sh reads this
+          # token once and unsets it, then re-exports it for the release read alone.
           GH_TOKEN: ${{ github.token }}
           DISPATCH_FORCE: ${{ inputs.force }}
           DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
@@ -65,12 +70,17 @@ jobs:
           if [[ "$DISPATCH_DRY_RUN" == "true" ]]; then
             args+=(--dry-run)
           fi
-          if ! prep_started="$(bash scripts/prep-running.sh)"; then
+          # The lookup names the end of the window of the prepare job that holds the group
+          # (#311). A skip job of a prepared day holds the group for 10 minutes, and a rebuild
+          # job holds it for up to 180, so the timeout of each job is named here. A name that
+          # the workflow does not carry fails the test that compares the two files.
+          if ! prep_ends="$(bash scripts/prep-running.sh --timeout skip=10 \
+            --timeout prepare=180)"; then
             echo "::error::the prepare-run lookup failed, so this run cannot tell whether" \
               "it would wait behind a prepare run" >&2
             exit 1
           fi
-          args+=(--prep-started "$prep_started")
+          args+=(--prep-ends "$prep_ends")
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json
@@ -126,8 +136,9 @@ jobs:
           exit 1
       - env:
           HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
-          # Only the release calls of the compare step read this token (REPORT_GH_TOKEN in
-          # daily-report.sh), so the feed reads and the packages never see it.
+          # daily-report.sh reads this token once and unsets it at the top, so only the gh
+          # release calls of the compare step carry it. The feed reads and the packages never
+          # see it.
           REPORT_GH_TOKEN: ${{ github.token }}
         # The step limit stops a hung read while the job still holds the store group. The budget
         # that the script enforces is REPORT_BUDGET_S above.
@@ -178,14 +189,17 @@ jobs:
     needs: [gate, build]
     # Publishes only a complete report. A build that overran the budget still publishes, and
     # the build job stays failed, so the overrun remains visible. A crash never publishes.
+    # A cancel stops the run, so the condition uses !cancelled() and not always().
     if: >-
-      always() && needs.gate.outputs.publish == 'true'
+      !cancelled() && needs.gate.outputs.publish == 'true'
       && needs.build.outputs.report_complete == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The script reads index-DATE.json from the release, adds this build, and uploads it again.
-    # Two publishes of one day at once would drop an entry, so they run one at a time. A third
-    # publish that waits replaces the second, and the next hourly run publishes that build again.
+    # Two publishes of one day at once would drop an entry, so they run one at a time. A publish
+    # that waits behind another is replaced. While the day has no release, the next hourly run
+    # builds and publishes it again. After the first puck drop, the newer build stands for the
+    # day, and the replaced build leaves no entry in the index (#313).
     concurrency:
       group: hockey-model-publish-${{ needs.gate.outputs.day }}
       cancel-in-progress: false

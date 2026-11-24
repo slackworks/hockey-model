@@ -75,6 +75,88 @@ def test_gate_replaces_a_published_day_before_the_puck_drop(fakes: Path, tmp_pat
     }
 
 
+# --- gate: a manual prepare waits (#295) --------------------------------------
+
+
+_PREPARE_WORKFLOW = ".github/workflows/daily-prepare.yml"
+
+
+def _manual_prepare(*runs: tuple[str, str]) -> str:
+    """Return a run list payload. Each pair is the workflow path and the event."""
+    rows = [{"id": 2000 + n, "path": path, "event": event} for n, (path, event) in enumerate(runs)]
+    return json.dumps({"workflow_runs": rows})
+
+
+def _a_manual_prepare() -> str:
+    """Return the run list payload of one waiting manual daily-prepare run."""
+    return _manual_prepare((_PREPARE_WORKFLOW, "workflow_dispatch"))
+
+
+def test_gate_stands_aside_a_replace_while_a_manual_prepare_waits(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The build would take the one waiting slot of the store group, and the manual run is lost."""
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "due": False,
+        "publish": False,
+        "tag": TAG,
+        "reason": "manual-wait",
+        "date": DAY,
+    }
+    assert "::warning::report-gate: a manual daily-prepare run waits or runs" in result.stderr
+    assert "#295" in result.stderr
+
+
+def test_gate_replaces_a_published_day_when_no_manual_prepare_waits(
+    fakes: Path, tmp_path: Path
+) -> None:
+    env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "replace"
+
+
+def test_gate_keeps_a_due_run_when_a_manual_prepare_waits(fakes: Path, tmp_path: Path) -> None:
+    """A day with no release stands aside for nothing, because that would lose the report."""
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "due"
+    assert "manual-wait" not in result.stdout
+
+
+def test_gate_does_not_ask_about_a_manual_prepare_on_an_already_published_day(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The run builds nothing, so it takes no slot, and it needs no lookup."""
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(due=False), FAKE_RELEASES=f"{TAG}\n")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert json.loads(result.stdout)["reason"] == "already-published"
+    assert not any("workflow_dispatch" in line for line in _calls(tmp_path))
+
+
+def test_gate_fails_when_the_manual_prepare_lookup_fails(fakes: Path, tmp_path: Path) -> None:
+    """A wrong `no` cancels the manual run, so a failed lookup stops this run instead."""
+    env = _env(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_RUNS_FAIL="1")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "the manual prepare lookup failed" in result.stderr
+    assert "cannot read the in_progress workflow runs" in result.stderr
+
+
 def test_gate_forced_run_does_not_replace_a_published_day(fakes: Path, tmp_path: Path) -> None:
     due = due_json()
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due, FAKE_RELEASES=f"{TAG}\n")
@@ -146,6 +228,45 @@ def test_gate_rejects_a_margin_that_is_not_whole_seconds(fakes: Path, tmp_path: 
     assert "--margin-seconds needs whole seconds" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "tomorrow",
+        "2026-11-22T18:00:00",
+        "2026-11-22 18:00:00Z",
+        # A day that no calendar holds matches the shape, so the check reads the meaning.
+        "2026-02-30T00:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-99-99T99:99:99Z",
+    ],
+)
+def test_gate_refuses_a_prepare_end_that_is_not_an_iso_instant(
+    fakes: Path, tmp_path: Path, value: str
+) -> None:
+    """A value that prep-running.sh cannot write is refused before the store is touched.
+
+    report-due stops on the same value with its own error, but only after the workflow has
+    paid for a runner and a store checkout. The argument check answers first, with exit 2.
+    """
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--prep-ends", value)
+    assert result.returncode == 2
+    assert "is not a real ISO 8601 UTC instant" in result.stderr
+    assert result.stdout == ""
+    assert not any("report-due" in line for line in _calls(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "value", ["2026-11-22T18:00:00Z", "2026-01-01T00:00:00Z", "2028-02-29T23:59:59Z"]
+)
+def test_gate_accepts_a_prepare_end_that_a_calendar_holds(
+    fakes: Path, tmp_path: Path, value: str
+) -> None:
+    """A leap day is a real instant, so the meaning check must not refuse the shape."""
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--prep-ends", value)
+    assert any(f"--prep-ends {value}" in line for line in _calls(tmp_path))
+    assert "is not a real ISO 8601 UTC instant" not in result.stderr
+
+
 def test_gate_dry_run_builds_a_published_day_without_a_release_lookup(
     fakes: Path, tmp_path: Path
 ) -> None:
@@ -210,6 +331,81 @@ def test_gate_fails_on_a_payload_without_the_gate_fields(
     assert "lacks due, tag, games, date, games_outside_window" in result.stderr
 
 
+def test_gate_fails_on_a_payload_without_the_first_puck_drop(fakes: Path, tmp_path: Path) -> None:
+    """The late-run warning names the puck drop, so a payload without it must stop the gate."""
+    payload = json.loads(due_json())
+    del payload["first_puck_drop_utc"]
+    env = _env(fakes, tmp_path, FAKE_DUE_JSON=json.dumps(payload))
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 1
+    assert "first_puck_drop_utc" in result.stderr
+
+
+def test_a_replace_run_carries_the_token_into_the_manual_prepare_lookup(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The lookup is a gh call, and the top of the script unsets the token for every other one.
+
+    A replace run is the normal case once a day is published, and it runs every hour until
+    puck drop. Without the token the lookup exits 2, so the gate failed red instead of
+    standing aside (#295).
+    """
+    log = tmp_path / "env.log"
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_ENV_LOG=str(log),
+        GH_TOKEN="a-token",
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_RUNS_JSON=_a_manual_prepare(),
+    )
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reason"] == "manual-wait"
+    gh_calls = [
+        line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("gh ")
+    ]
+    assert gh_calls, "the gate made no gh call"
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
+
+
+def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None:
+    """The gate reads the schedule and the decision in Python, so it carries no token.
+
+    The release lookup is the one call that needs the token, and it is a gh call. Every uv
+    call makes an HTTP read of its own, so it must not see the token. The script unsets
+    GH_TOKEN once at the top and re-exports it for the release read only (#313).
+    """
+    log = tmp_path / "env.log"
+    env = _env(fakes, tmp_path, FAKE_ENV_LOG=str(log), GH_TOKEN="a-token")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    calls = [line for line in lines if line.startswith("uv ")]
+    assert len(calls) == 3, calls
+    assert all(" GH_TOKEN=unset REPORT_GH_TOKEN=unset" in line for line in calls), calls
+    gh_calls = [line for line in lines if line.startswith("gh ")]
+    assert gh_calls, lines
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
+
+
+def test_gate_decision_calls_carry_no_report_token(fakes: Path, tmp_path: Path) -> None:
+    """The report workflow sets REPORT_GH_TOKEN on its build step, so a uv call must drop it.
+
+    A gate step that inherits the variable from a parent step would hand the token to the
+    schedule read and the decision call, and neither needs one (#313).
+    """
+    log = tmp_path / "env.log"
+    env = _env(fakes, tmp_path, FAKE_ENV_LOG=str(log), REPORT_GH_TOKEN="a-token")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    calls = [
+        line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("uv ")
+    ]
+    assert len(calls) == 3, calls
+    assert all(" REPORT_GH_TOKEN=unset" in line for line in calls), calls
+
+
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
     fakes: Path, tmp_path: Path
 ) -> None:
@@ -256,9 +452,9 @@ def test_gate_names_a_failed_report_due_call(fakes: Path, tmp_path: Path) -> Non
 def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
     fakes: Path, tmp_path: Path
 ) -> None:
-    """The wait is not inside the prepare timeout, so the run can start after the puck drop."""
+    """The window of the prepare that holds the group reaches the puck drop, so the run waits."""
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["due"] is False
@@ -273,20 +469,20 @@ def test_gate_skips_a_due_run_that_a_prepare_would_hold_past_the_puck_drop(
 
 def test_gate_passes_the_prepare_start_to_report_due(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path)
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
-    assert f"--prep-started {STARTED}" in _calls(tmp_path)[0]
+    assert f"--prep-ends {STARTED}" in _calls(tmp_path)[0]
 
 
 def test_gate_refuses_a_prepare_start_with_no_value(fakes: Path, tmp_path: Path) -> None:
-    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", DAY, "--prep-started")
+    result = _run("report-gate.sh", _env(fakes, tmp_path), "--date", DAY, "--prep-ends")
     assert result.returncode == 2
-    assert "--prep-started needs an ISO instant" in result.stderr
+    assert "--prep-ends needs an ISO instant" in result.stderr
 
 
 def test_gate_decides_when_no_prepare_run_holds_the_group(fakes: Path, tmp_path: Path) -> None:
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=False))
-    result = _run("report-gate.sh", env, "--date", DAY, "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["due"] is True
 
@@ -294,7 +490,7 @@ def test_gate_decides_when_no_prepare_run_holds_the_group(fakes: Path, tmp_path:
 def test_gate_does_not_skip_a_forced_run_that_would_wait(fakes: Path, tmp_path: Path) -> None:
     # A forced run is the operator's call. It still queues, and the gate says so, but it runs.
     env = _env(fakes, tmp_path, FAKE_DUE_JSON=due_json(prep_blocks_report=True))
-    result = _run("report-gate.sh", env, "--date", DAY, "--force", "--prep-started", STARTED)
+    result = _run("report-gate.sh", env, "--date", DAY, "--force", "--prep-ends", STARTED)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["due"] is True
 

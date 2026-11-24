@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from experiment_support import ENOUGH_GAMES, FIT_SEASONS, make_record, register, seed
-from hypothesis import example, given
+from hypothesis import given
 from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
@@ -23,6 +23,7 @@ from hockey_model.experiments.cohort import (
 )
 from hockey_model.experiments.looks import BASE_TAIL, MAX_LOOKS
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
+from hockey_model.experiments.status import confirmation_status
 from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
 
@@ -272,14 +273,17 @@ def _report_with_interval(low: float, high: float):
     width=st.floats(min_value=0.0, max_value=2.0),
     effect=st.one_of(st.none(), st.floats(min_value=-1.0, max_value=1.0)),
 )
-# Here low + width rounds back to low, so the interval has no width.
-@example(low=1.0, width=5.034543951081014e-35, effect=0.0)
 def test_the_status_follows_the_upper_end_and_the_power_rule(
     low: float, width: float, effect: float | None
 ) -> None:
     high = low + width
     record = make_record({"expected_effect": effect})
-    status = check._confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+    if not low < high:
+        # An interval with no width, which the addition can round into, decides nothing.
+        with pytest.raises(HockeyModelError):
+            confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+        return
+    status = confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
     underpowered = effect is not None and (high - low) / 2 > abs(effect)
     if underpowered:
         assert status == "inconclusive"

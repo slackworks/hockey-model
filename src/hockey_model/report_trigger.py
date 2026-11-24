@@ -31,11 +31,6 @@ def first_puck_drop(day_closes: datetime, starts: list[datetime]) -> datetime:
     return min(starts) if starts else day_closes
 
 
-# The prepare job times out at this length (timeout-minutes in daily-prepare.yml). GitHub counts
-# a job timeout from the job start, so a prepare that holds the store group ends within it.
-PREP_TIMEOUT = timedelta(minutes=180)
-
-
 def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | None = None) -> bool:
     """Return True while a run that starts at ``now`` can publish before the puck drop.
 
@@ -52,22 +47,28 @@ def puck_drop_ahead(now: datetime, first_start: datetime, margin: timedelta | No
 
 
 def prep_blocks_report(
-    prep_started: datetime, first_start: datetime, margin: timedelta | None = None
+    prep_ends: datetime,
+    first_start: datetime,
+    margin: timedelta | None = None,
 ) -> bool:
-    """Return True when a running prepare can hold the store group past the first puck drop.
+    """Return True when a prepare that holds the store group runs past the first puck drop.
 
     The report and the prepare share one concurrency group, so the report waits for the
     prepare to end. GitHub counts a job timeout from the job start, so a prepare that
-    started late runs past its window (#163). A prepare that started on time ends inside
-    its window, and the report can wait for it.
+    started late runs past its window (#163).
+
+    ``prep_ends`` is the end of the window of the job that holds the group, which
+    ``scripts/prep-running.sh`` reads from the job list. A day that needs no rebuild holds
+    the group for minutes in the short ``skip`` job, and a rebuild holds it for hours, so the
+    caller names the end of the job that holds it now (#311).
 
     ``margin`` is the time the report needs after it starts, such as the report budget. The
     report starts only when the prepare ends, so the two times add. The boundary is the same
     as in ``puck_drop_ahead``: a report that finishes at the puck drop is not ahead of it.
     """
-    require_utc(prep_started, "prepare run start")
+    require_utc(prep_ends, "prepare window end")
     require_utc(first_start, "first puck drop")
     needed = timedelta(0) if margin is None else margin
     if needed < timedelta(0):
         raise HockeyModelError(f"report margin must not be negative, got {needed}")
-    return prep_started + PREP_TIMEOUT + needed >= first_start
+    return prep_ends + needed >= first_start

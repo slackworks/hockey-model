@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from report_script_support import DAY, TAG, _calls, _env, _run, store_path
+from report_script_support import DAY, TAG, _calls, _env, _run, due_json, store_path
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -248,6 +248,29 @@ def test_a_marker_without_its_backtest_files_stops_the_run(
     assert not any("hockey-model refresh" in line for line in _calls(tmp_path))
 
 
+def test_the_missing_marker_check_reads_no_release_token(fakes: Path, tmp_path: Path) -> None:
+    """The token reaches only the release calls, and this path makes none (#313).
+
+    The check reads the score feed over HTTP, so it must not carry the token that the
+    workflow hands the release calls. This path runs before the store checks, so a title
+    is the only thing that runs before it.
+    """
+    log = tmp_path / "env.log"
+    env = _env(
+        fakes,
+        tmp_path,
+        HOCKEY_MODEL_DB=str(store_path(tmp_path)),
+        FAKE_DUE_JSON=due_json(puck_drop_passed=False),
+        FAKE_ENV_LOG=str(log),
+        REPORT_GH_TOKEN="secret-token",
+    )
+    result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert any("hockey-model report-due" in line for line in _calls(tmp_path))
+    assert not any("REPORT_GH_TOKEN=secret-token" in line for line in lines), lines
+
+
 def test_the_release_token_reaches_only_the_release_calls(fakes: Path, tmp_path: Path) -> None:
     log = tmp_path / "env.log"
     release = _release(tmp_path, _alias(HASH_B))
@@ -256,9 +279,13 @@ def test_the_release_token_reaches_only_the_release_calls(fakes: Path, tmp_path:
     )
     assert code == 0, stderr
     lines = log.read_text(encoding="utf-8").splitlines()
-    assert "gh GH_TOKEN=secret-token" in lines
-    assert all(line == "uv GH_TOKEN=unset" for line in lines if line.startswith("uv "))
-    assert all(line == "gh GH_TOKEN=secret-token" for line in lines if line.startswith("gh "))
+    # The raw value matters: the script unsets REPORT_GH_TOKEN once at the top and re-exports
+    # it only as GH_TOKEN, so a `gh` call carries one token and no other command carries any
+    # (#313).
+    release_line = "gh GH_TOKEN=secret-token REPORT_GH_TOKEN=unset"
+    assert all(line == release_line for line in lines if line.startswith("gh "))
+    assert "uv GH_TOKEN=unset REPORT_GH_TOKEN=unset" in lines
+    assert not any("REPORT_GH_TOKEN=secret-token" in line for line in lines)
     assert any("--json body" in line for line in _calls(tmp_path))
 
 

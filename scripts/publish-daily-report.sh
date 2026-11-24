@@ -15,9 +15,17 @@
 # the index gets an index of the new build only, and a warning names the builds it leaves out.
 # The report-index command checks the report and the index against their schemas first, so a
 # report that does not match stops the script before any upload.
+# Only the release calls need GH_TOKEN. The script reads it once, unsets it, and gives it to
+# each release call alone, so the package commands never see the write token.
 # The release notes open with one line for each game: the favorite, its win chance, and the range
 # of that win chance (report-summary). The range is model uncertainty only.
 set -euo pipefail
+
+# The gh calls need the write token, and the package commands need no token at all. read_token
+# holds the value, and the export goes away here, so no uv command sees the token. Each gh
+# call gets it back with a prefix (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
 
 day=""
 report_dir=""
@@ -98,7 +106,7 @@ check_dir="$report_dir/published-check"
 mkdir -p "$check_dir"
 
 # The lookup only reads, so a failure here leaves the release as it was.
-answer="$(release_status "$tag")"
+answer="$(GH_TOKEN="$read_token" release_status "$tag")"
 case "$answer" in
 published | missing) ;;
 *)
@@ -110,12 +118,14 @@ esac
 existing_assets=""
 existing_index=""
 if [[ "$answer" == "published" ]]; then
-  existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
+  existing_assets="$(GH_TOKEN="$read_token" gh release view "$tag" --json assets \
+    --jq '.assets[].name')" || {
     echo "publish-daily-report: cannot list the assets of $tag; gh's error is above. Nothing was published." >&2
     exit 1
   }
   if grep -qxF "index-$day.json" <<<"$existing_assets"; then
-    if ! gh release download "$tag" --pattern "index-$day.json" --dir "$check_dir" --clobber; then
+    if ! GH_TOKEN="$read_token" gh release download "$tag" --pattern "index-$day.json" \
+      --dir "$check_dir" --clobber; then
       echo "publish-daily-report: cannot download index-$day.json from $tag; gh's error is above. Nothing was published. Run the report workflow again." >&2
       exit 1
     fi
@@ -198,7 +208,8 @@ version_status() {
     echo new
     return 0
   fi
-  if ! gh release download "$tag" --pattern "$name" --dir "$check_dir" --clobber; then
+  if ! GH_TOKEN="$read_token" gh release download "$tag" --pattern "$name" \
+    --dir "$check_dir" --clobber; then
     echo "publish-daily-report: cannot download $name from $tag to compare it with this build; gh's error is above. Nothing was published. Run the report workflow again." >&2
     return 1
   fi
@@ -222,20 +233,20 @@ if [[ "$answer" == "published" ]]; then
   md_state="$(version_status "$version_md")" || exit 1
   json_state="$(version_status "$version_json")" || exit 1
   if [[ "$md_state" == "new" ]]; then
-    gh release upload "$tag" "$version_md"
+    GH_TOKEN="$read_token" gh release upload "$tag" "$version_md"
   fi
   if [[ "$json_state" == "new" ]]; then
-    gh release upload "$tag" "$version_json"
+    GH_TOKEN="$read_token" gh release upload "$tag" "$version_json"
   fi
   if [[ "$newest" == "$version_name" ]]; then
-    gh release upload "$tag" "${latest[@]}" --clobber
-    gh release edit "$tag" --notes-file "$notes"
+    GH_TOKEN="$read_token" gh release upload "$tag" "${latest[@]}" --clobber
+    GH_TOKEN="$read_token" gh release edit "$tag" --notes-file "$notes"
   else
     echo "publish-daily-report: $build is older than the newest build ${newest%.json} of $tag. Its version files and its index entry are published; the report-$day files and the notes stay with the newest build." >&2
-    gh release upload "$tag" "$index" --clobber
+    GH_TOKEN="$read_token" gh release upload "$tag" "$index" --clobber
   fi
 else
-  gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
+  GH_TOKEN="$read_token" gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
     --notes-file "$notes"

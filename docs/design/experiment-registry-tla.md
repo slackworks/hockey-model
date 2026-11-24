@@ -39,7 +39,8 @@ The mapping below is manual, as in `docs/design/daily-prepare-tla.md`.
 | `IMMUTABLE_FIELDS` | `ImmutableFields` in the config. The model keeps `id`, `look_number`, and `hyp`. `hyp` stands for the other fields. |
 | `MAX_LOOKS` | `MaxLooks` |
 | Status `registered`, `withdrawn` | `st` is `"reg"` or `"wd"` |
-| Status `rejected`, `promoted`, `inconclusive`, and the result | `st` is `"ran"`, and `res` is 1 or 2. Two runs write two different values. |
+| Status `rejected`, `promoted`, `inconclusive`, and the result | `st` is the status the result earns, and `res` is 1 or 2. Two runs write two different values. |
+| `status_for_interval` in `experiments/status.py` | `Earns`. `res` is 1 when the interval promotes and 2 when it rejects. The model has no interval width, so it has no `inconclusive` and no power rule. |
 | A git commit | One tree in `commits`. A tree maps each name to a blob, or to `NONE`. |
 | The rename pairs that git reports | `renames[i]` |
 | `git log --diff-filter=d -- path` | `HistOf` and `Touches` |
@@ -67,7 +68,8 @@ Each action changes the tree of the head commit.
 | Add | A new record with any id and any look number. The id may differ from the name, because only the head of a branch is checked. |
 | Edit | Flip `hyp`. |
 | Withdraw, or restore | Set the status to `wd` or `reg`, and clear the result. |
-| Run | `RunOK` must hold. The record gets `st = "ran"` and a result. |
+| Edit the status | Set any status on a record that holds a result. The model has no rule that stops this, so `StatusError` must catch it. |
+| Run | `RunOK` must hold. The record gets the status that its result earns, and a result. |
 | Delete | Remove a record. |
 | Rename | Move a record to a free name. The author can fix the id and can edit `hyp` in the same commit. |
 
@@ -95,6 +97,7 @@ The ghost variables `frozen` and `seenRes` record, by file name, what the commit
 | `DistinctLooks` | Two records with a result never share a look number, so the tails of the looks sum below `BASE_TAIL`. |
 | `LookCap` | At most `MaxLooks` records spend a look. |
 | `WithdrawnNeverRan` | A withdrawn record never had a result on main. |
+| `StatusFollowsResult` | A record with a result holds the status that its result earns, so a hand edit cannot promote it. |
 
 Two more properties are defined and left out of the config.
 They fail on purpose, and each is a gap that has an issue.
@@ -205,6 +208,7 @@ The edit is to the spec or to the config, and a script that applies it is not co
 | No look bound | Delete `T[x].look \notin 1 .. MaxLooks` from `LookError` | `LookCap` |
 | No deletion check | Delete `DeletionError` from `Passes` | `FrozenOnceRun` |
 | No withdrawn check and no one-shot check | Delete both from `RecordError`, and drop `RunsOnce` and `FrozenOnceRun` from the config | `WithdrawnNeverRan` |
+| No status check | Delete `StatusError` from `RecordError` | `StatusFollowsResult` |
 | Registered before run | Add `RegisteredBeforeRun` to the config | `RegisteredBeforeRun` |
 | Squash merge | Add `MainStaysGreen` to the config | `MainStaysGreen` |
 
@@ -220,3 +224,4 @@ The edit is to the spec or to the config, and a script that applies it is not co
 - A shallow clone. The check refuses it.
 - A force push to main. Branch protection stops it.
 - A status of `inconclusive` with no result. A run writes a result, so only a hand edit makes it.
+- A hand edit of `inconclusive` to `rejected`, or back. The model has no interval width, so both statuses earn one `res` value. `status_problem` catches the edit on the real record, because it reads the stored interval.

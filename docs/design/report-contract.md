@@ -48,7 +48,9 @@ The publish script reads the name from the output of `report-index`.
 The script downloads the index that is already on the release, and adds the new build.
 The script reads the release first, builds the index, and checks both version names before it uploads any file, so a name collision leaves no half-published build.
 The `publish` job runs one at a time for each day (`hockey-model-publish-DAY`), because the index is a read-modify-write of one release asset.
-A publish that waits behind two others is replaced, and the next hourly run builds and publishes it again.
+A publish that waits behind another is replaced.
+While the day has no release, the next hourly run builds and publishes that report again.
+After the first puck drop, the newer build stands for the day and the replaced build leaves no entry in the index, because the gate publishes no report for a published day.
 Only the script step holds the release token, and `uv` does not sync there.
 A build that is listed under the same file name is replaced by its new entry, so a retry of one build is safe.
 No other entry is dropped.

@@ -61,6 +61,9 @@ def fakes(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
+        # The script unsets both tokens on this call, so the fake records what it received.
+        'echo "uv GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ "$*" == "run hockey-model report-due"* ]]; then\n'
         '  if [[ -n "${FAKE_UV_FAIL:-}" ]]; then echo "uv boom" >&2; exit 3; fi\n'
         '  printf "%s" "$FAKE_DUE_JSON"\n'
@@ -120,6 +123,23 @@ def test_a_feed_whose_games_all_fall_outside_the_window_fails(fakes: Path, tmp_p
     assert result.returncode == 1, result.stdout
     assert "::error::" in result.stderr
     assert "lists 2 game(s) outside it" in result.stderr
+
+
+def test_the_schedule_read_carries_no_token(fakes: Path, tmp_path: Path) -> None:
+    """The check reads the schedule over HTTP, so it must not carry a token with a write scope."""
+    log = tmp_path / "env.log"
+    due = json.dumps({"due": False, "tag": TAG, "date": DAY, "games": 0, "games_outside_window": 0})
+    env = _env(
+        fakes,
+        tmp_path,
+        FAKE_DUE_JSON=due,
+        FAKE_ENV_LOG=str(log),
+        GH_TOKEN="a-token",
+        REPORT_GH_TOKEN="a-token",
+    )
+    result = _run(tmp_path, env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    assert "uv GH_TOKEN=unset REPORT_GH_TOKEN=unset" in log.read_text(encoding="utf-8")
 
 
 def test_a_payload_without_the_outside_count_fails_instead_of_passing(

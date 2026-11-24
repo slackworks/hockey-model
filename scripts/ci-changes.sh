@@ -10,9 +10,9 @@
 # exit: 0 after an answer; 2 for a bad argument.
 #
 # A path is a docs path when it ends in ".md", at any depth. A docs path moves no code job,
-# with one exception: tests/test_tla_appendix.py compares the appendix of that design note
-# with the spec files, so a change to the note is a code change. An empty list is a code
-# change, because a diff that lists nothing cannot show that the change is docs only.
+# with one exception: a design note that a test reads is a code change, because that read
+# compares the note with the code or the spec files. An empty list is a code change, because
+# a diff that lists nothing cannot show that the change is docs only.
 set -euo pipefail
 
 # shellcheck source=scripts/usage.sh

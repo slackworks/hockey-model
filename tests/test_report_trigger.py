@@ -1,16 +1,13 @@
 """Tests for the trigger that decides when the daily report runs."""
 
 from datetime import UTC, date, datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from mutation_copy import require_path
 
 from hockey_model.game_day import game_day_window
 from hockey_model.report_trigger import (
-    PREP_TIMEOUT,
     TRIGGER_MINUTE_UTC,
     first_puck_drop,
     prep_blocks_report,
@@ -116,40 +113,46 @@ def test_a_negative_margin_is_an_error() -> None:
         puck_drop_ahead(at("2026-11-04T23:00"), at("2026-11-05T00:00"), timedelta(seconds=-1))
 
 
-def test_the_prepare_timeout_matches_the_prepare_job_timeout() -> None:
-    # The prep job timeout in daily-prepare.yml is the longest time a prepare holds the group.
-    prepare = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily-prepare.yml"
-    workflow = require_path(prepare).read_text(encoding="utf-8")
-    assert f"timeout-minutes: {PREP_TIMEOUT // timedelta(minutes=1)}" in workflow
-
-
 @given(
     prep=st.datetimes(timezones=st.just(UTC)),
     gap=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=12)),
     margin=st.timedeltas(min_value=timedelta(0), max_value=timedelta(hours=6)),
+    window=st.timedeltas(min_value=timedelta(minutes=1), max_value=timedelta(hours=6)),
 )
 def test_a_prepare_blocks_a_report_only_when_its_window_reaches_the_puck_drop(
-    prep: datetime, gap: timedelta, margin: timedelta
+    prep: datetime, gap: timedelta, margin: timedelta, window: timedelta
 ) -> None:
+    """The window is the timeout of the job that holds the group, which the lookup reads."""
     first = prep + gap
-    assert prep_blocks_report(prep, first, margin) is (prep + PREP_TIMEOUT + margin >= first)
+    assert prep_blocks_report(prep + window, first, margin) is (prep + window + margin >= first)
+
+
+def test_a_short_skip_job_does_not_block_a_report_before_the_puck_drop() -> None:
+    """A skip job of a prepared day ends in minutes, so it holds nothing past the puck drop (#311).
+
+    Without the split, the same run would read as a 180-minute rebuild and skip the report in
+    the hours before the puck drop, which is when the starters are confirmed.
+    """
+    started = at("2026-11-18T18:24")
+    first = at("2026-11-18T19:00")
+    assert prep_blocks_report(started + timedelta(minutes=180), first) is True
+    assert prep_blocks_report(started + timedelta(minutes=10), first) is False
 
 
 def test_the_report_margin_extends_the_hold_that_a_prepare_has() -> None:
     # The prepare ends at 21:24, and the report then needs its own 10 minutes, so a puck drop
     # at 21:30 is still lost. Without the margin the same puck drop looks safe.
-    prep = at("2026-11-18T18:24")
-    ten = timedelta(minutes=10)
-    assert prep_blocks_report(prep, at("2026-11-18T21:30")) is False
-    assert prep_blocks_report(prep, at("2026-11-18T21:30"), ten) is True
-    assert prep_blocks_report(prep, at("2026-11-18T21:34:01"), ten) is False
+    ends = at("2026-11-18T21:24")
+    assert prep_blocks_report(ends, at("2026-11-18T21:30")) is False
+    assert prep_blocks_report(ends, at("2026-11-18T21:30"), timedelta(minutes=10)) is True
+    assert prep_blocks_report(ends, at("2026-11-18T21:34:01"), timedelta(minutes=10)) is False
 
 
 def test_a_prepare_blocks_a_report_that_would_finish_at_the_puck_drop() -> None:
     """A report that ends at the puck drop cannot replace a published one, so it is held."""
-    prep = at("2026-11-18T08:00")
-    assert prep_blocks_report(prep, at("2026-11-18T11:00")) is True
-    assert prep_blocks_report(prep, at("2026-11-18T11:00:01")) is False
+    ends = at("2026-11-18T11:00")
+    assert prep_blocks_report(ends, at("2026-11-18T11:00")) is True
+    assert prep_blocks_report(ends, at("2026-11-18T11:00:01")) is False
 
 
 def test_prep_blocks_report_rejects_a_negative_margin() -> None:
@@ -157,17 +160,23 @@ def test_prep_blocks_report_rejects_a_negative_margin() -> None:
         prep_blocks_report(at("2026-11-18T08:00"), at("2026-11-18T19:00"), timedelta(-1))
 
 
+def test_prep_blocks_report_rejects_a_local_time() -> None:
+    """A naive instant would compare against UTC midnight, and no reading would catch that."""
+    with pytest.raises(HockeyModelError, match="UTC"):
+        prep_blocks_report(datetime(2026, 11, 18, 8), at("2026-11-18T19:00"))
+
+
 def test_a_prepare_that_started_on_time_does_not_block_the_report() -> None:
-    # The 08:00 cron plus the 180 minute timeout ends at 11:00 UTC, before the 11:44 trigger.
-    prep = at("2026-11-18T08:00")
-    assert prep_blocks_report(prep, at("2026-11-18T11:44")) is False
+    # The 08:00 job plus its 180-minute timeout ends at 11:00 UTC, before the 11:44 trigger.
+    ends = at("2026-11-18T08:00") + timedelta(minutes=180)
+    assert prep_blocks_report(ends, at("2026-11-18T11:44")) is False
 
 
 def test_a_prepare_that_started_late_blocks_a_report_after_the_puck_drop() -> None:
     # 2026-11-18: the 08:00 prep started at 18:24 UTC and ran 128 minutes, so the 15:44
     # report that queued behind it started at 20:32, after the first puck drop (#163).
-    prep = at("2026-11-18T18:24")
-    assert prep_blocks_report(prep, at("2026-11-18T19:00")) is True
+    ends = at("2026-11-18T18:24") + timedelta(minutes=180)
+    assert prep_blocks_report(ends, at("2026-11-18T19:00")) is True
 
 
 @given(

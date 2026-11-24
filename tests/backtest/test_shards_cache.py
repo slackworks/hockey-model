@@ -1,7 +1,10 @@
 """The sharded build reads the rows of a season from the cache when its key has not changed."""
 
+import contextlib
+import multiprocessing
+import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from pathlib import Path
 
 import pytest
@@ -162,13 +165,17 @@ def _change_scores_when_the_keys_are_made(
 ) -> None:
     """Make the keys, and change the stored scores before or after that, as a refresh would."""
     real = shards.season_keys
+    # A refresh writes in the process that runs it. A forked worker calls this function again,
+    # and a write from a worker changes the store during the run (#316).
+    parent_pid = os.getpid()
 
     def keys(conn: sqlite3.Connection, burn_in: int, names: Sequence[str]) -> dict[int, str]:
-        if not after:
+        mine = os.getpid() == parent_pid
+        if mine and not after:
             store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
             store.commit()
         made = real(conn, burn_in, names)
-        if after:
+        if mine and after:
             store.execute("UPDATE games SET home_score = home_score + 3 WHERE season = 4")
             store.commit()
         return made
@@ -193,3 +200,55 @@ def test_a_change_after_the_keys_are_made_stops_the_workers(
         build_sharded(seeded, PLAN, FEATURES, 2)
     # The seasons before the change keep their keys, so only they may write a file.
     assert {int(n.split("-")[1]) for n in _names(seeded)} <= {2, 3}
+
+
+def test_the_fork_helper_puts_the_default_start_method_back() -> None:
+    """A worker that keeps spawn changes every later test in the same worker.
+
+    CI on Linux runs the default method, which is forkserver. A helper that puts spawn back
+    after a fork test hides a difference between that test and CI.
+    """
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("this platform has no fork start method")
+    previous = multiprocessing.get_start_method(allow_none=True)
+    # A reset context answers None, which is the case that the helper got wrong.
+    multiprocessing.set_start_method(None, force=True)
+    try:
+        with _fork_start_method():
+            assert multiprocessing.get_start_method() == "fork"
+        assert multiprocessing.get_start_method(allow_none=True) is None
+    finally:
+        multiprocessing.set_start_method(previous or "spawn", force=True)
+
+
+@contextlib.contextmanager
+def _fork_start_method() -> Generator[None]:
+    """Run the pool under fork, as a mutation run does, then put the previous method back."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("this platform has no fork start method")
+    previous = multiprocessing.get_start_method(allow_none=True)
+    multiprocessing.set_start_method("fork", force=True)
+    try:
+        yield
+    finally:
+        # None with force resets the context to the platform default, so a later test in the
+        # same worker runs under the method that CI uses.
+        multiprocessing.set_start_method(previous, force=True)
+
+
+# The test forks on purpose, as a mutation run does. A pytest-xdist worker holds its own
+# threads, so Python warns about a fork of a process with more than one thread.
+@pytest.mark.filterwarnings(
+    r"ignore:This process \(pid=\d+\) is multi-threaded, use of fork\(\):DeprecationWarning"
+)
+def test_a_change_before_the_keys_are_made_gives_the_rows_under_fork(
+    seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the fork case (#316). A forked worker inherits the open connection of its parent, so
+    a write from the helper would run again inside a worker and change the store during the
+    run. Only the parent writes, and the build gives the rows of the changed store."""
+    _change_scores_when_the_keys_are_made(seeded, monkeypatch, after=False)
+    with _fork_start_method():
+        actual, guess = build_sharded(seeded, PLAN, FEATURES, 2)
+    assert actual == _full(seeded, GoalieMode.ACTUAL)
+    assert guess == _full(seeded, GoalieMode.GUESS)

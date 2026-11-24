@@ -46,6 +46,9 @@ def fake_uv(tmp_path: Path) -> Path:
     uv = bin_dir / "uv"
     uv.write_text(
         '#!/usr/bin/env bash\necho "uv $*" >> "$FAKE_CALLS"\n'
+        # The script unsets both tokens on this call, so the fake records what it received.
+        'echo "uv GH_TOKEN=${GH_TOKEN-unset} REPORT_GH_TOKEN=${REPORT_GH_TOKEN-unset}"'
+        ' >> "${FAKE_ENV_LOG:-/dev/null}"\n'
         'if [[ -n "${FAKE_UV_FAIL:-}" ]]; then echo "uv boom" >&2; exit 3; fi\n'
         'printf "%s" "$FAKE_GAPS_JSON"\n',
         encoding="utf-8",
@@ -83,6 +86,21 @@ def test_no_gap_raises_no_alert(fake_uv: Path, tmp_path: Path) -> None:
     assert (tmp_path / "calls.log").read_text(encoding="utf-8") == (
         "uv run hockey-model store gaps --live\n"
     )
+
+
+def test_the_store_read_carries_no_token(fake_uv: Path, tmp_path: Path) -> None:
+    """The check reads the store, so it must not carry a token with a write scope."""
+    log = tmp_path / "env.log"
+    result = _run(
+        tmp_path,
+        fake_uv,
+        _payload(),
+        FAKE_ENV_LOG=str(log),
+        GH_TOKEN="a-token",
+        REPORT_GH_TOKEN="a-token",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "uv GH_TOKEN=unset REPORT_GH_TOKEN=unset" in log.read_text(encoding="utf-8")
 
 
 def test_a_gap_that_is_not_over_the_limit_raises_no_alert(fake_uv: Path, tmp_path: Path) -> None:

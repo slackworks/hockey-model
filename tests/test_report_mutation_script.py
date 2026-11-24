@@ -27,6 +27,8 @@ GOOD_RESULTS = [
     "success",
     "--download-result",
     "success",
+    "--gate-result",
+    "success",
 ]
 
 if not REAL_UV:
@@ -47,7 +49,11 @@ def _one_script_run_at_a_time(tmp_path_factory: pytest.TempPathFactory) -> Itera
 
 
 def _run(
-    fakes: Path, tmp_path: Path, *args: str, issues: list[dict] | None = None
+    fakes: Path,
+    tmp_path: Path,
+    *args: str,
+    issues: list[dict] | None = None,
+    **extra: str,
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
@@ -56,6 +62,7 @@ def _run(
         # The helper runs under the real uv, so the status is the real decision.
         "FAKE_REAL_UV": REAL_UV,
     }
+    env.update(extra)
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         cwd=ROOT,
@@ -76,6 +83,35 @@ def _stats(tmp_path: Path, **changes: int) -> Path:
 
 def _body() -> str:
     return (ROOT / ".tmp" / "mutation-report.md").read_text(encoding="utf-8")
+
+
+def test_only_the_issue_calls_see_the_write_token(fakes: Path, tmp_path: Path) -> None:
+    """The helper runs make no issue call, so they must not hold the issue-write token.
+
+    The script unsets the export once and gives the token back to each issue call alone, so a
+    library in the helper process never sees it (#313).
+    """
+    log = tmp_path / "env.log"
+    result = _run(
+        fakes,
+        tmp_path,
+        "--stats",
+        str(_stats(tmp_path, survived=10)),
+        "--run-url",
+        URL,
+        *GOOD_RESULTS,
+        "--file-issue",
+        FAKE_ENV_LOG=str(log),
+        GH_TOKEN="a-token",
+    )
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    uv_calls = [line for line in lines if line.startswith("uv ")]
+    assert uv_calls, "the report made no uv call"
+    assert all(" GH_TOKEN=unset " in line for line in uv_calls), uv_calls
+    gh_calls = [line for line in lines if line.startswith("gh ")]
+    assert gh_calls, lines
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
 
 
 def test_without_file_issue_the_script_makes_no_gh_call(fakes: Path, tmp_path: Path) -> None:
@@ -122,6 +158,16 @@ def test_a_failed_shard_fails_the_run(fakes: Path, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "execution_failed"
     assert "the shard job did not finish (failure)" in _body()
+
+
+def test_a_failed_gate_names_itself_in_the_report(fakes: Path, tmp_path: Path) -> None:
+    # A gate that failed leaves every other job skipped, so the body must name the gate.
+    results = list(GOOD_RESULTS)
+    results[9] = "failure"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "execution_failed"
+    assert "the gate job did not finish (failure)" in _body()
 
 
 def test_a_skipped_download_is_a_cause(fakes: Path, tmp_path: Path) -> None:

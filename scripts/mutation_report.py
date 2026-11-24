@@ -52,7 +52,8 @@ STATUS_CLEAN = "clean"
 STATUS_REGRESSION = "regression"
 STATUS_FAILED = "execution_failed"
 # The job results that a run needs. Each must be success for the run to count as a run.
-RESULT_KEYS = ("shard", "merge", "export", "download")
+# The gate comes first: a gate that failed leaves every job after it skipped.
+RESULT_KEYS = ("gate", "shard", "merge", "export", "download")
 # The download runs as a step of the report job, so the body names it as a step.
 RESULT_NOUNS = {"download": "step"}
 # ``unknown`` is the value the shell passes for a job that did not report a result.

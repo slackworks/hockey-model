@@ -10,8 +10,9 @@
 #                     this build, exit 0 and write no complete marker, so nothing publishes.
 #                     A day with no release, a release that is behind its newest build, and
 #                     a published report with no inputs_sha256 build as usual. A failed
-#                     release call stops the run with exit code 1. The release calls read
-#                     REPORT_GH_TOKEN, so the token stays out of the other steps.
+#                     release call stops the run with exit code 1. This script reads
+#                     REPORT_GH_TOKEN once, then unsets it, so only the release calls of the
+#                     compare step carry it. No other command sees it.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The daily-prepare run does the slow work each
 # hour. When its prepared-DATE marker is missing, this script skips with exit code 0 while the
@@ -30,6 +31,10 @@ set -euo pipefail
 day=""
 out_dir=""
 skip_unchanged=0
+# The release calls need a token, and nothing else does. read_token holds the value for the
+# function that re-exports it, and the export goes away here, so no other command sees it.
+read_token="${REPORT_GH_TOKEN:-}"
+unset REPORT_GH_TOKEN
 
 # shellcheck source=scripts/usage.sh
 source "$(dirname "$0")/usage.sh"
@@ -98,7 +103,7 @@ if [[ ! -f "$store_dir/prepared-$day" ]]; then
   # The prepare runs every hour. A run before the first puck drop finds no marker when the
   # prepare has not finished, and the next hour can still make it, so that run skips. After the
   # first puck drop the same missing marker still fails below.
-  due_json="$(uv run hockey-model report-due --date "$day")" || {
+  due_json="$(env -u GH_TOKEN uv run hockey-model report-due --date "$day")" || {
     echo "daily-report: report-due failed while checking the puck drop; its error is above" >&2
     exit 1
   }
@@ -210,7 +215,7 @@ release_gap() {
 # is behind its newest build is published again, which repairs it.
 skip_if_unchanged() {
   # The token reaches only the release calls of this function.
-  local -x GH_TOKEN="${REPORT_GH_TOKEN:-}"
+  local -x GH_TOKEN="$read_token"
   local tag="reports-$day" status compare_dir gap answer reason newest_build
   status="$(release_status "$tag")"
   case "$status" in
@@ -232,8 +237,8 @@ skip_if_unchanged() {
     return 0
   fi
   newest_build="$(jq -r "$newest_build_filter | .file" "$compare_dir/index-$day.json")"
-  answer="$(env -u GH_TOKEN uv run hockey-model report-compare --built "$out_dir/report-$day.json" \
-    --published "$compare_dir/report-$day.json")" || {
+  answer="$(env -u GH_TOKEN uv run hockey-model report-compare \
+    --built "$out_dir/report-$day.json" --published "$compare_dir/report-$day.json")" || {
     echo "daily-report: report-compare failed; its error is above" >&2
     rm -rf "$compare_dir"
     exit 1

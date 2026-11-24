@@ -30,6 +30,8 @@ VALID_STATUSES = (
     STATUS_PROMOTED,
     STATUS_WITHDRAWN,
 )
+# The statuses that only a result earns, so only a confirmation run may hold one.
+RESULT_STATUSES = (STATUS_REJECTED, STATUS_INCONCLUSIVE, STATUS_PROMOTED)
 
 # Immutable fields that must not change after registration.
 IMMUTABLE_FIELDS = (
