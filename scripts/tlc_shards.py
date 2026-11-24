@@ -82,14 +82,11 @@ def load_map(path: Path = MAP) -> dict[str, Any]:
 
 
 def matches(path: str, patterns: list[str]) -> bool:
-    """Return True when ``path`` matches one of ``patterns``."""
-    for pattern in patterns:
-        if pattern.endswith("/**"):
-            if path.startswith(pattern[:-2]):
-                return True
-        elif fnmatch.fnmatchcase(path, pattern):
-            return True
-    return False
+    """Return True when ``path`` matches one of ``patterns``.
+
+    The fnmatch ``*`` also matches ``/``, so ``dir/**`` matches every path under ``dir/``.
+    """
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
 def shard_paths(data: dict[str, Any], shard: dict[str, Any]) -> list[str]:
