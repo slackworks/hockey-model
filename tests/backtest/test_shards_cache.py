@@ -215,6 +215,11 @@ def _fork_start_method() -> Generator[None]:
         multiprocessing.set_start_method(previous or "spawn", force=True)
 
 
+# The test forks on purpose, as a mutation run does. A pytest-xdist worker holds its own
+# threads, so Python warns about a fork of a process with more than one thread.
+@pytest.mark.filterwarnings(
+    r"ignore:This process \(pid=\d+\) is multi-threaded, use of fork\(\):DeprecationWarning"
+)
 def test_a_change_before_the_keys_are_made_gives_the_rows_under_fork(
     seeded: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
