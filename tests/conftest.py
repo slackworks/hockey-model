@@ -119,7 +119,11 @@ def fakes(tmp_path: Path) -> Path:
         'tag="${3:-}"\n'
         'if [[ "$1 $2" == "release view" ]]; then\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'
-        '    if [[ "$*" == *"--json"* ]]; then printf "%s\\n" "${FAKE_ASSETS:-}"; fi\n'
+        # The notes of a release answer FAKE_NOTES, and FAKE_NOTES_FAIL makes that read fail.
+        '    if [[ "$*" == *"--json body"* ]]; then\n'
+        '      if [[ -n "${FAKE_NOTES_FAIL:-}" ]]; then echo "notes boom" >&2; exit 1; fi\n'
+        '      printf "%s\\n" "${FAKE_NOTES:-}"\n'
+        '    elif [[ "$*" == *"--json"* ]]; then printf "%s\\n" "${FAKE_ASSETS:-}"; fi\n'
         "    exit 0\n"
         "  fi\n"
         '  echo "release not found" >&2\n'

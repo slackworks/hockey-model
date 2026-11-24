@@ -33,7 +33,8 @@ The gate compares the time of the run, plus the report budget, with the first pu
 The first due run that starts publishes the report.
 A later run before the puck drop builds the report again, and it publishes only when its inputs differ from the newest published report (#282).
 Each build keeps its own files, named `report-DATE-HHMMSSZ`, where the time is its `generated_at`, and nothing published is replaced (#196).
-`report-DATE.md` and `report-DATE.json` are the alias for the newest build, and the backtest files hold the newest build too.
+`report-DATE.md` and `report-DATE.json` are the alias for the newest build, the build with the latest `generated_at`, and the backtest files hold the newest build too.
+A retry of an older build adds its own files and its index entry, and leaves the alias, the backtest files, and the notes with the newest build (#318).
 The notes say so, and they name the commit and time of each build.
 After the puck drop, every run skips a day that has a release.
 The release target stays the commit of the first build, so the commit of a replacing build appears only in the notes and in the JSON copy.
@@ -48,9 +49,11 @@ It also covers the source `credits`.
 It leaves out `generated_at` and the age in a stale-source note, because time passing is not an input.
 The report JSON shows the goalie and injury state through the win chances and `missing`, not as raw reads.
 A hash of those values changes exactly when a read changes what the report says, and a fresh read of the same value changes nothing.
-`daily-report.sh --skip-unchanged` downloads the newest versioned asset `report-DATE-HHMMSSZ.json` of the release after it predicts, and `hockey-model report-compare` compares the two hashes.
-The versioned asset is the reference, because the publish script uploads the alias `report-DATE.json` after the versions, and a failed alias upload leaves the alias behind the newest build.
-A release with no versioned asset falls back to the alias.
+`daily-report.sh --skip-unchanged` reads the release of the day after it predicts.
+It compares only when the release is complete for its newest build: `index-DATE.json` names the newest build, `report-DATE.json` has the `generated_at` of that build, and the notes name it.
+The publish script uploads the versions, then the alias and the index, then the notes, so a failed step leaves the release behind its newest build (#318).
+A release that is behind, which includes a release from before the index, builds and publishes again, and that publish repairs it.
+A complete release goes to `hockey-model report-compare`, which compares the hash of the build with the hash in `report-DATE.json`.
 Only the release calls of the compare step read the token, as `REPORT_GH_TOKEN`.
 Equal hashes end the run with reason `unchanged` and no `complete` marker, so the publish job skips.
 An alias with no `inputs_sha256`, from a build before the field existed, counts as changed once.
