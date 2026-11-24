@@ -225,13 +225,16 @@ def espn_starters(run: RefreshRun) -> None:
 
 
 def espn_injuries(run: RefreshRun) -> None:
-    """Read the current ESPN injury list."""
-    _attempt_live(
-        run,
-        ESPN_INJURIES,
-        f"{ESPN_BASE}/injuries",
-        lambda stamp: write_injury_reads(run.conn, fetch_injuries(run.client), stamp),
-    )
+    """Read the current ESPN injury list, and report any status that this code does not name."""
+    notes: list[str] = []
+
+    def unit(stamp: datetime) -> int:
+        reads = fetch_injuries(run.client, notes)
+        return write_injury_reads(run.conn, reads, stamp)
+
+    _attempt_live(run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", unit)
+    # A status that this code does not name never fails the read, so it needs its own line.
+    run.notes.extend(notes)
 
 
 def daily_faceoff(run: RefreshRun) -> None:

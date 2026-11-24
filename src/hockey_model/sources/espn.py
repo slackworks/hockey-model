@@ -27,7 +27,10 @@ PROBABLE_GOALIE = "probableStartingGoalie"
 # ESPN writes the morning status as "Expected" and the confirmed status as "Confirmed".
 _STATUS_MAP = {"Confirmed": StarterStatus.CONFIRMED, "Expected": StarterStatus.LIKELY}
 OUT_STATUSES = frozenset({"Out", "Injured Reserve", "Long Term Injured Reserve"})
-_KNOWN_INJURY_STATUSES = OUT_STATUSES | {"Day-To-Day"}
+# The one status that ESPN writes for a player who may still play. Every other status, known or
+# not, counts as out, because a player whose status this code does not read may not play (#325).
+NOT_OUT_STATUSES = frozenset({"Day-To-Day"})
+KNOWN_INJURY_STATUSES = OUT_STATUSES | NOT_OUT_STATUSES
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +45,7 @@ class InjuryRead:
     @property
     def is_out(self) -> bool:
         """True when the status means the player does not play."""
-        return self.status in OUT_STATUSES
+        return self.status not in NOT_OUT_STATUSES
 
 
 def _team_code(competitor: Mapping[str, object], where: str) -> str:
@@ -140,31 +143,42 @@ def _return_date(entry: Mapping[str, object], where: str) -> date | None:
         raise SourceParseError(SOURCE, f"{where} returnDate {text!r} is not a date") from exc
 
 
-def _injury(raw: object) -> InjuryRead:
+def _injury_with_note(raw: object) -> tuple[InjuryRead, str | None]:
+    """Return one injury read, and a note when its status is one that this code does not name."""
     entry = as_mapping(SOURCE, raw, "an injury entry")
     where = f"injury {entry.get('id', '?')}"
     athlete = as_mapping(SOURCE, field(SOURCE, entry, "athlete", where), f"{where} athlete")
     name = str_field(SOURCE, athlete, "displayName", f"{where} athlete")
     team = as_mapping(SOURCE, field(SOURCE, athlete, "team", where), f"{where} athlete team")
     status = str_field(SOURCE, entry, "status", where)
-    if status not in _KNOWN_INJURY_STATUSES:
-        raise SourceParseError(
-            SOURCE, f"{where} has unknown injury status {status!r}; add it to espn.py"
-        )
     code = from_espn(str_field(SOURCE, team, "abbreviation", f"{where} athlete team"))
-    return InjuryRead(code, name, status, _return_date(entry, where))
+    read = InjuryRead(code, name, status, _return_date(entry, where))
+    if status in KNOWN_INJURY_STATUSES:
+        return read, None
+    # A status this code does not name must not fail the whole list, and it must reach a person.
+    return read, f"{SOURCE} injuries: {name} ({code}) has status {status!r}, which is not named"
 
 
 def parse_injuries(payload: object) -> list[InjuryRead]:
     """Return every player on the injury list."""
+    return parse_injuries_with_notes(payload)[0]
+
+
+def parse_injuries_with_notes(payload: object) -> tuple[list[InjuryRead], list[str]]:
+    """Return every player on the injury list, and one note for each status this code lacks."""
     top = as_mapping(SOURCE, payload, "the injury list")
     clubs = as_list(SOURCE, field(SOURCE, top, "injuries", "the injury list"), "injury clubs")
     reads: list[InjuryRead] = []
+    notes: list[str] = []
     for raw in clubs:
         club = as_mapping(SOURCE, raw, "an injury club")
         entries = as_list(SOURCE, field(SOURCE, club, "injuries", "an injury club"), "club entries")
-        reads.extend(_injury(entry) for entry in entries)
-    return reads
+        for entry in entries:
+            read, note = _injury_with_note(entry)
+            reads.append(read)
+            if note is not None:
+                notes.append(note)
+    return reads, notes
 
 
 def fetch_scoreboard_starters(client: HttpClient, day: date) -> list[StarterRead]:
@@ -173,6 +187,14 @@ def fetch_scoreboard_starters(client: HttpClient, day: date) -> list[StarterRead
     return parse_scoreboard_starters(get_json(client, SOURCE, url))
 
 
-def fetch_injuries(client: HttpClient) -> list[InjuryRead]:
-    """Fetch the current ESPN injury list."""
-    return parse_injuries(get_json(client, SOURCE, f"{ESPN_BASE}/injuries"))
+def fetch_injuries(client: HttpClient, notes: list[str] | None = None) -> list[InjuryRead]:
+    """Fetch the current ESPN injury list.
+
+    ``notes`` collects one line for each status that this code does not name, so the caller
+    can report it. A status never stops the read (#325).
+    """
+    reads, found = parse_injuries_with_notes(get_json(client, SOURCE, f"{ESPN_BASE}/injuries"))
+    if notes is not None:
+        # The read succeeded, so a note never hides a failure. It only names an unknown status.
+        notes.extend(found)
+    return reads

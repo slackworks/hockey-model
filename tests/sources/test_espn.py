@@ -8,10 +8,12 @@ import pytest
 
 from hockey_model.game import StarterSource, StarterStatus
 from hockey_model.sources.espn import (
+    KNOWN_INJURY_STATUSES,
     OUT_STATUSES,
     fetch_injuries,
     fetch_scoreboard_starters,
     parse_injuries,
+    parse_injuries_with_notes,
     parse_scoreboard_starters,
 )
 from hockey_model.sources.http import HttpClient
@@ -125,11 +127,43 @@ def test_injury_day_to_day_is_not_out() -> None:
     assert not parse_injuries(payload)[0].is_out
 
 
-def test_injury_rejects_unknown_status() -> None:
+def test_the_known_status_list_holds_every_out_status_and_day_to_day() -> None:
+    """One test reads the list, so a new status changes this test and no other."""
+    assert KNOWN_INJURY_STATUSES == set(OUT_STATUSES) | {"Day-To-Day"}
+    assert "Day-To-Day" not in OUT_STATUSES
+
+
+def test_a_suspension_parses_and_counts_as_out() -> None:
+    """ESPN writes Suspension, and a suspended player does not play (#325)."""
     payload = load("injuries.json")
-    payload["injuries"][0]["injuries"][0]["status"] = "Suspended"
-    with pytest.raises(SourceParseError, match="Suspended"):
-        parse_injuries(payload)
+    payload["injuries"][0]["injuries"][0]["status"] = "Suspension"
+    read = parse_injuries(payload)[0]
+    assert read.status == "Suspension"
+    assert read.is_out
+
+
+def test_an_unknown_status_parses_and_counts_as_out() -> None:
+    """One unnamed status must not kill the whole injury feed (#325)."""
+    payload = load("injuries.json")
+    payload["injuries"][0]["injuries"][0]["status"] = "Personal Reasons"
+    read = parse_injuries(payload)[0]
+    assert read.status == "Personal Reasons"
+    assert read.is_out
+
+
+def test_an_unknown_status_is_named_in_the_notes() -> None:
+    payload = load("injuries.json")
+    payload["injuries"][0]["injuries"][0]["status"] = "Personal Reasons"
+    payload["injuries"][0]["injuries"][0]["athlete"]["displayName"] = "Some Player"
+    _, notes = parse_injuries_with_notes(payload)
+    assert len(notes) == 1
+    assert "'Personal Reasons'" in notes[0]
+    assert "Some Player" in notes[0]
+
+
+def test_a_known_status_adds_no_note() -> None:
+    _, notes = parse_injuries_with_notes(load("injuries.json"))
+    assert notes == []
 
 
 def test_injury_without_return_date_is_allowed() -> None:
