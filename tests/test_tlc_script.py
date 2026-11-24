@@ -1,8 +1,10 @@
 """Tests for scripts/tlc.sh. The tests use a fake curl or a fake jar, so no test downloads TLC."""
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -28,6 +30,41 @@ def test_help_prints_usage_and_exits_zero() -> None:
     assert result.returncode == 0
     assert "Usage: bash scripts/tlc.sh" in result.stdout
     assert "Exit codes:" in result.stdout
+
+
+def test_help_lists_every_config_in_specs_once() -> None:
+    usage = _run("--help").stdout
+    listed = re.findall(r"^  [a-z]+ +(specs/\S+\.cfg)$", usage, flags=re.MULTILINE)
+    present = sorted(f"specs/{path.name}" for path in (SCRIPT.parents[1] / "specs").glob("*.cfg"))
+    assert sorted(listed) == present, "tlc.sh does not run each config in specs/ once"
+
+
+def test_list_prints_one_json_object_for_each_shard() -> None:
+    result = _run("--list")
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [row["name"] for row in rows] == [
+        "upgrade",
+        "registry",
+        "stall",
+        "blocked",
+        "cutoff",
+        "recent",
+        "main",
+    ]
+
+
+def test_an_unknown_shard_exits_two_and_names_the_shards() -> None:
+    result = _run("--shard", "bogus")
+    assert result.returncode == 2
+    assert "'bogus' is not a shard" in result.stderr
+    assert "stall" in result.stderr
+
+
+def test_shard_without_a_name_exits_two() -> None:
+    result = _run("--shard")
+    assert result.returncode == 2
+    assert "--shard takes one shard name" in result.stderr
 
 
 def test_help_names_the_deadlock_exit_code() -> None:
@@ -213,14 +250,27 @@ _FAKE_JAVA = """\
 case "$*" in -version*) echo 'openjdk version "17.0.7" 2023-04-18' >&2; exit 0 ;; esac
 echo "$*" >> "$FAKE_JAVA_LOG"
 case "$*" in
+    *store_upgrade.cfg*) exit "${FAKE_UPGRADE_RC:-0}" ;;
+    *experiment_registry.cfg*) exit "${FAKE_REGISTRY_RC:-0}" ;;
     *daily_prepare_stall.cfg*) exit "${FAKE_STALL_RC:-0}" ;;
+    *daily_prepare_blocked.cfg*) exit "${FAKE_BLOCKED_RC:-0}" ;;
+    *daily_prepare_cutoff.cfg*) exit "${FAKE_CUTOFF_RC:-0}" ;;
+    *daily_prepare_recent.cfg*) exit "${FAKE_RECENT_RC:-0}" ;;
     *) exit "${FAKE_MAIN_RC:-0}" ;;
 esac
 """
 
 
 def _run_with_fake_java(
-    tmp_path: Path, stall_rc: int, main_rc: int
+    tmp_path: Path,
+    stall_rc: int,
+    main_rc: int,
+    blocked_rc: int = 0,
+    cutoff_rc: int = 0,
+    recent_rc: int = 0,
+    upgrade_rc: int = 0,
+    registry_rc: int = 0,
+    shard: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run a copy of tlc.sh whose pinned hash matches a fake jar, and return the java calls."""
     jar_bytes = b"a fake tla tools jar"
@@ -234,14 +284,26 @@ def _run_with_fake_java(
     )
     assert pinned[1] == 1, "tlc.sh must pin the jar with one TLA_TOOLS_SHA256 line"
     (root / "scripts" / "tlc.sh").write_text(pinned[0], encoding="utf-8")
+    # The script reads the shard map through the helper, so the copy needs both files.
+    shutil.copy(SCRIPT.parent / "tlc_shards.py", root / "scripts" / "tlc_shards.py")
+    shutil.copy(SCRIPT.parents[1] / "specs" / "shards.json", root / "specs" / "shards.json")
     jars = tmp_path / "jars"
     jars.mkdir()
     (jars / "tla2tools-v1.7.4.jar").write_bytes(jar_bytes)
     log = tmp_path / "java.log"
     env = _env_with_fakes(tmp_path, jars, java=_FAKE_JAVA)
-    env.update(FAKE_JAVA_LOG=str(log), FAKE_STALL_RC=str(stall_rc), FAKE_MAIN_RC=str(main_rc))
+    env.update(
+        FAKE_JAVA_LOG=str(log),
+        FAKE_UPGRADE_RC=str(upgrade_rc),
+        FAKE_REGISTRY_RC=str(registry_rc),
+        FAKE_STALL_RC=str(stall_rc),
+        FAKE_BLOCKED_RC=str(blocked_rc),
+        FAKE_CUTOFF_RC=str(cutoff_rc),
+        FAKE_RECENT_RC=str(recent_rc),
+        FAKE_MAIN_RC=str(main_rc),
+    )
     result = subprocess.run(
-        ["bash", str(root / "scripts" / "tlc.sh")],
+        ["bash", str(root / "scripts" / "tlc.sh"), *(["--shard", shard] if shard else [])],
         capture_output=True,
         text=True,
         check=False,
@@ -252,27 +314,67 @@ def _run_with_fake_java(
     return result, calls
 
 
-def test_both_configs_pass_and_the_stall_config_runs_first(tmp_path: Path) -> None:
+def test_all_configs_pass_and_the_small_configs_run_first(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0)
     assert result.returncode == 0
-    assert len(calls) == 2
-    assert "-config specs/daily_prepare_stall.cfg" in calls[0]
-    assert "-config specs/daily_prepare.cfg " in calls[1]
+    assert len(calls) == 7
+    assert "-config specs/store_upgrade.cfg " in calls[0]
+    assert "-config specs/experiment_registry.cfg " in calls[1]
+    assert "-config specs/daily_prepare_stall.cfg" in calls[2]
+    assert "-config specs/daily_prepare_blocked.cfg" in calls[3]
+    assert "-config specs/daily_prepare_cutoff.cfg " in calls[4]
+    assert "-config specs/daily_prepare_recent.cfg " in calls[5]
+    assert "-config specs/daily_prepare.cfg " in calls[6]
     assert all("-workers auto" in call for call in calls)
 
 
-def test_a_failed_first_config_stops_before_the_second(tmp_path: Path) -> None:
-    result, calls = _run_with_fake_java(tmp_path, stall_rc=12, main_rc=0)
+def test_a_failed_first_config_stops_before_the_others(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, upgrade_rc=12)
     assert result.returncode == 12
     assert len(calls) == 1
+    assert "specs/store_upgrade.cfg failed" in result.stderr
+
+
+def test_a_failed_registry_config_stops_before_the_daily_prepare_configs(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, registry_rc=12)
+    assert result.returncode == 12
+    assert len(calls) == 2
+    assert "specs/experiment_registry.cfg failed" in result.stderr
+
+
+def test_a_failed_stall_config_stops_before_the_others_of_its_spec(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=12, main_rc=0)
+    assert result.returncode == 12
+    assert len(calls) == 3
     assert "specs/daily_prepare_stall.cfg failed" in result.stderr
 
 
-def test_a_failed_second_config_returns_its_code(tmp_path: Path) -> None:
+def test_a_failed_blocked_config_stops_before_the_main_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, blocked_rc=13)
+    assert result.returncode == 13
+    assert len(calls) == 4
+    assert "specs/daily_prepare_blocked.cfg failed" in result.stderr
+
+
+def test_a_failed_cutoff_config_stops_before_the_main_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, cutoff_rc=12)
+    assert result.returncode == 12
+    assert len(calls) == 5
+    assert "specs/daily_prepare_cutoff.cfg failed" in result.stderr
+
+
+def test_a_failed_main_config_returns_its_code(tmp_path: Path) -> None:
     result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13)
     assert result.returncode == 13
-    assert len(calls) == 2
+    assert len(calls) == 7
     assert "specs/daily_prepare.cfg failed" in result.stderr
+
+
+def test_a_failed_recent_config_stops_before_the_main_config(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, recent_rc=13)
+    assert result.returncode == 13
+    assert len(calls) == 6
+    assert "specs/daily_prepare_recent.cfg failed" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -290,3 +392,23 @@ def test_a_tlc_exit_code_is_returned_and_named(tmp_path: Path, code: int, messag
     result, _ = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=code)
     assert result.returncode == code
     assert message in result.stderr
+
+
+def test_one_shard_runs_that_config_alone(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=0, shard="recent")
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 1
+    assert "-config specs/daily_prepare_recent.cfg " in calls[0]
+
+
+def test_a_failed_shard_names_itself(tmp_path: Path) -> None:
+    result, calls = _run_with_fake_java(tmp_path, stall_rc=0, main_rc=13, shard="main")
+    assert result.returncode == 13
+    assert len(calls) == 1
+    assert "(shard main)" in result.stderr
+
+
+def test_an_empty_shard_name_exits_two() -> None:
+    result = _run("--shard", "")
+    assert result.returncode == 2
+    assert "--shard takes one shard name" in result.stderr

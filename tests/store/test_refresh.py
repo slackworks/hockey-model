@@ -290,45 +290,6 @@ def test_a_backfill_that_spends_its_budget_stops_and_the_next_run_continues(
     assert "2024-06-01" in score_requests(second)
 
 
-def test_a_budget_stop_with_no_new_unit_is_an_error_that_names_the_budget(
-    conn: sqlite3.Connection,
-) -> None:
-    start = date(2026, 1, 6)
-    refresh(conn, FakeClient(), now=NOW, backfill_from=start)
-    report = refresh(
-        conn,
-        FakeClient(),
-        now=NOW,
-        backfill_from=start,
-        clock=minute_clock(),
-        budget=timedelta(minutes=1),
-    )
-    assert report.backfill_complete is False
-    assert any("--budget-seconds" in str(e) for e in report.errors)
-
-
-def test_a_day_that_closed_since_the_last_run_does_not_count_as_progress(
-    conn: sqlite3.Connection,
-) -> None:
-    # A daily run completes the day that closed since the last run, and then the budget stops
-    # it at an open day. That day is an arrival, not a step through the backlog.
-    start = date(2026, 1, 6)
-    refresh(conn, FakeClient(), now=NOW, backfill_from=start)
-    next_day = NOW + timedelta(days=1)
-    second = FakeClient()
-    report = refresh(
-        conn,
-        second,
-        now=next_day,
-        backfill_from=start,
-        clock=minute_clock(next_day),
-        budget=timedelta(minutes=1),
-    )
-    assert "2026-01-09" in score_requests(second)
-    assert report.backfill_complete is False
-    assert any("--budget-seconds" in str(e) for e in report.errors)
-
-
 def test_a_recently_failed_boxscore_does_not_stop_the_older_windows(
     conn: sqlite3.Connection,
 ) -> None:

@@ -5,10 +5,7 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from hockey_model.game_model.features import ATTEMPT_FEATURES, FEATURES
-from hockey_model.store.upgrade import add_store_group
-
-CANDIDATE_SETS: dict[str, tuple[str, ...]] = {"xg": FEATURES, "attempt": ATTEMPT_FEATURES}
+from hockey_model.store_group import add_store_group
 
 
 def _add_refresh(parser: argparse.ArgumentParser) -> None:
@@ -66,6 +63,7 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
             'report; "" fits the Elo alone, which is the result of a failed joint test'
         ),
     )
+    _add_workers(parser)
     parser.add_argument(
         "--label",
         default=None,
@@ -78,17 +76,30 @@ def _add_fit(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, got {value}")
+    return value
+
+
+def _add_workers(parser: argparse.ArgumentParser) -> None:
+    """Add the worker count of a backtest run."""
+    parser.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=1,
+        metavar="N",
+        help="build the feature rows in up to N processes; the output does not change",
+    )
+
+
 def _add_backtest(parser: argparse.ArgumentParser) -> None:
-    """Add the backtest options that pick the candidate set and the game records."""
+    """Add the backtest options that pick the game records and the workers."""
     parser.add_argument(
         "--games-out", type=Path, metavar="PATH", help="write one CSV row per predicted game"
     )
-    parser.add_argument(
-        "--candidates",
-        choices=sorted(CANDIDATE_SETS),
-        default="xg",
-        help="xg: the production candidates; attempt: xg_form replaced by attempt_form (#77)",
-    )
+    _add_workers(parser)
 
 
 def _add_daily(parser: argparse.ArgumentParser) -> None:
@@ -116,6 +127,7 @@ def _add_experiments(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="write one CSV row per predicted game, in addition to the record's result CSV",
     )
+    _add_workers(run)
 
 
 def _add_report_due(parser: argparse.ArgumentParser) -> None:
@@ -135,10 +147,12 @@ def _add_report_due(parser: argparse.ArgumentParser) -> None:
         help="seconds the run needs after it starts; due only when it can finish before puck drop",
     )
     parser.add_argument(
-        "--prep-started",
+        "--prep-ends",
         default="",
         metavar="ISO",
-        help="start of the daily-prepare run that holds the store group; empty when none holds it",
+        help="end of the window of the daily-prepare job that holds the store group; from "
+        "prep-running.sh, which reads the timeout of the job that holds it (#311); empty "
+        "when no run holds the group",
     )
 
 
@@ -163,6 +177,33 @@ def _add_report_decide(parser: argparse.ArgumentParser) -> None:
         help="whether the day has a release. With unknown, check lookup_needed in the answer:"
         " when it is true, read the release and ask again",
     )
+
+
+def _add_report_compare(parser: argparse.ArgumentParser) -> None:
+    """Add the two report files that the compare step reads."""
+    parser.add_argument("--built", type=Path, required=True, metavar="PATH")
+    parser.add_argument("--published", type=Path, required=True, metavar="PATH")
+
+
+def _add_report_summary(parser: argparse.ArgumentParser) -> None:
+    """Add the report file that the summary step reads."""
+    parser.add_argument("--report", type=Path, required=True, metavar="PATH")
+
+
+def _add_report_index(parser: argparse.ArgumentParser) -> None:
+    """Add the files that the index step reads and writes."""
+    parser.add_argument("--report", type=Path, required=True, metavar="PATH")
+    parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        required=True,
+        metavar="YYYY-MM-DD",
+        help="the release day; the report must be for this day",
+    )
+    parser.add_argument(
+        "--existing", type=Path, default=None, metavar="PATH", help="the index to add to"
+    )
+    parser.add_argument("--out", type=Path, required=True, metavar="PATH")
 
 
 def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
@@ -194,5 +235,23 @@ def add_store_commands(add_parser: Callable[..., argparse.ArgumentParser]) -> No
         add_parser(
             "report-decide",
             help="decide the publish step of a trigger from the facts the gate read",
+        )
+    )
+    _add_report_compare(
+        add_parser(
+            "report-compare",
+            help="say whether a built report has the inputs of the newest published report",
+        )
+    )
+    _add_report_summary(
+        add_parser(
+            "report-summary",
+            help="print the summary lines that open the release notes of a report",
+        )
+    )
+    _add_report_index(
+        add_parser(
+            "report-index",
+            help="check a report against its schema and add its build to the index of the day",
         )
     )

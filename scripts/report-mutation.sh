@@ -2,8 +2,8 @@
 # Files, updates, or comments on the one open mutation report for a run.
 #
 # Usage: scripts/report-mutation.sh --stats FILE --run-url URL
-#         (--execution success|failure | --shard-result R --merge-result R
-#          --export-result R --download-result R)
+#         (--execution success|failure | --gate-result R --shard-result R
+#          --merge-result R --export-result R --download-result R)
 #         [--reason TEXT]... [--file-issue]
 #        scripts/report-mutation.sh --status S --body FILE --run-url URL --file-issue
 #
@@ -19,11 +19,19 @@
 # stderr that the step files no issue.
 # --status with --body takes a decision that another job made, so only one job reads the
 # stats. The body must be the file that decision wrote.
+# Only the issue calls need GH_TOKEN. The script reads it once, unsets it, and gives it to
+# each issue call alone, so the helper runs never see the write token.
 #
 # Stdout: the status word (clean, regression, or execution_failed).
 # Stderr: diagnostics. Exit 0 when the status is judged, and with --file-issue, the report
 # is filed or updated. Exit 1 when a gh call fails. Exit 2 on bad arguments.
 set -euo pipefail
+
+# The issue calls need the write token, and the helper runs need no token at all. read_token
+# holds the value, and the export goes away here, so no uv command sees the token. Each gh
+# call gets it back with a prefix (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
 
 # A flag that takes a value must have one. Without this, `shift 2` fails with no message.
 need_value() {
@@ -67,7 +75,7 @@ while [[ $# -gt 0 ]]; do
     RUN_URL="${2:-}"
     shift 2
     ;;
-  --shard-result | --merge-result | --export-result | --download-result)
+  --gate-result | --shard-result | --merge-result | --export-result | --download-result)
     need_value "$@"
     if [[ ! "${2:-}" =~ ^($OUTCOMES)$ ]]; then
       echo "report-mutation: $1 must be one of $OUTCOMES, got ${2:-}" >&2
@@ -141,7 +149,7 @@ else
   # One call decides the status and writes the body, so both read the same stats.
   args=(status --stats "$STATS" --out "$BODY" --run-url "$RUN_URL")
   if ((${#RESULTS[@]} > 0)); then
-    for key in shard merge export download; do
+    for key in gate shard merge export download; do
       args+=("--$key-result" "${RESULTS[$key]:-unknown}")
     done
   else
@@ -152,6 +160,9 @@ else
     args+=(--execution "$EXECUTION")
   fi
   for reason in "${REASONS[@]}"; do args+=("--reason" "$reason"); done
+  # The merge job writes the list of timed-out mutants beside the stats. The report names a
+  # missing list when the stats count a timed-out mutant.
+  args+=(--timeouts "$(dirname "$STATS")/mutmut-timeouts.json")
   status="$(uv run python3 "$HELPER" "${args[@]}")"
 fi
 
@@ -166,7 +177,8 @@ if ((FILE_ISSUE == 0)); then
 fi
 title="$(uv run python3 "$HELPER" title)"
 
-if ! issues="$(gh issue list --state open --limit "$LIST_LIMIT" --json number,body,author)"; then
+if ! issues="$(GH_TOKEN="$read_token" gh issue list --state open --limit "$LIST_LIMIT" \
+  --json number,body,author)"; then
   echo "report-mutation: gh issue list failed; run gh auth status, then rerun" >&2
   exit 1
 fi
@@ -176,20 +188,20 @@ fi
 
 if [[ "$status" == "clean" ]]; then
   if [[ -n "$existing" ]]; then
-    gh issue comment "$existing" --body "Recovery: the weekly run $RUN_URL is clean. Survivors are at or below the baseline. Close this report when you accept the result." >&2 ||
+    GH_TOKEN="$read_token" gh issue comment "$existing" --body "Recovery: the weekly run $RUN_URL is clean. Survivors are at or below the baseline. Close this report when you accept the result." >&2 ||
       {
         echo "report-mutation: gh issue comment #$existing failed for $RUN_URL" >&2
         exit 1
       }
   fi
 elif [[ -n "$existing" ]]; then
-  gh issue comment "$existing" --body-file "$BODY" >&2 ||
+  GH_TOKEN="$read_token" gh issue comment "$existing" --body-file "$BODY" >&2 ||
     {
       echo "report-mutation: gh issue comment #$existing failed for $RUN_URL" >&2
       exit 1
     }
 else
-  gh issue create --title "$title" --body-file "$BODY" >&2 ||
+  GH_TOKEN="$read_token" gh issue create --title "$title" --body-file "$BODY" >&2 ||
     {
       echo "report-mutation: gh issue create failed for $RUN_URL" >&2
       exit 1

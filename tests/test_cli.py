@@ -17,7 +17,7 @@ from hockey_model.backtest.game_records import GameRecord
 from hockey_model.backtest.metrics import calibration
 from hockey_model.backtest.runner import BacktestReport, ScoredRun
 from hockey_model.cli import CliRuntime
-from hockey_model.game_model.features import ALL_FEATURE_NAMES
+from hockey_model.game_model.features import FEATURES
 from hockey_model.identity import Catalog
 from hockey_model.models import FixedStatModel
 from hockey_model.sources.errors import SourceError
@@ -162,6 +162,19 @@ def test_malformed_roster_fields_exit_two(
     assert "invalid roster fields" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("eligible", ["C", ["C", 3], None])
+def test_a_bad_eligible_value_names_the_player_and_the_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], eligible: object
+) -> None:
+    player = {"canonical_id": "p-bad", "full_name": "x", "eligible": eligible}
+    path = tmp_path / "bad-eligible.json"
+    path.write_text(json.dumps({"name": "bad", "players": [player], "slots": None}))
+    assert cli.main(["team", "goals", str(path)], _runtime((_player("p-a"),))) == 2
+    err = capsys.readouterr().err
+    assert "player 'p-bad': eligible must be a list of slot strings" in err
+    assert repr(eligible) in err
+
+
 def test_roster_property_parses_valid_dicts(tmp_path: Path) -> None:
     for name, cid, fname in [
         ("team-a", "p-1", "Player One"),
@@ -205,7 +218,7 @@ def test_cli_refresh_exits_one_on_error(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(tmp_path / "store.db"))
-    monkeypatch.setattr("hockey_model.store_cli.HttpClient", _RefreshClient)
+    monkeypatch.setattr("hockey_model.store_cli_refresh.HttpClient", _RefreshClient)
     code = cli.main(["refresh", "--backfill-from", "2026-01-10"])
     report = json.loads(capsys.readouterr().out)
     assert code == 1
@@ -404,7 +417,7 @@ def test_feature_names_ignore_spaces_around_names() -> None:
     assert parse_features(" xg_form , rest ") == ("xg_form", "rest")
 
 
-@given(st.lists(st.sampled_from(ALL_FEATURE_NAMES), unique=True, max_size=4))
+@given(st.lists(st.sampled_from(FEATURES), unique=True, max_size=4))
 def test_feature_names_round_trip_any_distinct_known_list(names: list[str]) -> None:
     assert parse_features(",".join(names)) == tuple(names)
 
@@ -416,24 +429,28 @@ def test_feature_names_return_distinct_known_names_or_raise(text: str) -> None:
     except HockeyModelError:
         return
     assert len(set(names)) == len(names)
-    assert all(name in ALL_FEATURE_NAMES for name in names)
+    assert all(name in FEATURES for name in names)
 
 
-def test_cli_fit_accepts_the_attempt_form_research_recipe(
+def test_cli_fit_refuses_the_retired_attempt_form(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    """A research fit stays possible, and the saved fit predicts."""
+    """The attempt form is gone, so a fit that names it fails with the list of features."""
     db = tmp_path / "store.db"
     _store_with_games(db)
     monkeypatch.setenv("HOCKEY_MODEL_DB", str(db))
-    assert (
-        cli.main(
-            ["fit", "--through-season", "20152016", "--features", "attempt_form", "--label", "live"]
-        )
-        == 0
+    args = ["fit", "--through-season", "20152016", "--features", "attempt_form", "--label", "live"]
+    assert cli.main(args) == 2
+    assert "unknown feature 'attempt_form'; use any of xg_form, goalie_gsax, rest" in (
+        capsys.readouterr().err
     )
-    capsys.readouterr()
-    assert cli.main(["game", "2025020001"]) == 0
+
+
+def test_the_backtest_command_has_no_candidates_option(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["backtest", "--candidates", "attempt"]) == 2
+    assert "unrecognized arguments: --candidates attempt" in capsys.readouterr().err
 
 
 def test_the_selected_recipe_leaves_the_vetoed_feature_out_of_the_served_fit(

@@ -14,9 +14,8 @@ set -euo pipefail
 day=""
 work_dir=".tmp/check-daily-report"
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 while (($# > 0)); do
   case "$1" in
@@ -48,7 +47,9 @@ if ! is_valid_day "$day"; then
   exit 2
 fi
 
-status_json="$(uv run hockey-model report-due --date "$day")" || {
+# The token is unset here, as daily-report.sh unsets it, because a read of the schedule
+# needs no credential and this check must never use a write scope.
+status_json="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model report-due --date "$day")" || {
   echo "check-daily-report: report-due failed for $day; its error is above" >&2
   exit 1
 }
@@ -73,8 +74,7 @@ if [[ "$games" == "0" ]]; then
 fi
 
 # A 404 means no report was published. Any other answer stops the check, so an auth or
-# network error is not read as a missing report. report-gate.sh has the same lookup, so
-# change both together.
+# network error is not read as a missing report.
 answer="$(release_status "$tag")"
 case "$answer" in
 published) ;;

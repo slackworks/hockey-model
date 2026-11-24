@@ -37,8 +37,15 @@ PACKAGE = "hockey_model"
 # mutmut names every mutant with the package prefix, for example
 # hockey_model.sources.nhl.parse__mutmut_3.
 MUTANT_PREFIX = f"{PACKAGE}."
-# The per-key fields of a .meta file that shards fill in one mutant at a time.
-RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_key")
+# The per-key fields of a .meta file that shards fill in one mutant at a time. The estimate of
+# the test time is one of them, because a shard sets it only for the mutants that it ran, and the
+# timeout limit of a mutant comes from it (#274).
+RESULT_FIELDS = (
+    "exit_code_by_key",
+    "durations_by_key",
+    "type_check_error_by_key",
+    "estimated_durations_by_key",
+)
 # Balanced from the per-mutant durations that CI records in each .meta file, not from the
 # file count. Count is a poor guide: sources.http costs 357s for 190 mutants, and
 # experiments.models costs 3902s for 332 (#155). A surviving mutant runs every selected
@@ -51,7 +58,16 @@ RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_ke
 # A fit over the two heaviest shards of that run gives ``wall = work / 3.87 + 105``
 # seconds: about 3.87 effective workers, and 105s of startup and stats before the first
 # mutant. It predicts 24.8 minutes for shard 3, which timed out at its 25-minute limit.
-# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes.
+# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes for the four
+# shards before the backtest modules joined.
+#
+# The backtest modules joined in #288, from local runs on one machine: runner 618s,
+# units 740s, shards 260s, golden 140s. Shard 2 gained units and golden, which brings it to
+# about 2600s of work. Shard 3 gained runner and shards, which brings it to about 2400s.
+# Read the new work as an estimate until a CI run records the real durations.
+#
+# The season row cache modules joined in #304 and went to shard 1, the lightest. Their tests run
+# in about 5s, so read their work as small until a CI run records it.
 #
 # The fit under-reads a shard of cheap mutants. Old shard 0 held 190 mutants of
 # sources.http, summed to 357s, and took 385s: 1.95 times its prediction. Each mutant is
@@ -59,10 +75,12 @@ RESULT_FIELDS = ("exit_code_by_key", "durations_by_key", "type_check_error_by_ke
 # duration does not hold. Shards 2 and 3 below have the same shape, at 1.8s and 1.3s per
 # mutant, so read their minutes as a floor and keep the margin at the step limit.
 SHARDS: tuple[tuple[str, ...], ...] = (
-    ("experiments.models",),
-    ("backtest.metrics",),
-    ("sources.nhl", "sources.http", "sources.payload"),
+    ("experiments.models", "json_schema"),
+    ("backtest.metrics", "backtest.season_key", "backtest.row_cache", "backtest.row_codec"),
+    ("sources.nhl", "sources.http", "sources.payload", "backtest.units", "backtest.golden"),
     (
+        "backtest.runner",
+        "backtest.shards",
         "sources.espn",
         "sources.daily_faceoff",
         "sources.moneypuck",
@@ -242,13 +260,9 @@ def _mutants_without_result(root: Path, module: str) -> int:
     path = _meta_path(root, module)
     if not path.exists():
         return 0
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, UnicodeDecodeError, json.JSONDecodeError:
-        return 0
-    exits = data.get("exit_code_by_key") if isinstance(data, dict) else None
+    exits = _read_meta(path).get("exit_code_by_key")
     if not isinstance(exits, dict):
-        return 0
+        raise ShardError(f"{path} holds no exit_code_by_key object; rerun the shard that wrote it")
     return sum(1 for value in exits.values() if value is None)
 
 
@@ -259,6 +273,12 @@ def _run_merge(source_root: Path, dest: Path) -> int:
     if not source_dirs:
         raise ShardError(
             f"no shard results under {source_root}; download the mutation-shard artifacts first"
+        )
+    # A file that no shard wrote this time would read as a result of this run.
+    if dest.is_dir() and next(dest.rglob("*.meta"), None) is not None:
+        raise ShardError(
+            f"{dest} already holds .meta files of an earlier merge; delete them, or pass an "
+            "empty --into directory"
         )
     dest.mkdir(parents=True, exist_ok=True)
     copied = merge_meta(source_dirs, dest)

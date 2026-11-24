@@ -85,6 +85,10 @@ The model is the results-only Elo of sportsbettr plus three features: MoneyPuck 
 A fitted logistic regression sets the weights.
 `made_after_start` is true when the prediction time is at or after the puck drop.
 A caller must never treat such a result as a pregame read.
+`home_win_interval` is a `(low, high)` range of `home_win` at the interval level, or `None` when the fit has no coefficient uncertainty.
+The range comes from the uncertainty of the fitted weights, by the delta method on the log-odds scale.
+It is model uncertainty only: it leaves out noise in the Elo rating, noise in the feature values, and drift between seasons.
+The away range is `1 - high` to `1 - low`.
 The starting goalie comes from the first confirmed ESPN or Daily Faceoff read, then the newest likely read, then the goalie with the most recent starts.
 The result lists a goalie that no source confirmed.
 `degraded_inputs` lists each form feature of the fit that was set to the neutral value `NEUTRAL_FORM`, because a team had no MoneyPuck games before the game.
@@ -119,41 +123,156 @@ HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model game 2026020236
 HOCKEY_MODEL_DB=~/.cache/hockey-model/store.db hockey-model backtest --games-out games.csv
 ```
 
-- `refresh` reads every source and appends each read with its fetch time. It exits 1 when a source failed, and it prints what each source wrote, the errors, the credits, and `backfill_complete`. The first backfill makes about 16,000 NHL requests at two a second, so it takes hours. A backfill reads one year at a time, newest year first. `--budget-seconds N` stops it after N seconds, and `backfill_complete` is then false. The budget also stops the MoneyPuck files: a run reads one stale MoneyPuck file at least, and it stops before the next one when the time is spent. A refresh skips a score day, boxscore, or MoneyPuck file whose reads failed in a row, and the notes name it. A live feed is read on every run instead: a failed read of a feed that is already a known gap records no error, so it does not set the exit code, and each prediction names it as a stale source. One good read clears that gap with no flag needed. `--retry-skipped` reads every skipped unit again once, and one good read clears a skip. Run it again after a stop or an error: it skips what it already has. A game that started long ago and is still not final stays in the worklist: its score day is read again after a wait, at most `MAX_UNRESOLVED_DAYS` days in one run, and the notes name the game. After the MoneyPuck files, the notes count the rows that match no stored game and the rows whose game is not final yet. `refresh --starters-only` reads no MoneyPuck file, so it writes neither note.
-- `refresh --starters-only` reads only the schedule, the goalie sources, and the injuries. The report run uses it after the morning refresh.
-- `fit --through-season YYYYYYYY --features a,b` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, `rest`, and `attempt_form` (the leak test of #77).
+A long command writes progress lines to stderr, so the JSON on stdout stays valid. Each line has the form `progress COMMAND STEP EVENT elapsed=12.3s`, with the events `start`, `tick`, `stop`, and `end`. A step can add `done=3/10`, `budget_left=60s`, and `reason=TEXT`. A `tick` comes at a set interval while the step works, so a step with no count of its own still shows that it is alive. `scripts/run-step.sh` writes the same lines for the shell scripts, and the design is in [docs/design/progress-logging.md](docs/design/progress-logging.md).
+
+- `refresh` reads every source and appends each read with its fetch time. It exits 1 when a source failed, and it prints what each source wrote, the errors, the credits, and `backfill_complete`. The first backfill makes about 16,000 NHL requests at two a second, so it takes hours. A backfill reads one year at a time, newest year first. `--budget-seconds N` stops it after N seconds, and `backfill_complete` is then false. The budget also stops the MoneyPuck files: a run reads one stale MoneyPuck file at least, and it stops before the next one when the time is spent. A refresh skips a score day, boxscore, or MoneyPuck file whose reads failed in a row, and the notes name it. A URL becomes a skipped gap after `ABANDON_AFTER_FAILED_READS` failed reads in a row that span `ABANDON_MIN_SPAN_DAYS`, or after that many in a row when each failed with a permanent HTTP status such as 403. A live feed is read on every run instead: a failed read of a feed that is already a known gap records no error, so it does not set the exit code, and each prediction names it as a stale source. One good read clears that gap with no flag needed. `--retry-skipped` reads every skipped unit again once, and one good read clears a skip. Run it again after a stop or an error: it skips what it already has. A game that started long ago and is still not final stays in the worklist: its score day is read again after a wait, at most `MAX_UNRESOLVED_DAYS` days in one run, and the notes name the game. After the MoneyPuck files, the notes count the rows that match no stored game and the rows whose game is not final yet. `refresh --starters-only` reads no MoneyPuck file, so it writes neither note.
+- `refresh --starters-only` reads only the schedule, the goalie sources, and the injuries. The report run uses it after the prepare run's full refresh.
+- `fit --through-season YYYYYYYY --features a,b [--workers N]` fits the weights on every game from the 2015-16 season through that season and saves the fit. `--features` is required, because no default feature list is approved. Pass the `live_features` of the latest backtest report, such as `xg_form,rest` for the November 2026 report below. `--features ""` saves the Elo alone, which is the right fit when the joint test fails. `--label live` names the production fit: `game`, `daily`, and the consumer serve the fit with that label, and a fit with no label cannot replace it. A fit refuses, with exit 2 and no saved fit, when a selected feature is imputed in more than 10% of its training rows. The `imputation` list in the output and in the backtest report gives the imputed count and share of each selected feature. The candidates are `xg_form`, `goalie_gsax`, and `rest`.
 - `game GAME_ID [--level L] [--fit-id N]` prints the prediction of one stored game with the fit labelled `live`, or with fit `N` when `--fit-id` is given.
-- `backtest [--games-out PATH] [--candidates {xg,attempt}]` runs the walk-forward backtest and prints a JSON report. `--games-out` writes one CSV row for each scored game and run. `--candidates attempt` replaces `xg_form` with the shot-attempt form, the leak test in #77.
+- `backtest [--games-out PATH] [--workers N]` runs the walk-forward backtest and prints a JSON report. `--workers N` builds the feature rows one season at a time in up to N processes, each with its own read-only store connection, and logs the wall time of each unit on stderr. `experiments run` and `fit` take the same option. The report and the CSV are the same for every N. A store file with no uncommitted change builds one season at a time for any N, and a season whose rows are in the `season-rows` directory beside the store file, under the key of that season, is read from there and not built again. The key covers the data that the rows can read and the source files of the package, so a run that adds the newest days builds the newest season only. `--games-out` writes one CSV row for each scored game and run.
 - `store upgrade [--db PATH] [--if-missing {fail,skip}]` moves an older store to the current schema, one version at a time.
 It keeps every row and every fit ID.
 The default `--if-missing fail` names a store file that does not exist.
 `--if-missing skip` exits 0 and reports that there is no store yet, for a first run that writes one later.
 It first writes a backup beside the store, named `<store>.v<version>.bak`, and it never overwrites an earlier backup.
+The copy goes to `<store>.v<version>.bak.tmp` and is renamed when it is complete, so a backup with its final name is complete, and the next run replaces a temporary file that a killed run left.
 The daily workflows delete that backup before they save the store to the cache, so a later no-op report can name a backup that is no longer there.
-`--if-missing skip` reports `from_version: null` and a `note`, and never a `next_step`.
+`--if-missing skip` reports `from_version: null` and a `note`.
 The change runs in one transaction, so a failure leaves the store as it was.
-The four MoneyPuck attempt columns are NULL for the rows that version 1 wrote, so the attempt-form features skip those rows.
+The two MoneyPuck shot-attempt columns are NULL for the rows that version 1 wrote. No feature reads them.
 To restore, stop every writer, copy the backup over the store file, and delete any `-wal` and `-shm` files beside it.
 Opening a store never migrates it, so a consumer on an old store fails and names this command.
 Opening a store also checks the shape of its tables against the stamp.
 A stamp that names a version the tables do not hold fails at open and names the missing column, instead of a later `no such column`.
 The daily prepare and report scripts run this command on the store that the workflow cache restores.
 Upgrade the producer first, then the consumers.
-After the upgrade, run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest.
-Until that refresh runs, the attempt-form features are empty.
 The report lists `coverage`: the scored games of each season and game type, with the expected count of a regular season (`EXPECTED_REGULAR_GAMES` in `game_model/seasons.py`) and the stored games of that season that never finished.
 `eligible` is false when a listed regular season is under `MIN_SEASON_COVERAGE` of its expected count, or when the scored games hold fewer than `MIN_INDEPENDENT_BLOCKS` independent blocks for the bootstrap.
 Then `success` is false, `live_features` is empty, the interval is `null`, and `ineligible_reasons` says why. The scores stay in the report as descriptions.
+- `store gaps --live [--db PATH]` prints, as JSON, each live feed (the ESPN goalie and injury feeds and Daily Faceoff) that is a known gap. Each item has `source`, `url`, `gap_since`, `age_hours`, `last_ok`, and `over_limit`, which is true when the gap is older than `LIVE_FEED_MAX_AGE`. A `feeds` list names the newest read of each feed (`newest_read`, `age_hours`, `over_limit`), and a feed with no read, or an old newest read, is over the limit. The schema is `src/hockey_model/live_gaps.schema.json`. The `daily-report-check` workflow runs `scripts/check-live-feeds.sh`, which fails for each gap that is over the limit.
 - `daily [--date YYYY-MM-DD] --out-dir DIR [--level L]` predicts every game of one game day, and writes `report-DATE.md` and `report-DATE.json`. A game day is the Eastern date that the NHL schedule uses, so a 7 pm ET slate that starts after midnight UTC stays in one report. Game starts stay UTC instants. The day defaults to the game day that holds now. A game that already started is still predicted, with its inputs taken as of the puck drop and a `late_run` note. A game that is over is predicted the same way, so a late first report is full. A postponed game gets no prediction. The JSON copy names the model in `model`: the fit features, a SHA-256 of the fit weights (`fit_sha256`), and the code commit from `GITHUB_SHA` (`code_sha`, null outside Actions).
-- `report-due [--date YYYY-MM-DD] [--force] [--prep-started ISO]` prints whether the first puck drop of the game day is still ahead of the run, plus `--margin-seconds`, so the current run may publish the day's report. Every trigger that starts before the first puck drop is due. The first run that publishes creates the release. Later runs before the first puck drop replace its files and notes, so a reader can see the release change until then. After the puck drop, runs skip the day. A run that starts after the puck drop publishes the first report of the day late, with a warning. A game day with no games publishes nothing. The output also says `prep_too_early` while the prep window is still open, so a run that finds no prep marker skips instead of failing. The window opens at the prepare cron and closes `PREP_WINDOW` plus `PREP_QUEUE_ALLOWANCE` later, so it closes on the clock and not on the puck drop. `--prep-started` names the prepare run that holds the store group, and `prep_blocks_report` says that its timeout plus the report budget reaches past the puck drop, so the gate skips the run with reason `prepare-wait`. Each build keeps its own `report-DATE-HHMMSSZ` files, so no published version is replaced. The triggers run at minute `TRIGGER_MINUTE_UTC` of each hour in `TRIGGER_HOURS_UTC` in `report_trigger.py`, and the cron in `.github/workflows/daily-report.yml` MUST list the same minute and hours. `scripts/trigger_hours.py` derives them from the season schedule. The design is in [docs/design/daily-report-triggers.md](docs/design/daily-report-triggers.md).
+- `report-due [--date YYYY-MM-DD] [--force] [--prep-ends ISO]` prints whether the first puck drop of the game day is still ahead of the run, plus `--margin-seconds`, so the current run may publish the day's report. Every trigger that starts before the first puck drop is due. The first run that publishes creates the release. Later runs before the first puck drop add a new build, and only when the inputs differ from the newest published report (`inputs_sha256` in the report JSON), so a reader can see the release change until then. After the puck drop, runs skip the day. A run that starts after the puck drop publishes the first report of the day late, with a warning. A game day with no games publishes nothing. The output also says `puck_drop_passed`, so a run that finds no prep marker skips before the first puck drop and fails after it. `--prep-ends` names the end of the window of the `daily-prepare` job that holds the store group, which `scripts/prep-running.sh` reads from the job list, and `prep_blocks_report` says that the end plus the report budget reaches the puck drop, so the gate skips the run with reason `prepare-wait`. The prepare is two jobs: a `skip` job with a 10-minute timeout ends a prepared day in minutes, and a `prepare` job with a 180-minute timeout runs the rebuild (#311). A run that would only replace a published day also stands aside while a manual `daily-prepare` run waits or runs, with reason `manual-wait`, because its build would take the one waiting slot of the store group. Each build keeps its own `report-DATE-HHMMSSZ` files, so no published version is replaced. The report runs at minute `TRIGGER_MINUTE_UTC` of every hour, and the cron in `.github/workflows/daily-report.yml` MUST list the same minute. The prepare runs at minute 14 of every hour. The design is in [docs/design/daily-report-triggers.md](docs/design/daily-report-triggers.md).
+- `report-compare --built PATH --published PATH` prints whether a built report JSON has the `inputs_sha256` of the newest published report. The answer has `unchanged`, `baseline`, and `reason` (`unchanged` or `replace`). `scripts/daily-report.sh --skip-unchanged` runs it before a publish.
+- `report-summary --report PATH` checks a report against its schema and prints `summary`, the lines that open the release notes. A header line names the level and says that the ranges are model uncertainty only. Then one line names each game in start order, with the favorite, its win chance in whole percent, and the range, such as `TOR at MTL: TOR 58% (52–64%)`. A game with no prediction says why. A fit with no range says `no interval: Elo only`, or says to fit again. A day with no games says so. `scripts/publish-daily-report.sh` puts these lines before the build note, and a failed summary stops the script before any upload.
 - `report-decide` prints the publish step of one trigger from the facts that `scripts/report-gate.sh` read: `--due`, `--games`, `--date`, `--force`, `--dry-run`, and `--published`. With `--published unknown` it prints `lookup_needed`. When that is true, read the release and ask again with `--published true` or `false`. It prints `due`, `publish`, `reason`, `lookup_needed`, and `warning`.
 - To test the report by hand, run `gh workflow run daily-report -f force=true -f dry_run=true`. The run builds the report for the current game day, skips the trigger slot and the published-release check, and uploads the report as an artifact. It publishes no release.
 - `fit` without `--through-season` fits through the newest season that holds a final game in the store, and records that season.
 An explicit `--through-season` newer than the newest stored final game is refused, so the saved cutoff never names a season that trained nothing.
 
-Two workflows publish the report. `daily-prepare` runs `scripts/daily-prepare.sh` each morning before the first trigger: it refreshes every source, runs the backtest, and fits the model on the `live_features` of that backtest. A backtest report without `live_features` stops the run. `daily-report` runs `scripts/report-gate.sh` at each trigger. When the gate is due, it runs `scripts/daily-report.sh`, which refreshes only the starters and predicts, and then `scripts/publish-daily-report.sh`. The release is tagged `reports-DATE` and holds the daily report, the backtest JSON (`backtest-DATE.json`), and the backtest per-game CSV (`backtest-games-DATE.csv`). When the morning run did not finish, the report run stops with exit code 1 and names the fix: run the `daily-prepare` workflow with that date, then run the report again.
+Two workflows publish the report. `daily-prepare` runs `scripts/daily-prepare.sh` every hour: it refreshes every source, runs the backtest, and fits the model on the `live_features` of that backtest. A backtest report without `live_features` stops the run. `daily-report` runs `scripts/report-gate.sh` at each trigger. When the gate is due, it runs `scripts/daily-report.sh`, which refreshes only the starters and predicts, and then `scripts/publish-daily-report.sh`. The release is tagged `reports-DATE` and holds the daily report, the index of its builds (`index-DATE.json`), the backtest JSON (`backtest-DATE.json`), and the backtest per-game CSV (`backtest-games-DATE.csv`). When the prepare has not finished, the report run skips before the first puck drop and retries at the next hour. After the first puck drop, it stops with exit code 1 and names the fix: run the `daily-prepare` workflow with that date, then run the report again.
 
-The store lives in the Actions cache. A cache miss, such as after eviction, starts a full backfill. Each `daily-prepare` run reads for `BACKFILL_BUDGET_S` seconds, one year at a time and newest year first, so a full backfill takes several runs. A run that stops early exits with code 75 and saves the store. The backfill writes a marker file next to the store when it finishes. A store without the marker is partial, so the next run resumes the backfill. `daily-prepare` runs the backtest and the fit only after the marker exists. A day that already has its release is skipped. A second publish for the same day fails. Delete the release first to publish the day again. `daily-report` does not run `daily-prepare`. A day with no `prepared-DATE` marker stops the report with exit code 1, and the message names the `daily-prepare` workflow to run.
+The store lives in the Actions cache. A cache miss, such as after eviction, starts a full backfill. Each `daily-prepare` run reads for `BACKFILL_BUDGET_S` seconds, one year at a time and newest year first, so a full backfill takes several runs. A run that stops early exits with code 75 and saves the store, unless the budget stops it before it finishes one day or game, or while older days wait with none read: that run exits 1. The backfill writes a marker file next to the store when it finishes. A store without the marker is partial, so the next run resumes the backfill. `daily-prepare` runs the backtest and the fit only after the marker exists. A day that has its `prepared-DATE` marker and a `backtest-DATE.json` with a `live_features` list of names is already prepared, so a second `daily-prepare` for it refreshes the store, says that it skipped, and exits 0. `daily-prepare.sh --force`, or the `force` input of a manual `daily-prepare` run, rebuilds the day on purpose, and deletes the season row cache first. A scheduled run never forces. A day that already has its release gets a new build only when `report-compare` finds new inputs, and only before the first puck drop. `daily-report` does not run `daily-prepare`. A day with no `prepared-DATE` marker stops the report with exit code 1, and the message names the `daily-prepare` workflow to run.
+
+The prepare is two jobs that share the store group. The `skip` job restores the cache and runs `scripts/daily-prepare.sh --check-only`, which exits with code 4 when the day needs the rebuild. The `prepare` job then runs the rebuild with a longer timeout. A prepared day therefore holds the group for minutes, and `scripts/prep-running.sh` reads the end of the window of the job that holds it, so the report gate waits for that job and not for a rebuild that will not run. A renamed job or a timeout that misses the workflow fails a test that compares the flags with the job list of `daily-prepare.yml`.
+
+### The published report
+
+A consumer reads the release assets of `reports-DATE`, and not the store.
+The files are a contract.
+`src/hockey_model/daily_report.schema.json` is the JSON Schema of the report, and `src/hockey_model/report_index.schema.json` is the JSON Schema of the index.
+Both ship in the wheel.
+`daily` checks the report against its schema before it writes a file, and `scripts/publish-daily-report.sh` checks it again before it uploads.
+An invalid report stops the run and names the JSON path and the schema.
+[docs/design/report-contract.md](docs/design/report-contract.md) says when `schema_version` changes.
+
+| Asset | What it holds |
+| --- | --- |
+| `report-DATE.json` | The newest build of the day. |
+| `report-DATE-HHMMSSZ.json` | One build, named by its `generated_at` time (UTC). A published version is never replaced. |
+| `index-DATE.json` | One entry for each build, oldest first. A rebuild adds its entry and drops none. |
+
+A report has these fields.
+Every field is always present.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schema_version` | integer | The version of this shape. It is 1. |
+| `date` | text | The Eastern game day, `YYYY-MM-DD`. |
+| `generated_at` | text | The time of the run, ISO 8601 UTC with microseconds. |
+| `inputs_sha256` | text | A SHA-256 of what a reader sees, without the time of the run. Equal values mean equal numbers. |
+| `level` | number | The interval level of the goal ranges, between 0 and 1. |
+| `credits` | list of text | The data sources that the predictions used. |
+| `model` | object or null | `features` (fit features), `fit_sha256` (SHA-256 of the fit weights), and `code_sha` (the commit, null outside Actions). Null when the run did not name a fit. |
+| `training_gaps` | list of text | Source gaps in days older than the previous season. The measured case, a gap of up to a week two seasons back, moved a win chance by at most `OLD_GAP_MEASURED_SHIFT_PP` percentage points. |
+| `games` | list | One object for each game that starts on the day. |
+
+A game has these fields.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `game_id` | integer | The NHL game ID. |
+| `home`, `away` | text | The team codes. |
+| `start_utc` | text | The puck drop, ISO 8601 UTC with microseconds. |
+| `state` | text | The NHL game state, such as `FUT`, `LIVE`, `OFF`, or `PPD`. |
+| `skipped` | text or null | The reason the game has no prediction. A postponed game holds `game is postponed (state PPD); no prediction`. Null when the game has a prediction. |
+| `home_win`, `away_win` | number or null | The win chances. Null when `skipped` holds a reason. |
+| `win_interval` | object or null | The range of each win chance at the report `level`: `home_low`, `home_high`, `away_low`, and `away_high`. It is model uncertainty only. Null when `skipped` holds a reason, and when the fit has no coefficient uncertainty, such as an Elo-only fit or a fit saved before ranges existed. The schema does not require the field, so a consumer reads a missing field as null. |
+| `made_after_start` | boolean | True when the run made the prediction after the puck drop. |
+| `missing` | list | Inputs that were absent or weak: `kind`, `team` (text or null), and `note`. |
+| `degraded_inputs` | list | Features set to a neutral value for a team with no data: `feature`, `kind`, and `teams`. |
+| `training` | object or null | `fit_id`, `fit_through_season`, and `membership` (`in_sample`, `out_of_sample`, or `unknown`). Null when `skipped` holds a reason. |
+
+`missing.kind` and `degraded_inputs[].kind` hold one of `goalie_unconfirmed`, `goalie_unknown`, `goalie_conflict`, `xg_form`, `form_games_left_out`, `goalie_form`, `stale_source`, `late_run`, or `rest_unknown`.
+
+One report, with one game:
+
+```json
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "generated_at": "2026-11-04T20:20:13.000000+00:00",
+  "inputs_sha256": "9f2c4b6e0a1d3f58c7e2a4b6d8f0123456789abcdef0123456789abcdef01234",
+  "level": 0.8,
+  "credits": ["Data from MoneyPuck.com."],
+  "model": {
+    "features": ["xg_form", "rest"],
+    "fit_sha256": "b1d5c3e7f9a2b4d6e8f0a1c3e5d7f9b2a4c6e8d0f1b3d5e7a9c1b3d5f7e9a0c2",
+    "code_sha": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "training_gaps": [],
+  "games": [
+    {
+      "game_id": 2026020201,
+      "home": "TOR",
+      "away": "BOS",
+      "start_utc": "2026-11-05T00:00:00.000000+00:00",
+      "state": "FUT",
+      "skipped": null,
+      "home_win": 0.55,
+      "away_win": 0.45,
+      "win_interval": {"home_low": 0.49, "home_high": 0.61, "away_low": 0.39, "away_high": 0.51},
+      "made_after_start": false,
+      "missing": [
+        {"kind": "goalie_unconfirmed", "team": "TOR", "note": "starter is expected, not confirmed"}
+      ],
+      "degraded_inputs": [],
+      "training": {"fit_id": 3, "fit_through_season": 20252026, "membership": "out_of_sample"}
+    }
+  ]
+}
+```
+
+The index of one day:
+
+```json
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "builds": [
+    {
+      "file": "report-2026-11-04-202013Z.json",
+      "generated_at": "2026-11-04T20:20:13.000000+00:00",
+      "code_sha": "0123456789abcdef0123456789abcdef01234567",
+      "fit_sha256": "b1d5c3e7f9a2b4d6e8f0a1c3e5d7f9b2a4c6e8d0f1b3d5e7a9c1b3d5f7e9a0c2",
+      "inputs_sha256": "9f2c4b6e0a1d3f58c7e2a4b6d8f0123456789abcdef0123456789abcdef01234",
+      "schema_version": 1
+    }
+  ]
+}
+```
+
+`report-index --report PATH --date YYYY-MM-DD [--existing PATH] --out PATH` checks a report against its schema and writes the index with that build added. It refuses a report of another day. It prints `out`, `builds` (the count), and `file` (the name of the added build, `report-DATE-HHMMSSZ.json`, from `generated_at`).
+A day published before the index existed has no entry for its older builds.
 
 ### Data sources
 
@@ -179,7 +298,7 @@ The 90% interval (5th to 95th percentile) of the difference is -0.0144 to -0.008
 The live features are expected-goals form and rest.
 The guess run vetoed goalie goals saved above expected.
 MoneyPuck's expected-goals model may have trained on the scored games, so the gain may look larger than it was.
-Issue #77 tests this with a form built from shot-attempt counts.
+Issue #77 tested this with a form built from shot-attempt counts. The form is gone, and `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that holds it.
 A reviewer then scored the model against the last pre-game DraftKings line on matched regular season games.
 The model is level with the line in 2024-25 (0.6633 against 0.6604) and worse in 2025-26 (0.6911 against 0.6826, interval +0.0035 to +0.0140).
 The model does not pass the blend gate for betting.
@@ -202,6 +321,9 @@ season and later, and it runs once.
 The run refuses when the cohort holds fewer games than the record requires.
 A run whose interval is wider than the effect the record expected is
 inconclusive, not rejected.
+The promotion bar of a confirmation record follows its look number `k`: the interval cuts the tail `BASE_TAIL / (k * (k + 1))`, so the tails of all looks sum to less than `BASE_TAIL`.
+A record that will not run is set to the status `withdrawn`. It spends no look, holds no result, and cannot return to another status.
+See [docs/design/promotion-bar.md](docs/design/promotion-bar.md).
 
 Run the registry commands from the repository root.
 The records live in `experiments/`, relative to the working directory. The schema
@@ -209,13 +331,16 @@ that validates them is `src/hockey_model/experiments/schemas.py`.
 
 ```text
 hockey-model experiments check
-hockey-model experiments run 0001-v1-forward-test --games-out games.csv
+hockey-model experiments run 0002-v1-forward-test --games-out games.csv
 ```
 
 The per-game CSV of a confirmation run is committed under
 `experiments/results/`, and the record stores its path relative to the repository root and its SHA-256 hash.
-`experiments check` also fails when a record that holds a result is deleted or renamed, when its status disagrees with its result, when a committed result was removed or replaced, and when two records share a number.
-It reads the git history, so a shallow clone stops with a message that asks for the full history.
+`experiments check` also fails when a record that holds a result is deleted or renamed, when a record that never ran is deleted while a higher confirmation record exists, when its status disagrees with its result, when a committed result was removed or replaced, and when two records share a number.
+It reads the git history of each record path, so a shallow clone stops with a message that asks for the full history.
+A record that moves to another name is a deleted record and a new record, because git pairs a removed file with an added file by how alike the two are.
+A TLA+ model of these rules is in `specs/experiment_registry.tla` (design in `docs/design/experiment-registry-tla.md`).
+Outside a git work tree, and before the first commit, it cannot read the history. The output then has a `notes` entry, `deletion history not checked: ...`, so the missing check is not read as a pass.
 
 ## Consumer API
 
@@ -305,4 +430,22 @@ uv run pytest
 prek install
 ```
 
+The CI test job and the pre-push hook run `uv run pytest -n auto`, which uses every core.
 See `AGENTS.md` for the commands and rules.
+
+## Release
+
+A tag that starts with `v` runs the release workflow (`.github/workflows/release.yml`).
+The workflow publishes only after the gate passes.
+Release in this order:
+
+1. Rename the `## [Unreleased]` section of `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD`, and add a new `## [Unreleased]` section above it.
+2. Set `project.version` in `pyproject.toml` to `X.Y.Z`.
+3. Merge both changes to `main`.
+4. Run `uv run python3 scripts/check_release.py --tag vX.Y.Z` on `main`. It prints the version and says if it is a pre-release.
+5. Tag the merge commit `vX.Y.Z`, and push the tag.
+
+The jobs and the checks of each job are in `.github/workflows/release.yml`. It refuses a tag on a commit that is not on `main`, and a commit with no successful push run of `ci.yml` (`scripts/check-commit-ci.sh`).
+Re-run only the failed jobs after a failure, because a run of all jobs builds the files again, and a file with other bytes stops the publish.
+A pre-release version, such as `0.2.0rc1`, makes a pre-release.
+The workflow publishes to no package index.

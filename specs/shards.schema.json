@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The TLC shards",
+  "description": "Each shard runs one spec with one config. A shard runs when a changed path matches the paths that it covers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["always", "covers", "shards"],
+  "properties": {
+    "always": {
+      "description": "Paths whose change runs every shard. A pattern ending in /** matches every path under that directory.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "covers": {
+      "description": "Paths of the code that a shard models, unless the shard names its own covers.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "shards": {
+      "description": "The shards, in run order. The small shards come first, so a mistake fails early.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "spec", "config"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "spec": { "type": "string", "minLength": 1 },
+          "config": { "type": "string", "minLength": 1 },
+          "covers": {
+            "description": "Paths of the code that this shard models. They replace the shared covers.",
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "paths": {
+            "description": "Paths that only this shard covers, in addition to its covers.",
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from hockey_model.game_model.features import ALL_FEATURE_NAMES, FeatureRow
+from hockey_model.game_model.features import FEATURES, FeatureRow
 from hockey_model.types import HockeyModelError
 
 # The largest share of rows that may use a stand-in for one selected feature. It was set
@@ -42,7 +42,7 @@ def feature_quality(rows: Sequence[FeatureRow], names: Sequence[str]) -> tuple[F
     An empty ``rows`` raises. A share over no rows is not a zero share. A name that no row can
     impute raises, so a feature with no imputed path cannot pass the limit unseen.
     """
-    unknown = [name for name in names if name not in ALL_FEATURE_NAMES]
+    unknown = [name for name in names if name not in FEATURES]
     if unknown:
         raise ValueError(f"imputation share: {unknown[0]!r} is not a known feature")
     if not rows:

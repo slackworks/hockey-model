@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from hockey_model.experiments.models import ExperimentRecord
+from hockey_model.experiments.schemas import RECORD_ID_PATTERN
 from hockey_model.types import HockeyModelError
 
 # The registry is repository data, not package data, so every call names the
@@ -20,9 +21,8 @@ REGISTRY_DIR_NAME = "experiments"
 # file other people can read.
 RESULTS_DIR_NAME = "results"
 
-# A record id is a four-digit number and a slug. The number is the record's slot
-# in the registry, so two records cannot share it.
-RECORD_STEM = re.compile(r"^[0-9]{4}-[a-z0-9][a-z0-9-]*$")
+# The number of a record id is the record's slot in the registry, so two records cannot share it.
+RECORD_STEM = re.compile(RECORD_ID_PATTERN)
 
 
 def registry_dir(repo_root: Path) -> Path:
@@ -45,6 +45,22 @@ def list_records(repo_root: Path) -> list[str]:
         if path.suffix == ".json" and RECORD_STEM.fullmatch(path.stem):
             ids.append(path.stem)
     return sorted(ids)
+
+
+def misnamed_record_files(repo_root: Path) -> list[str]:
+    """Return the JSON files of the registry whose names are not record IDs.
+
+    ``list_records`` skips such a file, so a confirmation record renamed to one would leave the
+    look count and the deletion check.
+    """
+    registry = registry_dir(repo_root)
+    if not registry.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in registry.iterdir()
+        if path.suffix == ".json" and not RECORD_STEM.fullmatch(path.stem)
+    )
 
 
 def get_record(record_id: str, repo_root: Path) -> ExperimentRecord:

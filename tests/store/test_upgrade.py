@@ -7,16 +7,15 @@ import sqlite3
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import add_game, add_team_form
+from seeding import add_nhl_id_columns, restore_unblocked_columns, stamp_old_version
 
-from hockey_model.store import sql_text, upgrade
+from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
-from hockey_model.store.reads import mp_attempt_form_before
 from hockey_model.store.shape import Requirement, earned_version
 from hockey_model.store.upgrade import upgrade_store
 from hockey_model.store_cli import run_store_command
@@ -55,7 +54,8 @@ def make_v2_store(path: Path) -> Path:
     connect(path).close()
     conn = sqlite3.connect(path)
     conn.execute("DROP TABLE fit_labels")
-    conn.execute("UPDATE schema_version SET version = 2")
+    restore_unblocked_columns(conn)
+    stamp_old_version(conn, 2)
     conn.execute(
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
         " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
@@ -86,7 +86,7 @@ def make_v2_store_preflag(path: Path) -> Path:
         "INSERT INTO mp_team_games VALUES (2002, 'BOS', '2026-01-05', 3.1, 0.9,"
         " 10, 11, 12, 13, '2026-01-06T00:00:00Z')"
     )
-    conn.execute("UPDATE schema_version SET version = 2")
+    stamp_old_version(conn, 2)
     conn.execute(
         "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
         " VALUES (20252026, '[\"rest\"]', '[0.1]', '2026-11-01T00:00:00Z')"
@@ -104,6 +104,7 @@ def make_v3_store(path: Path) -> Path:
     """
     connect(path).close()
     conn = sqlite3.connect(path)
+    restore_unblocked_columns(conn)
     conn.execute(
         "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
         " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
@@ -115,7 +116,7 @@ def make_v3_store(path: Path) -> Path:
         " fetched_at, attempts_known) VALUES (3002, 'NYR', '2026-01-11', 1.0, 1.0,"
         " '2026-01-12T00:00:00Z', 0)"
     )
-    conn.execute("UPDATE schema_version SET version = 3")
+    stamp_old_version(conn, 3)
     conn.commit()
     conn.close()
     return path
@@ -155,10 +156,9 @@ def test_upgrade_keeps_every_row_and_leaves_attempt_counts_unknown(v1: Path) -> 
     assert after == before
     counts = rows(
         v1,
-        "SELECT shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
-        " attempts_known FROM mp_team_games",
+        "SELECT shot_attempts_for, shot_attempts_against, attempts_known FROM mp_team_games",
     )
-    assert counts == [(None, None, None, None, 0)] * len(V1_MP_ROWS)
+    assert counts == [(None, None, 0)] * len(V1_MP_ROWS)
     assert version_of(v1) == SCHEMA_VERSION
 
 
@@ -207,6 +207,74 @@ def test_an_existing_backup_is_never_overwritten(v1: Path) -> None:
     assert version_of(v1) == 1
 
 
+def test_a_copy_that_a_killed_run_left_does_not_block_the_next_upgrade(v1: Path) -> None:
+    leftover = v1.parent / "store.db.v1.bak.tmp"
+    leftover.write_text("half a copy", encoding="utf-8")
+    report = upgrade_store(v1)
+    assert report.backup_path == str(v1.parent / "store.db.v1.bak")
+    assert version_of(Path(report.backup_path)) == 1
+    assert not leftover.exists()
+
+
+def test_the_copy_is_written_under_another_name_and_renamed_when_it_is_complete(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[str]] = []
+    real = upgrade._backup_to
+
+    def spy(path: Path, target: Path) -> None:
+        real(path, target)
+        seen.append(sorted(p.name for p in path.parent.iterdir() if ".bak" in p.name))
+
+    monkeypatch.setattr(upgrade, "_backup_to", spy)
+    upgrade_store(v1)
+    assert seen == [["store.db.v1.bak.tmp"]]
+    assert sorted(p.name for p in v1.parent.iterdir() if ".bak" in p.name) == ["store.db.v1.bak"]
+
+
+def test_a_failed_copy_leaves_no_file_and_the_store_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(path: Path, target: Path) -> None:
+        target.write_text("half a copy", encoding="utf-8")
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(upgrade, "_backup_to", broken)
+    with pytest.raises(StoreError, match="backup failed: disk full"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_that_cannot_be_renamed_is_a_named_error_and_the_store_is_unchanged(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: Path, target: Path) -> Path:
+        raise PermissionError(13, "no rename here", str(self))
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    with pytest.raises(StoreError, match="backup failed: .*no rename here"):
+        upgrade_store(v1)
+    assert list(v1.parent.glob("*.bak*")) == []
+    assert version_of(v1) == 1
+
+
+def test_a_copy_to_a_directory_that_cannot_be_written_is_a_named_error(
+    v1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = sqlite3.connect
+
+    def connect(target: Path, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        if str(target).endswith(".tmp"):
+            raise sqlite3.OperationalError("unable to open database file")
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(upgrade.sqlite3, "connect", connect)
+    with pytest.raises(StoreError, match="backup failed: unable to open database file"):
+        upgrade_store(v1)
+    assert version_of(v1) == 1
+
+
 def test_a_missing_file_is_refused_without_being_created(tmp_path: Path) -> None:
     path = tmp_path / "absent.db"
     with pytest.raises(StoreError, match="no store file there"):
@@ -219,7 +287,6 @@ def test_if_missing_skip_returns_without_creating_the_file(tmp_path: Path) -> No
     path = tmp_path / "absent.db"
     report = upgrade_store(path, if_missing="skip")
     assert (report.from_version, report.to_version, report.changed) == (None, SCHEMA_VERSION, False)
-    assert report.next_step is None
     assert report.note is not None and "first refresh" in report.note
     assert not path.exists()
 
@@ -303,17 +370,6 @@ def test_the_store_command_needs_a_subcommand(v1: Path) -> None:
         run_store_command(args)
 
 
-def test_attempt_form_skips_rows_without_counts(v1: Path) -> None:
-    upgrade_store(v1)
-    conn = connect(v1)
-    add_game(conn, 2001, "2026-01-01T23:00:00Z", "TOR", "BOS")
-    add_game(conn, 2002, "2026-01-05T23:00:00Z", "TOR", "BOS")
-    add_team_form(conn, 2002, "TOR", 2.0, 2.0, attempts=(55, 45))
-    form = mp_attempt_form_before(conn, "TOR", datetime(2026, 2, 1, tzinfo=UTC), 5)
-    conn.close()
-    assert form == [(55, 45)]
-
-
 def test_an_upgraded_table_has_the_same_columns_as_a_fresh_one(tmp_path: Path) -> None:
     fresh = tmp_path / "fresh.db"
     connect(fresh).close()
@@ -350,11 +406,7 @@ _ROW = st.tuples(
 )
 
 
-@settings(
-    max_examples=25,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+@settings(max_examples=25, deadline=None)
 @given(data=st.lists(_ROW, min_size=0, max_size=8, unique_by=lambda r: (r[0], r[1], r[5])))
 def test_any_v1_rows_keep_their_values_and_gain_unknown_counts(data: list[tuple]) -> None:
     # Each example needs its own directory, because a store and its backup must not exist yet.
@@ -365,24 +417,6 @@ def test_any_v1_rows_keep_their_values_and_gain_unknown_counts(data: list[tuple]
         assert sorted(kept) == sorted(data)
         counts = rows(path, "SELECT shot_attempts_for, attempts_known FROM mp_team_games")
         assert all(count == (None, 0) for count in counts)
-
-
-def test_an_unknown_attempt_column_is_refused_before_any_sql_runs(v1: Path) -> None:
-    upgrade_store(v1)
-    conn = connect(v1)
-    try:
-        with pytest.raises(ValueError, match="unknown column"):
-            from hockey_model.store.reads import _mp_pairs_before
-
-            _mp_pairs_before(
-                conn,
-                ("xg_for; DROP TABLE games", "xg_against"),
-                "TOR",
-                datetime(2026, 2, 1, tzinfo=UTC),
-                5,
-            )
-    finally:
-        conn.close()
 
 
 def _index_names(path: Path) -> set[str]:
@@ -409,12 +443,6 @@ def test_the_upgraded_table_sql_matches_the_fresh_one_including_checks(tmp_path:
     assert _table_sql(upgraded) == _table_sql(fresh)
 
 
-def test_a_completed_upgrade_says_what_to_run_next(v1: Path) -> None:
-    report = upgrade_store(v1)
-    assert report.next_step is not None
-    assert "hockey-model refresh --reread-moneypuck" in report.next_step
-
-
 def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     tmp_path: Path,
 ) -> None:
@@ -426,8 +454,6 @@ def test_a_version_2_store_gains_the_fit_label_table_and_keeps_its_fit(
     assert rows(v2, "SELECT fit_id, fit_through_season FROM model_fits") == [(1, 20252026)]
     assert rows(v2, "SELECT COUNT(*) FROM fit_labels") == [(0,)]
     assert version_of(v2) == SCHEMA_VERSION
-    # The 2->3 step adds the label table, and the 3->4 rebuild leaves every count alone.
-    assert report.next_step is None
 
 
 def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
@@ -446,10 +472,9 @@ def test_a_version_2_store_without_the_flag_gains_it_and_keeps_its_counts(
     assert "attempts_known" in [row[1] for row in rows(v2, "PRAGMA table_info(mp_team_games)")]
     assert rows(
         v2,
-        "SELECT game_id, team, shot_attempts_for, unblocked_against, attempts_known"
+        "SELECT game_id, team, shot_attempts_for, shot_attempts_against, attempts_known"
         " FROM mp_team_games",
-    ) == [(2002, "BOS", 10, 13, 1)]
-    assert report.next_step is None
+    ) == [(2002, "BOS", 10, 11, 1)]
 
 
 def test_a_version_3_store_keeps_the_flag_it_has_and_derives_the_other(
@@ -508,24 +533,6 @@ def test_an_upgraded_store_has_the_same_indexes_as_a_fresh_one(tmp_path: Path) -
     assert set(early) <= _index_names(upgraded)
 
 
-def test_a_version_2_store_with_empty_attempt_counts_gets_the_reread_instruction(
-    tmp_path: Path,
-) -> None:
-    """A row the 1->2 step wrote keeps NULL counts, so the reread is a real step to take."""
-    v2 = make_v2_store(tmp_path / "store.db")
-    conn = sqlite3.connect(v2)
-    conn.execute(
-        "INSERT INTO mp_team_games (game_id, team, game_date, xg_for, xg_against,"
-        " fetched_at, attempts_known) VALUES (2001, 'TOR', '2026-01-01', 1.5, 2.5,"
-        " '2026-01-02T00:00:00Z', 0)"
-    )
-    conn.commit()
-    conn.close()
-    report = upgrade_store(v2)
-    assert report.next_step is not None
-    assert "hockey-model refresh --reread-moneypuck" in report.next_step
-
-
 def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Path) -> None:
     """A store that started at v1 ran the 1->2 step, then reread MoneyPuck, then upgrades again.
 
@@ -547,14 +554,13 @@ def test_a_reread_row_stops_the_instruction_even_before_the_upgrade(tmp_path: Pa
     )
     conn.commit()
     conn.close()
-    assert upgrade_store(v2).next_step is None
 
 
 def test_a_table_name_that_is_not_an_identifier_is_refused() -> None:
     """The DDL builder interpolates its argument, so a bad name must stop before any SQL."""
     for bad in ("mp; DROP TABLE games", "a b", "", "1t", 'x"'):
         with pytest.raises(StoreError, match="is not a table name"):
-            upgrade._mp_team_games_ddl(bad)
+            migrations.mp_team_games_ddl(bad)
 
 
 def test_a_damaged_ledger_is_named_instead_of_read_as_no_backup(v1: Path) -> None:
@@ -601,11 +607,6 @@ def test_a_rollback_that_runs_reports_the_store_unchanged(v1: Path) -> None:
     conn.execute("BEGIN IMMEDIATE")
     assert upgrade._rollback(conn) == "the store is unchanged."
     conn.close()
-
-
-def test_a_no_op_upgrade_has_no_next_step(v1: Path) -> None:
-    upgrade_store(v1)
-    assert upgrade_store(v1).next_step is None
 
 
 def test_an_upgraded_store_holds_the_current_shape_of_the_two_rebuilt_tables(
@@ -733,6 +734,8 @@ def test_a_step_that_cannot_repair_the_table_shape_stops_the_upgrade(tmp_path: P
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
+    add_nhl_id_columns(conn)
+    restore_unblocked_columns(conn)
     conn.execute("DROP TABLE fit_labels")
     conn.execute("CREATE TABLE fit_labels (fit_id INTEGER NOT NULL, set_at TEXT NOT NULL)")
     conn.commit()
@@ -799,6 +802,8 @@ def test_a_stamp_ahead_by_one_reruns_only_the_change_it_lost(tmp_path: Path) -> 
     path = tmp_path / "store.db"
     connect(path).close()
     conn = sqlite3.connect(path)
+    add_nhl_id_columns(conn)
+    restore_unblocked_columns(conn)
     conn.execute("DROP TABLE source_reads")
     conn.execute(
         "CREATE TABLE source_reads (source TEXT, url TEXT, fetched_at TEXT, ok INTEGER, error TEXT)"

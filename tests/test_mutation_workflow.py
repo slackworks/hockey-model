@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from mutation_copy import require_path
+from workflow_support import job_condition
 
 WORKFLOW = require_path(
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mutation.yml"
@@ -29,6 +30,32 @@ def _job(name: str) -> str:
     return rest if following is None else rest[: following.start() + 1]
 
 
+def test_no_group_holds_the_gate_back() -> None:
+    """A group on the workflow holds the gate job, so no run ever stands aside (#296)."""
+    assert not re.search(r"^concurrency:", _text(), re.MULTILINE)
+
+
+def test_a_scheduled_run_stands_aside_while_a_manual_run_waits() -> None:
+    """A newer scheduled run would replace a waiting manual run and cancel it (#296)."""
+    gate = _job("gate")
+    assert "concurrency:" not in gate
+    assert '[[ "$EVENT" != "schedule" ]]' in gate
+    assert "scripts/manual-prepare-pending.sh mutation.yml" in gate
+    assert 'echo "go=false" >> "$GITHUB_OUTPUT"' in gate
+    assert "needs: gate\n    if: needs.gate.outputs.go == 'true'" in _job("shard")
+
+
+def test_only_the_file_job_joins_a_group() -> None:
+    """The script lists the open reports and then creates one, so two file jobs can both
+    create an issue. The group serializes them. Every other job stays out of a group, so
+    the gate still stands aside for a waiting manual run (#296).
+    """
+    assert "concurrency:" in _job("file")
+    assert "cancel-in-progress: false" in _job("file")
+    for name in ("gate", "shard", "merge", "report"):
+        assert "concurrency:" not in _job(name), name
+
+
 def test_the_report_job_runs_on_every_ref() -> None:
     # A manual run on a branch must judge its own stats, so a broken stats file cannot pass.
     report = _job("report")
@@ -37,7 +64,21 @@ def test_the_report_job_runs_on_every_ref() -> None:
 
 def test_only_the_file_job_runs_on_main() -> None:
     file_job = _job("file")
-    assert "if: always() && github.ref == 'refs/heads/main'" in file_job
+    assert "needs.gate.outputs.go == 'true'" in job_condition(_text(), "file")
+    assert "github.ref == 'refs/heads/main'" in file_job
+
+
+@pytest.mark.parametrize("name", ["merge", "report", "file"])
+def test_a_gate_that_stood_aside_stops_the_jobs_after_it(name: str) -> None:
+    """A stood-aside run did no work, so it must file no report and no issue (#296).
+
+    A skipped job fails the job that needs it, and only an `if` with a status check runs
+    anyway. Every job after the gate therefore reads the gate output in that same `if`.
+    """
+    job = _job(name)
+    condition = job_condition(_text(), name)
+    assert condition.index("!cancelled()") < condition.index("needs.gate.outputs.go == 'true'")
+    assert "needs: gate" in job or "[gate," in job
 
 
 def test_only_the_file_job_holds_the_issue_token() -> None:
@@ -85,3 +126,55 @@ def test_the_report_job_publishes_its_status_and_its_body() -> None:
     report = _job("report")
     assert "status: ${{ steps.decide.outputs.status }}" in report
     assert "mutation-report.md" in report
+
+
+def test_the_timeout_list_has_its_own_step_that_cannot_fail_the_export() -> None:
+    """The list is advisory, so its failure must not reach EXPORT_RESULT (#274)."""
+    merge = _job("merge")
+    export = merge[
+        merge.index("- name: Export results") : merge.index("- name: List the timed-out")
+    ]
+    assert "mutation_timeouts.py" not in export
+    step = merge[
+        merge.index("- name: List the timed-out") : merge.index("- name: Note a failed list")
+    ]
+    assert "scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json" in step
+    assert "continue-on-error: true" in step
+    assert "if: always()" in step
+    assert "id: timeouts" in step
+
+
+def test_the_merge_job_uploads_the_timeout_list_beside_the_stats() -> None:
+    upload = _job("merge")
+    upload = upload[upload.index("actions/upload-artifact") :]
+    assert "mutants/mutmut-timeouts.json" in upload
+    assert "mutants/mutmut-cicd-stats.json" in upload
+
+
+@pytest.mark.parametrize("name", ["merge", "report", "file"])
+def test_a_cancelled_run_files_no_report(name: str) -> None:
+    """A job whose `if` holds always() ignores a cancel, so a cancelled run would file an issue."""
+    assert "always()" not in job_condition(_text(), name)
+
+
+def test_the_gate_stands_aside_only_for_a_manual_run_of_main() -> None:
+    """A manual run on a feature branch writes no report, so it must not stop the main run."""
+    gate = _job("gate")
+    assert "scripts/manual-prepare-pending.sh mutation.yml --branch main" in gate
+
+
+@pytest.mark.parametrize("name", ["report", "file"])
+def test_a_failed_gate_still_reaches_the_report_and_the_issue(name: str) -> None:
+    """A failed run lookup leaves go empty, so the condition also reads the gate result.
+
+    Without it, mutation testing on main stops with no report and no issue.
+    """
+    condition = job_condition(_text(), name)
+    assert "needs.gate.result == 'failure'" in condition
+    assert "needs.gate.outputs.go == 'true'" in condition
+
+
+def test_the_report_passes_the_gate_result_to_the_script() -> None:
+    report = _job("report")
+    assert "GATE_RESULT: ${{ needs.gate.result }}" in report
+    assert '--gate-result "$GATE_RESULT"' in report

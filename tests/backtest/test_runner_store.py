@@ -6,7 +6,7 @@ import pytest
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
 from hockey_model.backtest.runner import run_backtest
-from hockey_model.game_model.features import ATTEMPT_FEATURES, FEATURES
+from hockey_model.game_model.features import FEATURES
 from hockey_model.game_model.seasons import SeasonPlan
 from hockey_model.types import HockeyModelError
 
@@ -72,17 +72,22 @@ def test_the_backtest_needs_games_in_the_selection_seasons(store: sqlite3.Connec
         run_backtest(store, PLAN, candidates=FEATURES)
 
 
-def test_the_attempt_candidates_replace_xg_form(store: sqlite3.Connection) -> None:
+SUBSET = ("goalie_gsax", "rest")
+
+
+def test_a_subset_of_the_candidates_is_the_whole_candidate_list(
+    store: sqlite3.Connection,
+) -> None:
     seed(store, range(1, 8))
-    report, _ = run_backtest(store, PLAN, candidates=ATTEMPT_FEATURES)
-    assert report.candidate_features == ("attempt_form", "goalie_gsax", "rest")
-    assert set(report.validation) == {"elo", "elo+attempt_form", "elo+goalie_gsax", "elo+rest"}
+    report, _ = run_backtest(store, PLAN, candidates=SUBSET)
+    assert report.candidate_features == SUBSET
+    assert set(report.validation) == {"elo", "elo+goalie_gsax", "elo+rest"}
     assert "xg_form" not in report.tested_features
 
 
-def test_an_attempt_run_ships_nothing_and_says_so(store: sqlite3.Connection) -> None:
+def test_a_run_of_a_subset_ships_nothing_and_says_so(store: sqlite3.Connection) -> None:
     seed(store, range(1, 8))
-    report, _ = run_backtest(store, PLAN, candidates=ATTEMPT_FEATURES)
+    report, _ = run_backtest(store, PLAN, candidates=SUBSET)
     assert report.live_features == ()
     assert any("Nothing ships from it" in note for note in report.notes)
     assert not any(kind.startswith("xg_form") for kind in report.missing_inputs)

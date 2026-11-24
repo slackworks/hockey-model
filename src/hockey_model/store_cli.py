@@ -7,12 +7,14 @@ from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from hockey_model import progress
 from hockey_model.backtest.game_records import write_game_records
 from hockey_model.backtest.runner import run_backtest
+from hockey_model.backtest.shards import actual_rows
 from hockey_model.daily_report import build_report, model_identity, report_tag, write_report
 from hockey_model.game import game_win_probability
 from hockey_model.game_day import game_day_of, game_day_window
-from hockey_model.game_model.features import GoalieMode, feature_name_problem
+from hockey_model.game_model.features import FEATURES, feature_name_problem
 from hockey_model.game_model.imputation import check_imputation
 from hockey_model.game_model.logistic import ELO_ONLY, fit_logistic
 from hockey_model.game_model.nhl_model import NhlGameModel
@@ -21,13 +23,13 @@ from hockey_model.game_model.training import (
     game_input,
     last_trained_season,
     last_trained_start,
-    training_rows,
 )
-from hockey_model.report_gate import decide, warning
+from hockey_model.report_gate import compare_inputs, decide, warning
+from hockey_model.report_schema import write_index
+from hockey_model.report_summary import summarize_file
 from hockey_model.report_trigger import (
     first_puck_drop,
     prep_blocks_report,
-    prep_too_early,
     puck_drop_ahead,
 )
 from hockey_model.sources.http import HttpClient
@@ -35,10 +37,9 @@ from hockey_model.sources.nhl import GameRow, fetch_score_day
 from hockey_model.store.db import connect, db_path_from_env
 from hockey_model.store.fits import LIVE_LABEL, FitRecord, FitRef, load_fit, save_fit
 from hockey_model.store.reads import game_row
-from hockey_model.store.refresh import RefreshReport, refresh, refresh_starters
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
-from hockey_model.store.upgrade import run_store_group
-from hockey_model.store_cli_parsers import CANDIDATE_SETS
+from hockey_model.store_cli_refresh import refresh_command
+from hockey_model.store_group import run_store_group
 from hockey_model.types import HockeyModelError
 
 STORE_COMMANDS = frozenset(
@@ -51,67 +52,17 @@ STORE_COMMANDS = frozenset(
         "daily",
         "report-due",
         "report-decide",
+        "report-compare",
+        "report-index",
+        "report-summary",
         "store",
     }
 )
 
 
-def _report_json(report: RefreshReport) -> dict[str, object]:
-    return {
-        "written": report.written,
-        "errors": [{"type": type(e).__name__, "message": str(e)} for e in report.errors],
-        "notes": list(report.notes),
-        "credits": list(report.credits),
-        "backfill_complete": report.backfill_complete,
-        "timed_out": report.timed_out,
-    }
-
-
 def _live_ref() -> FitRef:
     """Return the request for the fit that the daily run serves."""
     return FitRef(label=LIVE_LABEL)
-
-
-def _refresh(args: argparse.Namespace) -> tuple[object, int]:
-    if args.starters_only and args.backfill_from is not None:
-        raise HockeyModelError("refresh: a backfill reads every source; drop --starters-only")
-    if args.starters_only and args.budget_seconds is not None:
-        raise HockeyModelError("refresh: --starters-only has no budget; drop --budget-seconds")
-    if args.budget_seconds is not None and args.backfill_from is None:
-        raise HockeyModelError(
-            "refresh: --budget-seconds needs --backfill-from; a plain refresh that stops early "
-            "would exit 0 and report nothing"
-        )
-    if args.budget_seconds is not None and args.budget_seconds <= 0:
-        raise HockeyModelError(
-            f"refresh: --budget-seconds is {args.budget_seconds}; give a number above 0"
-        )
-    conn = connect(db_path_from_env(os.environ))
-    try:
-        if args.starters_only:
-            report = refresh_starters(
-                conn,
-                HttpClient(),
-                now=datetime.now(UTC),
-                clock=lambda: datetime.now(UTC),
-                retry_skipped=args.retry_skipped,
-            )
-        else:
-            report = refresh(
-                conn,
-                HttpClient(),
-                now=datetime.now(UTC),
-                backfill_from=args.backfill_from,
-                clock=lambda: datetime.now(UTC),
-                reread_moneypuck=args.reread_moneypuck,
-                retry_skipped=args.retry_skipped,
-                budget=None
-                if args.budget_seconds is None
-                else timedelta(seconds=args.budget_seconds),
-            )
-    finally:
-        conn.close()
-    return _report_json(report), 1 if report.errors else 0
 
 
 def parse_features(text: str | None) -> tuple[str, ...]:
@@ -160,7 +111,7 @@ def _fit(args: argparse.Namespace) -> tuple[object, int]:
                 f"run `hockey-model refresh`, or pass --through-season {newest}"
             )
         if features:
-            rows = training_rows(conn, FIT_FIRST, through, GoalieMode.ACTUAL, names=features)
+            rows = actual_rows(conn, FIT_FIRST, through, features, args.workers)
             if not rows:
                 raise HockeyModelError(
                     f"fit through {through}: no games in the store from {FIT_FIRST}; "
@@ -275,12 +226,25 @@ def _report_decide(args: argparse.Namespace) -> tuple[object, int]:
     return {**asdict(decision), "warning": note}, 0
 
 
+def _report_compare(args: argparse.Namespace) -> tuple[object, int]:
+    return compare_inputs(args.built, args.published), 0
+
+
+def _report_summary(args: argparse.Namespace) -> tuple[object, int]:
+    return {"summary": summarize_file(args.report)}, 0
+
+
+def _report_index(args: argparse.Namespace) -> tuple[object, int]:
+    builds, file_name = write_index(args.report, args.date.isoformat(), args.existing, args.out)
+    return {"out": str(args.out), "builds": builds, "file": file_name}, 0
+
+
 def _prep_blocking(args: argparse.Namespace, first: datetime) -> bool:
     """Return True when a prepare run that holds the store group now outlives the puck drop."""
-    if not args.prep_started:
+    if not args.prep_ends:
         return False
     margin = timedelta(seconds=args.margin_seconds)
-    return prep_blocks_report(parse_iso_utc(args.prep_started), first, margin)
+    return prep_blocks_report(parse_iso_utc(args.prep_ends), first, margin)
 
 
 def _report_due(args: argparse.Namespace) -> tuple[object, int]:
@@ -296,7 +260,6 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
         "games_outside_window": outside,
         "first_puck_drop_utc": iso_utc(first),
         "puck_drop_passed": now >= first,
-        "prep_too_early": day == game_day_of(now) and prep_too_early(now, first, day),
         "prep_blocks_report": _prep_blocking(args, first),
         "due": args.force or puck_drop_ahead(now, first, timedelta(seconds=args.margin_seconds)),
     }, 0
@@ -305,7 +268,7 @@ def _report_due(args: argparse.Namespace) -> tuple[object, int]:
 def _backtest(args: argparse.Namespace) -> tuple[object, int]:
     conn = connect(db_path_from_env(os.environ))
     try:
-        report, records = run_backtest(conn, candidates=CANDIDATE_SETS[args.candidates])
+        report, records = run_backtest(conn, candidates=FEATURES, workers=args.workers)
     finally:
         conn.close()
     if args.games_out is not None:
@@ -315,22 +278,9 @@ def _backtest(args: argparse.Namespace) -> tuple[object, int]:
 
 def _experiments(args: argparse.Namespace) -> tuple[object, int]:
     """Handle the experiments subcommands."""
-    command = getattr(args, "experiment_command", None)
-    if command == "check":
-        from hockey_model.experiments.check import check_all
+    from hockey_model.experiments.command import run_experiments_command
 
-        result = check_all()
-        return result, 0 if result["ok"] else 1
-    if command == "run":
-        conn = connect(db_path_from_env(os.environ))
-        try:
-            from hockey_model.experiments.check import run_experiment
-
-            result, _ = run_experiment(args.record_id, conn, args.games_out)
-            return result, 0
-        finally:
-            conn.close()
-    raise HockeyModelError("experiments: specify check or run")
+    return run_experiments_command(args)
 
 
 def _store(args: argparse.Namespace) -> tuple[object, int]:
@@ -340,7 +290,7 @@ def _store(args: argparse.Namespace) -> tuple[object, int]:
 
 
 _HANDLERS = {
-    "refresh": _refresh,
+    "refresh": refresh_command,
     "fit": _fit,
     "game": _game,
     "backtest": _backtest,
@@ -348,10 +298,30 @@ _HANDLERS = {
     "daily": _daily,
     "report-due": _report_due,
     "report-decide": _report_decide,
+    "report-compare": _report_compare,
+    "report-index": _report_index,
+    "report-summary": _report_summary,
     "store": _store,
 }
 
 
+# These commands can run for more than a minute, so each logs its progress on stderr.
+_LONG_COMMANDS = frozenset(
+    {"refresh", "fit", "backtest", "daily", "experiments", "report-due", "store"}
+)
+
+
 def run_store_command(args: argparse.Namespace) -> tuple[object, int]:
-    """Run a store command. Return the JSON payload and the exit code."""
-    return _HANDLERS[args.command](args)
+    """Run a store command. Return the JSON payload and the exit code.
+
+    A long command runs inside a progress step, so stderr shows its start, a tick at a set
+    interval, and its end with the time it took.
+    """
+    handler = _HANDLERS[args.command]
+    if args.command not in _LONG_COMMANDS:
+        return handler(args)
+    with progress.step(args.command, "run"):
+        payload, code = handler(args)
+        if code != 0:
+            progress.stopped(f"exit code {code}")
+        return payload, code

@@ -256,17 +256,7 @@ class TestPublicEntryPoints:
     @pytest.mark.parametrize("bad", BAD_PROJECTIONS)
     def test_game_win_probability_rejects_a_bad_goal_projection(self, bad: object) -> None:
         game = Game(1, "TOR", "BOS", datetime(2026, 1, 20, tzinfo=UTC))
-        result = GamePrediction.__new__(GamePrediction)
-        for name, value in (
-            ("home_win", 0.6),
-            ("away_win", 0.4),
-            ("home_goals", bad),
-            ("away_goals", GOOD),
-            ("missing", ()),
-            ("credits", ()),
-            ("made_after_start", False),
-        ):
-            object.__setattr__(result, name, value)
+        result = GamePrediction(0.6, 0.4, bad, GOOD, (), ())  # ty: ignore[invalid-argument-type]
         as_of = datetime(2026, 1, 19, tzinfo=UTC)
         with pytest.raises(ProjectionError):
             game_win_probability(game, _Game(result), as_of=as_of, level=LEVEL)

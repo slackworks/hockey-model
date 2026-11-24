@@ -17,6 +17,7 @@ from hockey_model.game_model.elo import replay
 from hockey_model.game_model.features import FORM_WINDOW, GoalieMode, build_features
 from hockey_model.game_model.logistic import predict_logistic
 from hockey_model.game_model.seasons import ELO_BURN_IN, season_of
+from hockey_model.game_model.win_interval import home_win_interval
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.sources.teams import franchise
 from hockey_model.store.fits import FitArtifact
@@ -28,29 +29,74 @@ from hockey_model.store.reads import (
     team_games_before,
 )
 from hockey_model.store.staleness import stale_sources
-from hockey_model.types import Projection
+from hockey_model.types import Projection, ProjectionError
 
 # Goals per team and game when a team has no games in the store. The NHL average is near 3.
 LEAGUE_GOALS = 3.0
+# A rate below this is raised to it, and the prediction says so. A rate of zero has no spread.
 _MIN_RATE = 0.1
+# The largest expected goals for one team that the goal interval accepts. The walk starts at
+# exp(-rate), which is a normal float for any rate below about 700. A hockey team scores about
+# 3 goals, so the bound is far above any real rate, and well inside the stable range.
+MAX_RATE = 100.0
+# The most steps that the walk to a quantile may take. At MAX_RATE the 1e-12 tail needs fewer
+# than half of them. A walk that uses all of them has a level so close to 1 that the float
+# sum stops below the target.
+MAX_QUANTILE_STEPS = 1000
 
 
 def _poisson_quantile(rate: float, probability: float) -> int:
-    """Return the smallest count whose cumulative Poisson chance reaches ``probability``."""
+    """Return the smallest count whose cumulative Poisson chance reaches ``probability``.
+
+    ``rate`` is in [0, MAX_RATE] and ``probability`` is in (0, 1), and the caller checks both.
+    The walk raises when it ends before it reaches ``probability``, because the loop guard is
+    not a quantile.
+    """
     term = math.exp(-rate)
     total = term
     count = 0
-    while total < probability and count < 1000:  # noqa: PLR2004  # a guard against a bad rate
+    while total < probability:
+        if count == MAX_QUANTILE_STEPS:
+            raise ProjectionError(
+                f"goal interval: no count up to {MAX_QUANTILE_STEPS} reaches the chance "
+                f"{probability!r} at {rate!r} expected goals; the level is too close to 1, "
+                "so use a lower level"
+            )
         count += 1
         term *= rate / count
         total += term
     return count
 
 
-def _projection(rate: float, level: float) -> Projection:
-    rate = max(rate, _MIN_RATE)
-    low = _poisson_quantile(rate, (1.0 - level) / 2.0)
-    high = _poisson_quantile(rate, (1.0 + level) / 2.0)
+def _check_projection_inputs(rate: float, level: float) -> None:
+    """Raise ``ProjectionError`` unless the rate and the level are in the supported domain."""
+    # NaN fails every comparison, so the range tests below refuse it as well as an infinity.
+    if not 0.0 <= rate <= MAX_RATE:
+        raise ProjectionError(
+            f"goal interval: the expected goals {rate!r} are not a finite number from 0 to "
+            f"{MAX_RATE:g}; check the goal rates of the team"
+        )
+    if not 0.0 < level < 1.0:
+        raise ProjectionError(
+            f"goal interval: the level {level!r} is not inside the open interval (0, 1); "
+            "pass a level such as 0.8"
+        )
+    if (1.0 + level) / 2.0 >= 1.0:
+        raise ProjectionError(
+            f"goal interval: the level {level!r} is so close to 1 that its upper tail rounds to "
+            "1.0 in floating point; pass a smaller level"
+        )
+
+
+def _projection(rate: float, level: float, where: str) -> Projection:
+    """Return the goal interval of one side. ``where`` names the game and the side in an error."""
+    try:
+        _check_projection_inputs(rate, level)
+        rate = max(rate, _MIN_RATE)
+        low = _poisson_quantile(rate, (1.0 - level) / 2.0)
+        high = _poisson_quantile(rate, (1.0 + level) / 2.0)
+    except ProjectionError as exc:
+        raise ProjectionError(f"{where}: {exc}") from exc
     return Projection(rate, min(float(low), rate), max(float(high), rate), level)
 
 
@@ -179,10 +225,11 @@ class NhlGameModel:
         return GamePrediction(
             home_win=home_win,
             away_win=1.0 - home_win,
-            home_goals=_projection(home_rate, level),
-            away_goals=_projection(away_rate, level),
+            home_goals=_projection(home_rate, level, f"game {game.game_id} {game.home} (home)"),
+            away_goals=_projection(away_rate, level, f"game {game.game_id} {game.away} (away)"),
             missing=tuple(missing),
             credits=credits,
             degraded_inputs=row.imputed,
             training=_training_info(self._artifact, *_stored_game(self._conn, game)),
+            home_win_interval=home_win_interval(self._fit, row, level),
         )

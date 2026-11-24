@@ -5,6 +5,8 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import (
     add_game,
     add_goalie,
@@ -15,14 +17,16 @@ from seeding import (
 )
 
 from hockey_model.game import Game, GoalieStart, MissingKind, StarterSource, StarterStatus
+from hockey_model.game_model import features as feature_module
 from hockey_model.game_model.elo import EloBook
 from hockey_model.game_model.features import (
-    ATTEMPT_FEATURES,
     FEATURES,
+    NEUTRAL_FORM,
     REST_CAP_DAYS,
     GoalieMode,
     build_features,
 )
+from hockey_model.store.db import connect
 from hockey_model.types import Player, Slot
 
 START = utc("2026-01-20T00:00")
@@ -41,6 +45,13 @@ def features(
     names: tuple[str, ...] = FEATURES,
 ):
     return build_features(store, game(), as_of, EloBook(), goalie_mode=mode, names=names)
+
+
+def rest_only(conn: sqlite3.Connection, game: Game):
+    """Build the rest feature of ``game`` alone."""
+    return build_features(
+        conn, game, AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=("rest",)
+    )
 
 
 def kinds(row) -> list[MissingKind]:
@@ -195,10 +206,64 @@ def test_rest_caps_at_four(store: sqlite3.Connection) -> None:
     assert REST_CAP_DAYS == 4.0
 
 
-def test_rest_first_game_in_store_is_the_cap(store: sqlite3.Connection) -> None:
+def test_rest_with_the_away_team_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
+    add_game(store, 2, "2026-01-18T00:00", home=HOME, away="MTL")
+    add_game(store, 3, "2026-01-20T00:00", home=HOME, away=AWAY)
+    row = features(store)
+    assert row.values["rest"] == NEUTRAL_FORM
+    notes = [m for m in row.missing if m.kind is MissingKind.REST_UNKNOWN]
+    assert [m.team for m in notes] == [AWAY]
+    assert notes[0].note == "no earlier game in the store; the rest difference is neutral"
+
+
+def test_rest_with_the_home_team_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
     add_game(store, 2, "2026-01-18T00:00", home="NYR", away=AWAY)
     row = features(store)
-    assert row.values["rest"] == pytest.approx(REST_CAP_DAYS - 2.0)
+    assert row.values["rest"] == NEUTRAL_FORM
+    assert [m.team for m in row.missing if m.kind is MissingKind.REST_UNKNOWN] == [HOME]
+
+
+def test_rest_with_both_teams_new_to_the_store_is_neutral(store: sqlite3.Connection) -> None:
+    row = features(store)
+    assert row.values["rest"] == NEUTRAL_FORM
+    assert sorted(m.team for m in row.missing if m.kind is MissingKind.REST_UNKNOWN) == [AWAY, HOME]
+
+
+def test_a_relocated_franchise_has_its_rest_from_the_old_code(store: sqlite3.Connection) -> None:
+    # Arizona's games count for Utah, so Utah's first game of a season has a rest.
+    add_game(store, 1, "2026-01-18T00:00", home="ARI", away="MTL")
+    add_game(store, 2, "2026-01-18T00:00", home="NYR", away=AWAY)
+    row = rest_only(store, Game(100, "UTA", AWAY, START))
+    assert MissingKind.REST_UNKNOWN not in kinds(row)
+    assert row.values["rest"] == pytest.approx(0.0)
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    home_gap=st.one_of(st.none(), st.integers(1, 8)),
+    away_gap=st.one_of(st.none(), st.integers(1, 8)),
+)
+def test_swapping_the_teams_negates_a_known_rest_difference_and_keeps_a_neutral_one(
+    tmp_path_factory: pytest.TempPathFactory, home_gap: int | None, away_gap: int | None
+) -> None:
+    conn = connect(tmp_path_factory.mktemp("store") / "store.db")
+    try:
+        for number, (team, gap, other) in enumerate(
+            ((HOME, home_gap, "MTL"), (AWAY, away_gap, "NYR")), start=1
+        ):
+            if gap is not None:
+                day = (START - timedelta(days=gap)).strftime("%Y-%m-%dT%H:%M")
+                add_game(conn, number, day, home=team, away=other)
+        straight = rest_only(conn, Game(100, HOME, AWAY, START))
+        swapped = rest_only(conn, Game(100, AWAY, HOME, START))
+    finally:
+        conn.close()
+    assert swapped.values["rest"] == -straight.values["rest"]
+    if home_gap is None or away_gap is None:
+        assert straight.values["rest"] == NEUTRAL_FORM
+    else:
+        expected = min(home_gap, REST_CAP_DAYS) - min(away_gap, REST_CAP_DAYS)
+        assert straight.values["rest"] == pytest.approx(expected)
 
 
 def test_features_use_only_games_before_start(store: sqlite3.Connection) -> None:
@@ -275,36 +340,113 @@ def test_a_goalie_with_no_nhl_id_reports_goalie_form(store: sqlite3.Connection) 
     )
 
 
-def test_attempt_form_uses_shot_attempts_not_expected_goals(store: sqlite3.Connection) -> None:
-    # Expected goals give a 0.75 and 0.25 share. The attempt counts give 0.6 and 0.3.
-    add_game(store, 10, "2026-01-18T00:00", home=HOME, away="MTL")
-    add_game(store, 110, "2026-01-18T00:00", home="MTL", away=AWAY)
-    add_team_form(store, 10, HOME, 3.0, 1.0, attempts=(60, 40))
-    add_team_form(store, 110, AWAY, 1.0, 3.0, attempts=(30, 70))
-    row = features(store, names=("xg_form", "attempt_form", "goalie_gsax", "rest"))
-    assert row.values["attempt_form"] == pytest.approx(0.6 - 0.3)
-    assert row.values["xg_form"] == pytest.approx(0.75 - 0.25)
-    assert row.uses_moneypuck
-
-
-def test_attempt_form_missing_reports_attempt_form(store: sqlite3.Connection) -> None:
-    row = features(store, names=ATTEMPT_FEATURES)
-    assert row.values["attempt_form"] == 0.0
-    assert kinds(row).count(MissingKind.ATTEMPT_FORM) == 2
-
-
-def test_production_features_do_not_read_attempts(store: sqlite3.Connection) -> None:
-    row = features(store)
-    assert "attempt_form" not in row.values
-    assert MissingKind.ATTEMPT_FORM not in kinds(row)
-
-
-def test_attempt_candidates_do_not_read_expected_goals(store: sqlite3.Connection) -> None:
-    row = features(store, names=ATTEMPT_FEATURES)
-    assert "xg_form" not in row.values
-    assert MissingKind.XG_FORM not in kinds(row)
-
-
 def test_an_unknown_feature_name_is_refused(store: sqlite3.Connection) -> None:
     with pytest.raises(ValueError, match="unknown feature 'nope'"):
         features(store, names=("nope",))
+
+
+def test_a_zero_total_game_is_left_out_of_the_share_and_named(store: sqlite3.Connection) -> None:
+    history(store)
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 0.0)
+    row = features(store)
+    assert row.values["xg_form"] == pytest.approx(0.75 - 0.25)
+    notes = [m for m in row.missing if m.kind is MissingKind.FORM_GAMES_LEFT_OUT]
+    assert [(m.team, m.note) for m in notes] == [
+        (HOME, "1 of 4 MoneyPuck games have a zero total and are left out")
+    ]
+    assert MissingKind.XG_FORM not in kinds(row)
+    assert row.uses_moneypuck
+    assert "xg_form" not in [d.feature for d in row.imputed]
+
+
+def test_a_team_whose_every_game_has_a_zero_total_makes_the_form_neutral(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 0.0)
+    add_game(store, 401, "2026-01-16T00:00", home="MTL", away=AWAY)
+    add_team_form(store, 401, AWAY, 3.0, 1.0)
+    row = features(store)
+    assert row.values["xg_form"] == NEUTRAL_FORM
+    notes = [(m.team, m.note) for m in row.missing if m.kind is MissingKind.XG_FORM]
+    assert notes == [(HOME, "every one of 1 MoneyPuck games before this game has a zero total")]
+    degraded = {d.feature: d.teams for d in row.imputed}
+    assert degraded["xg_form"] == (HOME,)
+
+
+def test_a_measured_zero_share_is_valid_and_has_no_note(store: sqlite3.Connection) -> None:
+    add_game(store, 400, "2026-01-16T00:00", home=HOME, away="MTL")
+    add_team_form(store, 400, HOME, 0.0, 2.0)
+    add_game(store, 401, "2026-01-16T00:00", home="MTL", away=AWAY)
+    add_team_form(store, 401, AWAY, 1.0, 3.0)
+    row = features(store)
+    assert row.values["xg_form"] == pytest.approx(0.0 - 0.25)
+    assert [m for m in row.missing if m.kind is MissingKind.XG_FORM] == []
+
+
+def test_a_set_without_rest_reports_no_rest_gap(store: sqlite3.Connection) -> None:
+    row = features(store, names=("xg_form",))
+    assert MissingKind.REST_UNKNOWN not in kinds(row)
+    assert "rest" not in [d.feature for d in row.imputed]
+
+
+def test_a_set_with_rest_reports_the_rest_gap_of_each_new_team(store: sqlite3.Connection) -> None:
+    row = features(store, names=("rest",))
+    assert kinds(row).count(MissingKind.REST_UNKNOWN) == 2
+
+
+_ROWS = st.lists(
+    st.tuples(
+        st.floats(min_value=0.0, max_value=6.0, allow_nan=False),
+        st.floats(min_value=0.0, max_value=6.0, allow_nan=False),
+    ),
+    max_size=10,
+)
+
+
+@settings(max_examples=100, deadline=None)
+@given(rows=_ROWS)
+def test_a_share_counts_every_zero_total_game_and_stays_between_zero_and_one(
+    rows: list[tuple[float, float]],
+) -> None:
+    mean, skipped = feature_module._share(rows)
+    zero_total = sum(1 for made, allowed in rows if made + allowed <= 0)
+    assert skipped == zero_total
+    assert (mean is None) == (zero_total == len(rows))
+    if mean is not None:
+        assert 0.0 <= mean <= 1.0
+
+
+@settings(max_examples=25, deadline=None)
+@given(home_rows=_ROWS, away_rows=_ROWS)
+def test_swapping_the_teams_negates_the_xg_form_and_keeps_the_gaps(
+    tmp_path_factory: pytest.TempPathFactory,
+    home_rows: list[tuple[float, float]],
+    away_rows: list[tuple[float, float]],
+) -> None:
+    conn = connect(tmp_path_factory.mktemp("swap") / "store.db")
+    try:
+        for team, rows, base in ((HOME, home_rows, 1000), (AWAY, away_rows, 2000)):
+            for number, (xg_for, xg_against) in enumerate(rows):
+                stamp = f"2026-01-{10 + number:02d}T00:00"
+                add_game(conn, base + number, stamp, home=team, away="MTL")
+                add_team_form(conn, base + number, team, xg_for, xg_against)
+        names = ("xg_form",)
+        forward = build_features(
+            conn, game(), AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=names
+        )
+        swapped_game = Game(100, AWAY, HOME, START)
+        backward = build_features(
+            conn, swapped_game, AS_OF, EloBook(), goalie_mode=GoalieMode.GUESS, names=names
+        )
+    finally:
+        conn.close()
+    assert backward.values["xg_form"] == pytest.approx(-forward.values["xg_form"])
+    gaps = lambda row: sorted((m.kind, m.team, m.note) for m in row.missing)  # noqa: E731
+    assert gaps(forward) == gaps(backward)
+
+
+def test_the_retired_attempt_form_is_an_unknown_feature(store: sqlite3.Connection) -> None:
+    with pytest.raises(ValueError, match="unknown feature 'attempt_form'"):
+        features(store, names=("attempt_form",))

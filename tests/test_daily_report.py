@@ -32,6 +32,7 @@ from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY, FitDiagnostics, LogisticFit
 from hockey_model.game_model.nhl_model import NhlGameModel
 from hockey_model.sources.nhl import GameRow
+from hockey_model.store.staleness import OLD_GAP_MEASURED_SHIFT_PP
 from hockey_model.types import HockeyModelError, Projection
 
 DAY = date(2026, 1, 20)
@@ -178,6 +179,30 @@ def test_write_report_writes_markdown_and_json(store: sqlite3.Connection, tmp_pa
     assert md_path.read_text(encoding="utf-8").startswith("# NHL predictions for 2026-01-20")
 
 
+def test_a_failed_write_changes_neither_report_file(
+    store: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    report = build_report(store, _model(store), DAY, now=NOW)
+    md_path, json_path = write_report(report, out)
+    before = (md_path.read_bytes(), json_path.read_bytes())
+    later = build_report(store, _model(store), DAY, now=NOW + timedelta(minutes=5))
+    real_write = Path.write_text
+
+    def full_disk(path: Path, text: str, encoding: str | None = None) -> int:
+        if path.name.endswith(".json.tmp"):
+            path.write_bytes(b"{")
+            raise OSError(28, "No space left on device")
+        return real_write(path, text, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    with pytest.raises(OSError, match="No space"):
+        write_report(later, out)
+    assert (md_path.read_bytes(), json_path.read_bytes()) == before
+    assert {p.name for p in out.iterdir()} == {md_path.name, json_path.name}
+
+
 def test_remote_state_cannot_break_the_markdown_table(tmp_path: Path) -> None:
     hostile = GameRow(
         99, 20252026, 2, utc("2026-01-20T23:00"), "TOR", "BOS", "A|B\nC", None, None, None
@@ -297,7 +322,7 @@ def test_json_lists_the_degraded_inputs_of_a_prediction() -> None:
 def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
     gap = (
         "nhl_scores: https://x/score/2017-09-19 failed in every read; "
-        "its day is outside the scored and current seasons"
+        "its season is outside the scored, current, and previous seasons"
     )
     report = DailyReport(
         date(2026, 11, 13),
@@ -309,9 +334,10 @@ def test_training_gaps_appear_once_in_the_footer_and_the_json() -> None:
     markdown = report_markdown(report)
     assert markdown.count(gap) == 1
     assert (
-        "Gaps outside the scored and current seasons (no game row; Elo effect not measured):"
-        in markdown
-    )
+        "Gaps outside the scored, current, and previous seasons (no game row; in the measured "
+        "case, a gap of up to a week two seasons back moved a win chance by at most "
+        f"{OLD_GAP_MEASURED_SHIFT_PP} percentage points):"
+    ) in markdown
     assert report_json(report)["training_gaps"] == [gap]
 
 

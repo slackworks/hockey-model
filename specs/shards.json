@@ -1,0 +1,65 @@
+{
+  "always": [
+    "specs/shards.json",
+    "specs/shards.schema.json",
+    "scripts/tlc.sh",
+    "scripts/tlc_shards.py",
+    "scripts/tlc-plan.sh",
+    ".github/workflows/tla.yml"
+  ],
+  "covers": [
+    "scripts/daily-prepare.sh",
+    "src/hockey_model/store/refresh*.py",
+    "src/hockey_model/store/nhl_writes.py",
+    "src/hockey_model/store/source_reads.py",
+    "src/hockey_model/store_cli_refresh.py"
+  ],
+  "shards": [
+    {
+      "name": "upgrade",
+      "spec": "specs/store_upgrade.tla",
+      "config": "specs/store_upgrade.cfg",
+      "covers": [
+        "src/hockey_model/store/upgrade.py",
+        "src/hockey_model/store/db.py",
+        "src/hockey_model/store/migrations.py",
+        "src/hockey_model/store/shape.py",
+        "src/hockey_model/store/schema.sql"
+      ]
+    },
+    {
+      "name": "registry",
+      "spec": "specs/experiment_registry.tla",
+      "config": "specs/experiment_registry.cfg",
+      "covers": [
+        "experiments/**",
+        "src/hockey_model/experiments/*.py"
+      ]
+    },
+    {
+      "name": "stall",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_stall.cfg"
+    },
+    {
+      "name": "blocked",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_blocked.cfg"
+    },
+    {
+      "name": "cutoff",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_cutoff.cfg"
+    },
+    {
+      "name": "recent",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare_recent.cfg"
+    },
+    {
+      "name": "main",
+      "spec": "specs/daily_prepare.tla",
+      "config": "specs/daily_prepare.cfg"
+    }
+  ]
+}

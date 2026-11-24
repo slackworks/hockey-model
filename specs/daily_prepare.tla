@@ -11,9 +11,12 @@ CONSTANTS
     AbandonReads,   \* ABANDON_AFTER_FAILED_READS
     AbandonTicks,   \* ticks in ABANDON_MIN_SPAN_DAYS
     RetryTicks,     \* ticks in RETRY_FAILED_AFTER
+    CutoffTicks,    \* ticks in BACKLOG_BEFORE: a closed day this old is backlog
     OpenDays,       \* days that are not closed at the start; a tick closes them one by one
     BrokenScore,    \* score days whose every read fails
     BrokenBox,      \* days whose boxscore read always fails
+    BlockedScore,   \* broken score days whose failure is permanent, such as HTTP 403
+    BlockedBox,     \* broken boxscore days whose failure is permanent
     OtherBroken,    \* TRUE when a source after the NHL steps always fails
     ArrivalsCount,  \* TRUE: a day that closed since the last run counts as progress (old rule)
     BacklogFirst    \* TRUE: read the oldest window first, so the backlog comes before the open days
@@ -25,8 +28,9 @@ Score(d) == [kind |-> "score", day |-> d]
 Box(d) == [kind |-> "box", day |-> d]
 
 ASSUME /\ NWindows >= 1 /\ DaysPerWindow >= 1 /\ Budget >= 1 /\ MaxFails >= 1
-       /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1
+       /\ AbandonReads >= 1 /\ AbandonTicks >= 1 /\ RetryTicks >= 1 /\ CutoffTicks >= 1
        /\ OpenDays \subseteq Days /\ BrokenScore \subseteq Days /\ BrokenBox \subseteq Days
+       /\ BlockedScore \subseteq BrokenScore /\ BlockedBox \subseteq BrokenBox
        /\ OtherBroken \in BOOLEAN /\ ArrivalsCount \in BOOLEAN /\ BacklogFirst \in BOOLEAN
 
 \* TRUE when a run can read every day that is open at the start and still have budget for one
@@ -55,20 +59,27 @@ VARIABLES
     okRead, streak, span, firstAge, lastAge,  \* source_reads, per URL
     marker,                                   \* the .backfilled file
     open,                                     \* days that are not closed yet
-    arrived,                                  \* days that closed since the last run ended
+    age,                                      \* ticks since each day closed, up to CutoffTicks
     calm,                                     \* TRUE: every read that is not broken works
-    phase, pc, gaps, noted, due, fails, reads,
-    progress,  \* what the code counts: a finished unit, as ArrivalsCount sets it
-    backlog,   \* ground truth: a finished unit that is not an arrival
+    phase, pc, gaps, due, fails, reads,
+    finished,  \* 0: no unit finished, 1: recent units only, 2: an old unit finished
     clean, stopped, errors,  \* one run
     exitCode
 
-store == <<okRead, streak, span, firstAge, lastAge, marker, open, arrived>>
-run == <<phase, pc, gaps, noted, due, fails, reads, progress, backlog, clean, stopped, errors>>
+store == <<okRead, streak, span, firstAge, lastAge, marker, open, age>>
+run == <<phase, pc, gaps, due, fails, reads, finished, clean, stopped, errors>>
 vars == <<store, calm, run, exitCode>>
 
+\* cutoff = game_day_of(now) - BACKLOG_BEFORE: a day that closed less than that long ago is
+\* recent, so the code leaves it out of the backlog. An open day has age 0.
+Recent(d) == age[d] < CutoffTicks
+
+Blocked(u) == IF u.kind = "score" THEN u.day \in BlockedScore ELSE u.day \in BlockedBox
 \* abandoned_urls(): enough failed reads since the last good read, far enough apart.
-Abandoned(u) == streak[u] >= AbandonReads /\ span[u]
+\* A permanent failure needs no span. The model gives each URL one kind of failure: a URL in
+\* Blocked fails only with a permanent status, and any other URL fails only with a transient
+\* one. A streak that mixes the two kinds is a case of tests/store/test_permanent_gaps.py.
+Abandoned(u) == streak[u] >= AbandonReads /\ (span[u] \/ Blocked(u))
 \* _day_complete(): a good read after the day closed.
 Complete(d) == okRead[Score(d)] /\ d \notin open
 \* games_missing_boxscore(): the score read found a final game with no boxscore.
@@ -81,6 +92,20 @@ Done(u) == okRead[u] \/ Abandoned(u)
 ScoreDone(d) == Done(Score(d))
 \* A box is needed only for a final game, and the score read finds the game.
 BoxDone(d) == ~WantBox(d) \/ Abandoned(Box(d))
+\* What the code counts as progress: an old unit, or any unit with the old rule.
+Progress == finished = 2 \/ (ArrivalsCount /\ finished >= 1)
+\* Ground truth: an old unit finished.
+Backlog == finished = 2
+\* Any unit finished, recent or old. The next run starts after it.
+Headway == finished >= 1
+\* old_work_left(): a day older than the cutoff that is not fully read. A recent day is not
+\* backlog, because the next run finishes it. A boxscore that failed a short time ago does not
+\* wait: the run skips it.
+BoxWaits(d) == ~BoxDone(d) /\ ~RecentFail(Box(d))
+BacklogUnread == \E d \in Days : ~Recent(d) /\ (~ScoreDone(d) \/ BoxWaits(d))
+\* nhl() adds the stall error when the budget stopped a run that counted no progress, and
+\* either old work is unread or no unit finished at all (#178, #302).
+StallError == stopped /\ ~Progress /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
 WindowDays(k) == {d \in Days : (NWindows - k) * DaysPerWindow < d
                                 /\ d <= (NWindows - k + 1) * DaysPerWindow}
 \* A day that is still open is not required to be complete: the model does not record a good
@@ -96,10 +121,10 @@ Init == /\ okRead = [u \in Urls |-> FALSE]
         /\ lastAge = [u \in Urls |-> 0]
         /\ marker = FALSE
         /\ open = OpenDays
-        /\ arrived = {}
+        /\ age = [d \in Days |-> IF d \in OpenDays THEN 0 ELSE CutoffTicks]
         /\ calm = FALSE
-        /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ noted = {} /\ due = {}
-        /\ fails = 0 /\ reads = 0 /\ progress = FALSE /\ backlog = FALSE
+        /\ phase = "idle" /\ pc = 1 /\ gaps = {} /\ due = {}
+        /\ fails = 0 /\ reads = 0 /\ finished = 0
         /\ clean = TRUE /\ stopped = FALSE /\ errors = FALSE
         /\ exitCode = 0
 
@@ -110,19 +135,19 @@ TypeOK ==
     /\ firstAge \in [Urls -> 0..AbandonTicks]
     /\ lastAge \in [Urls -> 0..RetryTicks]
     /\ marker \in BOOLEAN /\ calm \in BOOLEAN
-    /\ open \subseteq Days /\ arrived \subseteq Days
+    /\ open \subseteq Days /\ age \in [Days -> 0..CutoffTicks]
     /\ phase \in {"idle", "nhl", "other", "finish"}
     /\ pc \in 1..(Steps + 1)
-    /\ gaps \subseteq Urls /\ noted \subseteq Urls /\ due \subseteq Days
+    /\ gaps \subseteq Urls /\ due \subseteq Days
     /\ fails \in 0..MaxFails /\ reads \in 0..Budget
-    /\ progress \in BOOLEAN /\ backlog \in BOOLEAN
+    /\ finished \in 0..2
     /\ clean \in BOOLEAN /\ stopped \in BOOLEAN /\ errors \in BOOLEAN
     /\ exitCode \in {0, 1, 75}
 
 (* Time passes only between runs. One tick is ABANDON_MIN_SPAN_DAYS. A run takes much less
    time than one tick, so every read of a run has the same time. A tick also closes the oldest
-   open day. That day is an arrival: it closed since the last run, and the code leaves it out
-   of the backlog (BACKLOG_BEFORE). *)
+   open day. That day is recent for CutoffTicks ticks, and the code leaves it out of the
+   backlog (BACKLOG_BEFORE). A day that closed earlier gets one tick older. *)
 Tick ==
     /\ phase = "idle"
     /\ firstAge' = [u \in Urls |-> IF streak[u] > 0
@@ -130,7 +155,7 @@ Tick ==
     /\ lastAge' = [u \in Urls |-> IF streak[u] > 0
                                   THEN Min(lastAge[u] + 1, RetryTicks) ELSE 0]
     /\ open' = IF open = {} THEN open ELSE open \ {Oldest(open)}
-    /\ arrived' = IF open = {} THEN arrived ELSE arrived \cup {Oldest(open)}
+    /\ age' = [d \in Days |-> IF d \in open THEN 0 ELSE Min(age[d] + 1, CutoffTicks)]
     /\ UNCHANGED <<okRead, streak, span, marker, calm, run, exitCode>>
 
 GoCalm ==
@@ -139,30 +164,29 @@ GoCalm ==
     /\ UNCHANGED <<store, run, exitCode>>
 
 (* daily-prepare.sh runs a backfill only while the marker is missing. score_gaps() and
-   read_boxscores() read the gaps before any read of this run, and note them. *)
+   read_boxscores() read the gaps before any read of this run. The report note comes from the
+   same gap set in the code, so the model keeps no copy of it. *)
 StartRun ==
     /\ phase = "idle" /\ ~marker
     /\ phase' = "nhl"
     /\ gaps' = {u \in Urls : Abandoned(u)}
-    /\ noted' = {u \in Urls : Abandoned(u)}
     \* In calm weather a re-read resolves every game, so no day is due again.
     /\ \E D \in SUBSET {d \in Days : okRead[Score(d)]} : due' = IF calm THEN {} ELSE D
-    /\ UNCHANGED <<store, calm, pc, fails, reads, progress, backlog, clean, stopped, errors,
+    /\ UNCHANGED <<store, calm, pc, fails, reads, finished, clean, stopped, errors,
                    exitCode>>
 
-\* A finished unit that the run counts. An arrival is not backlog, so the old rule (ArrivalsCount)
-\* is the only case where an arrival counts as progress.
+\* A finished unit that the run counts. A recent day is not backlog, so the old rule
+\* (ArrivalsCount) is the only case where a recent day counts as progress.
 Finished(u, ok) == ok /\ ~okRead[u] /\ u.day \notin open
-CountsAsProgress(u, ok) == Finished(u, ok) /\ (ArrivalsCount \/ u.day \notin arrived)
-CountsAsBacklog(u, ok) == Finished(u, ok) /\ u.day \notin arrived
+Max(a, b) == IF a > b THEN a ELSE b
 
 \* run.attempt(): one read in one transaction. It records the result in source_reads.
 \* A read finishes a unit for good when it works and the unit had no good read before.
 \* An open day never finishes, because the next run reads it again.
 Attempt(u, ok) ==
     /\ reads' = reads + 1
-    /\ progress' = (progress \/ CountsAsProgress(u, ok))
-    /\ backlog' = (backlog \/ CountsAsBacklog(u, ok))
+    /\ finished' = IF Finished(u, ok)
+                  THEN Max(finished, IF Recent(u.day) THEN 1 ELSE 2) ELSE finished
     \* A good read of a day that is still open does not complete it (day_is_complete needs a
     \* read after the close). streak and the ages still reset, as in source_reads.
     /\ okRead' = [okRead EXCEPT ![u] = @ \/ (ok /\ u.day \notin open)]
@@ -176,7 +200,7 @@ Attempt(u, ok) ==
                                            ELSE @ \/ firstAge[u] >= AbandonTicks]
             /\ firstAge' = [firstAge EXCEPT ![u] = IF streak[u] = 0 THEN 0 ELSE @]
             /\ lastAge' = [lastAge EXCEPT ![u] = 0]
-    /\ UNCHANGED <<open, arrived>>
+    /\ UNCHANGED <<open, age>>
 
 Outcomes(u) == IF Broken(u) THEN {FALSE} ELSE IF calm THEN {TRUE} ELSE BOOLEAN
 
@@ -195,17 +219,17 @@ ScoreStep ==
     IN \/ /\ f >= MaxFails
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ u \in gaps \/ (u.day \notin due /\ Complete(u.day))
           /\ Advance(FALSE, 0)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ f < MaxFails
           /\ ~(u \in gaps \/ (u.day \notin due /\ Complete(u.day)))
           /\ reads < Budget
@@ -222,18 +246,18 @@ BoxStep ==
         f == IF StageStart(pc) THEN 0 ELSE fails
     IN \/ /\ ~WantBox(u.day) \/ u \in gaps
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, clean, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, clean, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f >= MaxFails \/ reads >= Budget
           /\ stopped' = TRUE /\ clean' = FALSE
           /\ Advance(TRUE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors>>
+          /\ UNCHANGED <<store, reads, finished, errors>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ RecentFail(u)
           /\ clean' = FALSE
           /\ Advance(FALSE, f)
-          /\ UNCHANGED <<store, reads, progress, backlog, errors, stopped>>
+          /\ UNCHANGED <<store, reads, finished, errors, stopped>>
        \/ /\ WantBox(u.day) /\ u \notin gaps
           /\ f < MaxFails /\ reads < Budget
           /\ ~RecentFail(u)
@@ -247,14 +271,15 @@ BoxStep ==
 NhlStep ==
     /\ phase = "nhl" /\ pc <= Steps
     /\ IF KindAt(pc) = "score" THEN ScoreStep ELSE BoxStep
-    /\ UNCHANGED <<calm, phase, gaps, noted, due, exitCode>>
+    /\ UNCHANGED <<calm, phase, gaps, due, exitCode>>
 
-\* nhl() adds an error when the budget stopped the run before it finished one unit.
+\* nhl() adds the stall error (see StallError). A run that finished a recent day, with no old
+\* work unread, exits 75, and the next run goes on from there (#302).
 EndNhl ==
     /\ phase = "nhl" /\ pc = Steps + 1
     /\ phase' = "other"
-    /\ errors' = (errors \/ (stopped /\ ~progress /\ reads >= Budget))
-    /\ UNCHANGED <<store, calm, pc, gaps, noted, due, fails, reads, progress, backlog, clean,
+    /\ errors' = (errors \/ StallError)
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* MoneyPuck, ESPN, and Daily Faceoff run after the NHL steps. A failure sets refresh exit 1.
@@ -266,20 +291,19 @@ OtherSources ==
                  ELSE IF OtherBroken THEN {TRUE} ELSE BOOLEAN) :
           errors' = (errors \/ e)
     /\ phase' = "finish"
-    /\ UNCHANGED <<store, calm, pc, gaps, noted, due, fails, reads, progress, backlog, clean,
+    /\ UNCHANGED <<store, calm, pc, gaps, due, fails, reads, finished, clean,
                    stopped, exitCode>>
 
 \* The backfill branch of daily-prepare.sh: refresh_rc, then backfill_complete.
-\* The run ends, so the arrivals of this run are no longer new for the next run.
+\* The ages do not change at the end of a run. Only a tick makes a day older.
 Finish ==
     /\ phase = "finish"
     /\ exitCode' = IF errors THEN 1 ELSE IF clean THEN 0 ELSE 75
     /\ marker' = (~errors /\ clean)
-    /\ arrived' = {}
-    /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ noted' = {} /\ due' = {}
-    /\ fails' = 0 /\ reads' = 0 /\ progress' = FALSE /\ backlog' = FALSE
+    /\ phase' = "idle" /\ pc' = 1 /\ gaps' = {} /\ due' = {}
+    /\ fails' = 0 /\ reads' = 0 /\ finished' = 0
     /\ clean' = TRUE /\ stopped' = FALSE /\ errors' = FALSE
-    /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, calm>>
+    /\ UNCHANGED <<okRead, streak, span, firstAge, lastAge, open, age, calm>>
 
 Next == Tick \/ GoCalm \/ StartRun \/ NhlStep \/ EndNhl \/ OtherSources \/ Finish
 
@@ -298,8 +322,6 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 \* not require them in a later state.
 MarkerOnlyWhenComplete == [][(~marker /\ marker') => \A k \in 1..NWindows : WindowDone(k)]_vars
 
-AbandonedIsNoted == phase /= "idle" => gaps \subseteq noted
-
 DoneStaysDone == [][\A u \in Urls : Done(u) => Done(u)']_vars
 
 ScoreRead(d) == phase = "nhl" /\ reads' = reads + 1 /\ UnitAt(pc) = Score(d)
@@ -311,17 +333,24 @@ ExitCodeRule == [][Finishing => /\ (exitCode' = 1 <=> errors)
                                  /\ (exitCode' = 75 => ~marker' /\ ~clean)
                                  /\ (exitCode' = 0 => marker')]_vars
 
-\* A run that the budget stops with no finished unit exits 1, not 75.
-StallExitsOne == [][Finishing /\ stopped /\ ~progress /\ reads >= Budget
-                     => exitCode' = 1]_vars
+\* A run that the budget stops with no counted unit exits 1, not 75, while old work is unread or
+\* no unit finished.
+StallExitsOne == [][Finishing /\ StallError => exitCode' = 1]_vars
 
 \* The same rule, judged on the backlog alone. An arrival does not count here. With
 \* ArrivalsCount TRUE, a run can count an arrival as progress and still exit 75 with no
 \* backlog unit finished. This property fails then, and StallExitsOne does not. With
 \* ArrivalsCount FALSE, progress and backlog are equal, so this property is the same check as
 \* StallExitsOne. It is not an independent check. It exists as the target of that mutation.
-BacklogStallExitsOne == [][Finishing /\ stopped /\ ~backlog /\ reads >= Budget
-                              => exitCode' = 1]_vars
+BacklogStallExitsOne ==
+    [][Finishing /\ stopped /\ ~Backlog /\ reads >= Budget /\ (BacklogUnread \/ ~Headway)
+       => exitCode' = 1]_vars
+
+\* The stall error needs old work that is still unread, or a run that finished no unit. With a
+\* recent day finished and no old work unread, the run exits 75, and the next run finishes them
+\* (#302).
+StallNeedsBacklogOrNoHeadway ==
+    [][(phase = "nhl" /\ pc = Steps + 1 /\ ~errors /\ errors') => (BacklogUnread \/ ~Headway)]_vars
 
 \* Liveness
 

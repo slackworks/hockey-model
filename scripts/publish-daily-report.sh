@@ -8,15 +8,30 @@
 #
 # The release target is GITHUB_SHA, the commit that built the first report of the day. Each build
 # adds its report as report-DATE-HHMMSSZ files, named by its generated_at time. A published
-# version is never replaced. The report-DATE files and the backtest files move to the newest build.
+# version is never replaced. The report-DATE files, the backtest files, and the notes move to the
+# newest build, the one with the latest generated_at. A retry of an older build leaves them there.
+# The index-DATE.json asset lists every build (file, generated_at, code_sha, fit_sha256,
+# inputs_sha256, schema_version). A rebuild adds its entry and drops none. A release from before
+# the index gets an index of the new build only, and a warning names the builds it leaves out.
+# The report-index command checks the report and the index against their schemas first, so a
+# report that does not match stops the script before any upload.
+# Only the release calls need GH_TOKEN. The script reads it once, unsets it, and gives it to
+# each release call alone, so the package commands never see the write token.
+# The release notes open with one line for each game: the favorite, its win chance, and the range
+# of that win chance (report-summary). The range is model uncertainty only.
 set -euo pipefail
+
+# The gh calls need the write token, and the package commands need no token at all. read_token
+# holds the value, and the export goes away here, so no uv command sees the token. Each gh
+# call gets it back with a prefix (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
 
 day=""
 report_dir=""
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 while (($# > 0)); do
   case "$1" in
@@ -86,67 +101,153 @@ if [[ "$(head -n 1 "$backtest_games")" != *,* ]]; then
 fi
 
 tag="reports-$day"
-# generated_at comes from report_json as ISO 8601 UTC with microseconds. The regex proves the
-# shape, so the fixed columns of HHMMSS are safe to read.
-generated="$(jq -r '.generated_at // empty' "$json")"
-if [[ ! "$generated" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00$ ]]; then
-  echo "publish-daily-report: $json has no generated_at as ISO 8601 UTC; the report was not published" >&2
+index="$report_dir/index-$day.json"
+check_dir="$report_dir/published-check"
+mkdir -p "$check_dir"
+
+# The lookup only reads, so a failure here leaves the release as it was.
+answer="$(GH_TOKEN="$read_token" release_status "$tag")"
+case "$answer" in
+published | missing) ;;
+*)
+  echo "publish-daily-report: the release lookup for $tag failed: ${answer#failed: }" >&2
+  exit 1
+  ;;
+esac
+
+existing_assets=""
+existing_index=""
+if [[ "$answer" == "published" ]]; then
+  existing_assets="$(GH_TOKEN="$read_token" gh release view "$tag" --json assets \
+    --jq '.assets[].name')" || {
+    echo "publish-daily-report: cannot list the assets of $tag; gh's error is above. Nothing was published." >&2
+    exit 1
+  }
+  if grep -qxF "index-$day.json" <<<"$existing_assets"; then
+    if ! GH_TOKEN="$read_token" gh release download "$tag" --pattern "index-$day.json" \
+      --dir "$check_dir" --clobber; then
+      echo "publish-daily-report: cannot download index-$day.json from $tag; gh's error is above. Nothing was published. Run the report workflow again." >&2
+      exit 1
+    fi
+    existing_index="$check_dir/index-$day.json"
+    if [[ ! -s "$existing_index" ]]; then
+      echo "publish-daily-report: the download of index-$day.json from $tag is empty. Nothing was published. Run the report workflow again." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# The command checks the report against its schema and the index against its own. It names the
+# build file from the generated_at time of the report, so the script keeps no copy of that rule.
+index_args=(--report "$json" --date "$day" --out "$index")
+if [[ -n "$existing_index" ]]; then
+  index_args+=(--existing "$existing_index")
+fi
+if ! built="$(uv run hockey-model report-index "${index_args[@]}")"; then
+  echo "publish-daily-report: $json or the index of $day is not valid; its error is above. Nothing was published." >&2
   exit 1
 fi
-stamp="${generated:11:2}${generated:14:2}${generated:17:2}Z"
-version_md="$report_dir/report-$day-$stamp.md"
-version_json="$report_dir/report-$day-$stamp.json"
+if ! version_name="$(jq -er '.file | select(type == "string")' <<<"$built")"; then
+  echo "publish-daily-report: report-index printed no build file name; it printed: $built. Nothing was published." >&2
+  exit 1
+fi
+build="${version_name%.json}"
+# The newest build in the index owns the report-DATE files and the notes. A retry of an older
+# build adds its version files and its index entry, and leaves the rest with the newest build.
+if ! newest="$(jq -er '.builds | max_by(.generated_at) | .file | select(type == "string")' \
+  "$index")"; then
+  echo "publish-daily-report: the index that report-index wrote names no build. Nothing was published." >&2
+  exit 1
+fi
+# A release from before the index has version files that the new index cannot list, because
+# they hold no inputs_sha256.
+unlisted=()
+if [[ -n "$existing_assets" && -z "$existing_index" ]]; then
+  version_pattern="^report-${day}-[0-9]{6}Z\.json$"
+  while IFS= read -r name; do
+    if [[ "$name" =~ $version_pattern && "$name" != "$version_name" ]]; then
+      unlisted+=("${name%.json}")
+    fi
+  done <<<"$existing_assets"
+fi
+if ((${#unlisted[@]} > 0)); then
+  echo "::warning::publish-daily-report: $tag has no index, so index-$day.json lists only $build. The earlier builds ${unlisted[*]} stay on the release with no index entry." >&2
+fi
+version_json="$report_dir/$build.json"
+version_md="$report_dir/$build.md"
 cp "$md" "$version_md"
 cp "$json" "$version_json"
-latest=("$md" "$json" "$backtest" "$backtest_games")
+latest=("$md" "$json" "$backtest" "$backtest_games" "$index")
+# The command checks the report again and prints the opening lines, one for each game.
+if ! summary="$(uv run hockey-model report-summary --report "$json" | jq -er '.summary[]')"; then
+  echo "publish-daily-report: cannot build the summary of $json; its error is above. Nothing was published." >&2
+  exit 1
+fi
 notes="$report_dir/release-notes-$day.md"
 {
+  printf '%s\n\n' "$summary"
   echo "Every build's report is kept. Each report-$day-HHMMSSZ file set is one build, named by its"
   echo "generated_at time (UTC). The report-$day files and the backtest files are the newest build."
-  echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC, report-$day-$stamp."
+  if ((${#unlisted[@]} > 0)); then
+    echo "The builds ${unlisted[*]} are from before index-$day.json, so the index does not list them."
+  fi
+  # daily-report.sh --skip-unchanged finds the newest build in this line: "UTC, BUILD.".
+  echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC, $build."
   echo
   cat "$md"
 } >"$notes"
 
 # A version name is its build's generated_at, so the same name is the same build. A retry of
 # that build finds its bytes already on the release and skips the upload. Other bytes under the
-# same name are a collision, and the script stops, because a published version is never replaced.
-publish_version() {
+# same name are a collision. The function prints "new" or "same" and returns 1 on a collision,
+# because a published version is never replaced.
+version_status() {
   local file="$1" name
   name="$(basename "$file")"
   if ! grep -qxF "$name" <<<"$existing_assets"; then
-    gh release upload "$tag" "$file"
+    echo new
     return 0
   fi
-  gh release download "$tag" --pattern "$name" --dir "$check_dir"
+  if ! GH_TOKEN="$read_token" gh release download "$tag" --pattern "$name" \
+    --dir "$check_dir" --clobber; then
+    echo "publish-daily-report: cannot download $name from $tag to compare it with this build; gh's error is above. Nothing was published. Run the report workflow again." >&2
+    return 1
+  fi
+  if [[ ! -s "$check_dir/$name" ]]; then
+    echo "publish-daily-report: the download of $name from $tag is empty, so it cannot be compared with this build. Nothing was published. Run the report workflow again." >&2
+    return 1
+  fi
   if cmp -s "$file" "$check_dir/$name"; then
     echo "publish-daily-report: $name is already on $tag with the same bytes; skipped." >&2
+    echo same
     return 0
   fi
-  echo "publish-daily-report: $name is already on $tag with other bytes; a version is never replaced. Two builds share one second. Find the second build and publish it again." >&2
-  exit 1
+  echo "publish-daily-report: $name is already on $tag with other bytes; a version is never replaced. Two builds share one second. Run the report workflow again, so the later build gets a new generated_at second." >&2
+  return 1
 }
 
-answer="$(release_status "$tag")"
-case "$answer" in
-published)
-  # The release exists. The alias and the backtest files move to this build with --clobber.
-  existing_assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
-  check_dir="$report_dir/published-check"
-  mkdir -p "$check_dir"
-  publish_version "$version_md"
-  publish_version "$version_json"
-  gh release upload "$tag" "${latest[@]}" --clobber
-  gh release edit "$tag" --notes-file "$notes"
-  ;;
-missing)
-  gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
+if [[ "$answer" == "published" ]]; then
+  # The release exists. Both version names are checked before either upload, so a collision
+  # leaves no half-published build. When this build is the newest, the alias and the backtest
+  # files move to it with --clobber.
+  md_state="$(version_status "$version_md")" || exit 1
+  json_state="$(version_status "$version_json")" || exit 1
+  if [[ "$md_state" == "new" ]]; then
+    GH_TOKEN="$read_token" gh release upload "$tag" "$version_md"
+  fi
+  if [[ "$json_state" == "new" ]]; then
+    GH_TOKEN="$read_token" gh release upload "$tag" "$version_json"
+  fi
+  if [[ "$newest" == "$version_name" ]]; then
+    GH_TOKEN="$read_token" gh release upload "$tag" "${latest[@]}" --clobber
+    GH_TOKEN="$read_token" gh release edit "$tag" --notes-file "$notes"
+  else
+    echo "publish-daily-report: $build is older than the newest build ${newest%.json} of $tag. Its version files and its index entry are published; the report-$day files and the notes stay with the newest build." >&2
+    GH_TOKEN="$read_token" gh release upload "$tag" "$index" --clobber
+  fi
+else
+  GH_TOKEN="$read_token" gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
     --notes-file "$notes"
-  ;;
-*)
-  echo "publish-daily-report: the release lookup for $tag failed: ${answer#failed: }" >&2
-  exit 1
-  ;;
-esac
+fi

@@ -16,6 +16,6 @@
   "expected_effect": -0.003,
   "promotion_criterion": "95th percentile of block_bootstrap_mean_ci (16-game blocks) of the paired difference, candidate minus Elo, must be below zero",
   "failure_outcome": "ship Elo alone",
-  "status": "registered",
+  "status": "withdrawn",
   "result": null
 }

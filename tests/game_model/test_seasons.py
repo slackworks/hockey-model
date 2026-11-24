@@ -20,6 +20,7 @@ from hockey_model.game_model.seasons import (
     confirmation_plan,
     exploration_plan,
     in_cohort,
+    previous_season,
     scored_label,
     season_code,
     season_of,
@@ -174,3 +175,20 @@ def test_season_start_year_and_code_share_one_boundary(day: date, start_year: in
 
 def test_season_code_writes_both_years() -> None:
     assert season_code(2026) == 20262027
+
+
+def test_the_previous_season_of_20252026_is_20242025() -> None:
+    assert previous_season(20252026) == 20242025
+
+
+@given(start=st.integers(1917, 2100))
+def test_the_previous_season_ends_where_the_season_starts(start: int) -> None:
+    earlier = previous_season(season_code(start))
+    assert earlier % 10000 == start
+    assert earlier // 10000 == start - 1
+
+
+@pytest.mark.parametrize("season", [0, 2025, 20252027, 20262025, 20252025])
+def test_a_season_id_that_is_not_two_consecutive_years_is_refused(season: int) -> None:
+    with pytest.raises(ValueError, match="not two consecutive years"):
+        previous_season(season)

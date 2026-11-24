@@ -15,171 +15,25 @@ a shape the store does not hold. A stamp that is already ahead of the shape is c
 column probe, and the upgrade reruns every change from version 1.
 """
 
-import argparse
-import re
 import sqlite3
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from stat import S_ISREG
 
 from hockey_model.store.db import SCHEMA_VERSION, StoreError
+from hockey_model.store.migrations import MIGRATIONS, NULLABLE_BEFORE_V5
 from hockey_model.store.shape import Requirement, earned_version
 from hockey_model.store.sql_text import statements as script_statements
 from hockey_model.store.timestamps import iso_utc
 
-
-def _mp_team_games_ddl(table: str) -> str:
-    """Return the current ``mp_team_games`` DDL under another table name.
-
-    The 1->2 and the 3->4 steps both rebuild this table. One definition keeps the two
-    results identical, and the test compares each result against a fresh store.
-    """
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
-        raise StoreError(
-            f"rebuild mp_team_games: {table!r} is not a table name; a name holds letters, "
-            "digits, and underscores only. Pass a literal from this module."
-        )
-    return f"""
-CREATE TABLE {table} (
-    game_id INTEGER,
-    team TEXT,
-    game_date TEXT,
-    xg_for REAL,
-    xg_against REAL,
-    shot_attempts_for INTEGER,
-    shot_attempts_against INTEGER,
-    unblocked_for INTEGER,
-    unblocked_against INTEGER,
-    attempts_known INTEGER NOT NULL DEFAULT 1 CHECK (attempts_known IN (0, 1)),
-    fetched_at TEXT NOT NULL,
-    PRIMARY KEY (game_id, team, fetched_at),
-    CHECK (
-        attempts_known = 0
-        OR (shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL
-            AND unblocked_for IS NOT NULL AND unblocked_against IS NOT NULL)
-    )
-)
-"""
-
-
-_MP_TEAM_GAMES_V2 = _mp_team_games_ddl("mp_team_games_v2")
-_MP_TEAM_GAMES_V4 = _mp_team_games_ddl("mp_team_games_v4")
-# The 4->5 step rebuilds these two tables for the same reason the 3->4 step rebuilds
-# mp_team_games: schema.sql changed without a migration step, so an upgraded store kept the
-# weaker shape. Both tables hold no key that a rebuild must preserve beyond the fit ids.
-_SOURCE_READS_V5 = """
-CREATE TABLE source_reads_v5 (
-    source TEXT,
-    url TEXT,
-    fetched_at TEXT NOT NULL,
-    ok INTEGER,
-    error TEXT
-)
-"""
-_MODEL_FITS_V5 = """
-CREATE TABLE model_fits_v5 (
-    fit_id INTEGER PRIMARY KEY,
-    fit_through_season INTEGER,
-    features TEXT,
-    weights TEXT,
-    created_at TEXT NOT NULL
-)
-"""
-# A stored row is known when it carries all four counts. The flag is derived, so the
-# rebuild writes it from the counts instead of trusting a column that a version 2 store
-# may not have.
-_V4_COUNT = (
-    "CASE WHEN shot_attempts_for IS NOT NULL AND shot_attempts_against IS NOT NULL"
-    " AND unblocked_for IS NOT NULL AND unblocked_against IS NOT NULL"
-    " THEN 1 ELSE 0 END"
-)
-
-# The change from each version to the next, in order. Each change is one statement. The
-# views are dropped before the first change and rebuilt after the commit.
-MIGRATIONS: dict[int, tuple[str, ...]] = {
-    1: (
-        _MP_TEAM_GAMES_V2,
-        "INSERT INTO mp_team_games_v2 (game_id, team, game_date, xg_for, xg_against,"
-        " fetched_at, attempts_known)"
-        " SELECT game_id, team, game_date, xg_for, xg_against, fetched_at, 0"
-        " FROM mp_team_games",
-        "DROP TABLE mp_team_games",
-        "ALTER TABLE mp_team_games_v2 RENAME TO mp_team_games",
-        "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
-    ),
-    2: (
-        "CREATE TABLE IF NOT EXISTS fit_labels ("
-        " label TEXT NOT NULL,"
-        " fit_id INTEGER NOT NULL REFERENCES model_fits (fit_id),"
-        " set_at TEXT NOT NULL)",
-    ),
-    # A version 2 store that the earlier code wrote has no attempts_known column, so a
-    # rebuild is the one change that works for both version 2 shapes. It derives the flag
-    # from the counts, which is the same test the readers use.
-    #
-    # The five indexes below reached schema.sql after version 1 and no step created them, so
-    # an upgraded store read every table that lacks one as a full scan. A test compares the
-    # index names of an upgraded store with a fresh one.
-    3: (
-        _MP_TEAM_GAMES_V4,
-        "INSERT INTO mp_team_games_v4 (game_id, team, game_date, xg_for, xg_against,"
-        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
-        " attempts_known, fetched_at) SELECT game_id, team, game_date, xg_for, xg_against,"
-        " shot_attempts_for, shot_attempts_against, unblocked_for, unblocked_against,"
-        f" {_V4_COUNT}, fetched_at FROM mp_team_games",
-        "DROP TABLE mp_team_games",
-        "ALTER TABLE mp_team_games_v4 RENAME TO mp_team_games",
-        "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
-        "CREATE INDEX IF NOT EXISTS games_start ON games (start_utc)",
-        "CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started)",
-        "CREATE INDEX IF NOT EXISTS mp_goalie_games_player ON mp_goalie_games (nhl_id)",
-        "CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team)",
-        "CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at)",
-    ),
-    # d05eb1a added NOT NULL to these two columns without a migration step, so a store that
-    # predates it accepts a row that a fresh store rejects. Both columns are written by every
-    # writer, so no stored row holds a NULL and the rebuild copies every row.
-    4: (
-        _SOURCE_READS_V5,
-        "INSERT INTO source_reads_v5 (source, url, fetched_at, ok, error)"
-        " SELECT source, url, fetched_at, ok, error FROM source_reads",
-        "DROP TABLE source_reads",
-        "ALTER TABLE source_reads_v5 RENAME TO source_reads",
-        _MODEL_FITS_V5,
-        "INSERT INTO model_fits_v5 (fit_id, fit_through_season, features, weights, created_at)"
-        " SELECT fit_id, fit_through_season, features, weights, created_at FROM model_fits",
-        "DROP TABLE model_fits",
-        "ALTER TABLE model_fits_v5 RENAME TO model_fits",
-    ),
-}
-# d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
-# NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.
-_NULLABLE_BEFORE_V5: tuple[tuple[str, str], ...] = (
-    ("source_reads", "fetched_at"),
-    ("model_fits", "created_at"),
-)
 _LEDGER = (
     "CREATE TABLE IF NOT EXISTS schema_migrations ("
     " from_version INTEGER NOT NULL, to_version INTEGER NOT NULL,"
     " applied_at TEXT NOT NULL, backup_path TEXT NOT NULL)"
 )
 _VIEWS_PATH = Path(__file__).with_name("views.sql")
-# The MoneyPuck team file is read on the weekly schedule, so after an upgrade the
-# attempt counts arrive only at the next weekly read unless the reread flag forces it.
-_NEXT_STEP = (
-    "run `hockey-model refresh --reread-moneypuck` before any attempt-form backtest; "
-    "until it runs, the attempt-form features are empty and every game counts as missing"
-)
 _SKIP_NOTE = "no store file there yet; the first refresh creates it at the current version"
-# Only the 1->2 step writes an empty count. The decision to ask for a reread is taken from
-# the data below, because a version 2 store that a 1->2 step made can reach a later version
-# with its counts still NULL.
-_EMPTY_ATTEMPTS_FROM = 1
-# The view, not the table: a reread appends a counted row and leaves the v1 row in place, so
-# a table count would ask for the reread again forever.
-_EMPTY_ATTEMPTS_SQL = "SELECT COUNT(*) FROM latest_mp_team_games WHERE attempts_known = 0"
 
 
 @dataclass(frozen=True)
@@ -190,7 +44,7 @@ class UpgradeReport:
     the last upgrade that the ledger records, or None when there is none. The workflow drops
     that file after the run, so a no-op report can name a backup that is gone.
     ``from_version`` is None when there is no store file and the caller allowed a skip.
-    ``next_step`` is a command to run, or None. ``note`` is a statement about the run.
+    ``note`` is a statement about the run.
     """
 
     path: str
@@ -198,7 +52,6 @@ class UpgradeReport:
     to_version: int
     changed: bool
     backup_path: str | None
-    next_step: str | None = None
     note: str | None = None
 
 
@@ -279,27 +132,41 @@ def _last_backup(conn: sqlite3.Connection, path: Path) -> str | None:
     return None if row is None else str(row[0])
 
 
+def _backup_to(path: Path, target: Path) -> None:
+    """Copy the store at ``path`` to ``target`` with SQLite's backup API."""
+    source = dest = None
+    try:
+        source = sqlite3.connect(path)
+        dest = sqlite3.connect(target)
+        source.backup(dest)
+    finally:
+        for conn in (source, dest):
+            if conn is not None:
+                conn.close()
+
+
 def _backup(path: Path, version: int) -> Path:
-    """Copy the store with SQLite's backup API. Remove a partial copy when the copy fails."""
+    """Copy the store under a temporary name, then rename it, so a named backup is complete.
+
+    A run that dies in the copy leaves only the temporary file. The write lock is held, so no
+    other upgrade writes a copy, and a temporary file that exists is the leftover of such a run.
+    """
     target = path.with_name(f"{path.name}.v{version}.bak")
     if target.exists():
         raise StoreError(
             f"upgrade store {str(path)!r}: backup {str(target)!r} already exists; move it aside "
             "so the earlier backup is kept, then run the upgrade again"
         )
-    source = sqlite3.connect(path)
-    dest = sqlite3.connect(target)
+    partial = target.with_name(f"{target.name}.tmp")
     try:
-        source.backup(dest)
-    except sqlite3.Error as exc:
-        dest.close()
-        target.unlink(missing_ok=True)
+        partial.unlink(missing_ok=True)
+        _backup_to(path, partial)
+        partial.replace(target)
+    except (sqlite3.Error, OSError) as exc:
+        partial.unlink(missing_ok=True)
         raise StoreError(
             f"upgrade store {str(path)!r}: backup failed: {exc}; the store is unchanged"
         ) from exc
-    finally:
-        source.close()
-        dest.close()
     return target
 
 
@@ -316,7 +183,7 @@ def _refuse_a_null_column(conn: sqlite3.Connection, path: Path) -> None:
     The 4->5 step adds NOT NULL to two columns that an earlier store wrote without it. The
     rebuild cannot fill a NULL with a true value, so it names the table and the count instead.
     """
-    for table, column in _NULLABLE_BEFORE_V5:
+    for table, column in NULLABLE_BEFORE_V5:
         query = f"SELECT COUNT(*) FROM {table} WHERE {column} IS NULL"
         try:
             count = int(conn.execute(query).fetchone()[0])
@@ -376,7 +243,7 @@ def _refuse_a_short_shape(conn: sqlite3.Connection) -> None:
     earned, missing = earned_version(conn)
     if missing is not None and earned < SCHEMA_VERSION:
         raise StoreError(
-            f"the steps ran, but {missing.table} still lacks {missing.column}, so the store "
+            f"the steps ran, but {missing.shortfall}, so the store "
             f"holds version {earned} and not {SCHEMA_VERSION}; restore the backup"
         )
 
@@ -420,10 +287,9 @@ def upgrade_store(path: Path, *, if_missing: str = "fail") -> UpgradeReport:
             _refuse_a_null_column(conn, path)
         backup = _backup(path, stored)
         _apply(conn, path, stored, backup)
-        next_step = _NEXT_STEP if _needs_reread(conn, stored) else None
     finally:
         conn.close()
-    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), next_step, note)
+    return UpgradeReport(str(path), stored, SCHEMA_VERSION, True, str(backup), note)
 
 
 def _start_version(conn: sqlite3.Connection, path: Path) -> tuple[int, str | None]:
@@ -463,49 +329,6 @@ def _stamp_ahead_note(path: Path, earned: int, missing: Requirement) -> str:
     return (
         f"the stamp of {str(path)!r} named a newer version than its tables hold; the tables "
         f"earn version {earned}, because version {missing.version} needs "
-        f"{missing.table}.{missing.column}. Every change from version {earned} runs again, "
+        f"{missing.need}. Every change from version {earned} runs again, "
         "and the ledger records it."
     )
-
-
-def _needs_reread(conn: sqlite3.Connection, stored: int) -> bool:
-    """Return True when the upgrade left a MoneyPuck attempt count empty.
-
-    The 1->2 step sets the counts of the rows it moved to NULL, and no later step fills them.
-    The answer comes from the data, not from the starting version, because a version 2 store
-    that the 1->2 step made can reach a later version with its counts still NULL. A reread
-    adds a counted row beside the old one, so the check reads the newest read of each team
-    game, as the model does.
-    """
-    if stored < _EMPTY_ATTEMPTS_FROM + 1:
-        return True
-    row = conn.execute(_EMPTY_ATTEMPTS_SQL).fetchone()
-    return row is not None and int(row[0]) > 0
-
-
-def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
-    """Add the ``store`` command group with its ``upgrade`` subcommand."""
-    group = add_parser("store", help="manage the store file")
-    sub = group.add_subparsers(dest="store_command")
-    upgrade = sub.add_parser(
-        "upgrade", help="move the store to the current schema, keeping every row"
-    )
-    upgrade.add_argument(
-        "--db",
-        default=None,
-        metavar="PATH",
-        help="store file to upgrade; default is HOCKEY_MODEL_DB",
-    )
-    upgrade.add_argument(
-        "--if-missing",
-        choices=("fail", "skip"),
-        default="fail",
-        help="'skip' exits 0 when the store file does not exist; the default 'fail' names it",
-    )
-
-
-def run_store_group(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
-    """Run a ``store`` subcommand and return its JSON payload and exit code."""
-    if args.store_command != "upgrade":
-        raise StoreError("store: name a subcommand, such as `hockey-model store upgrade`")
-    return asdict(upgrade_store(db_path, if_missing=args.if_missing)), 0

@@ -3,9 +3,11 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
+from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of
-from hockey_model.game_model.seasons import SEASON_START_MONTH, season_start_year
+from hockey_model.game_model.seasons import SEASON_START_MONTH, season_code, season_start_year
 from hockey_model.sources.daily_faceoff import STARTERS_URL, fetch_starters
+from hockey_model.sources.errors import SourceError
 from hockey_model.sources.espn import ESPN_BASE, fetch_injuries, fetch_scoreboard_starters
 from hockey_model.sources.moneypuck import (
     FIRST_SEASON,
@@ -72,7 +74,7 @@ def _stop_for_time(run: RefreshRun, unit: str, tried: int) -> bool:
     """
     if tried == 0 or not run.out_of_time():
         return False
-    run.notes.append(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
+    run.stop(f"{MONEYPUCK}: stopped before {unit}, because the time ran out")
     run.timed_out = True
     _mark_incomplete(run)
     return True
@@ -99,6 +101,27 @@ def _note_gaps(run: RefreshRun) -> frozenset[str]:
     return gaps
 
 
+def _unpublished_goalie_file(
+    run: RefreshRun, season: int, current: int, failure: Exception
+) -> str | None:
+    """Return a note when a 404 for the new season's goalie file is expected, else ``None``.
+
+    MoneyPuck publishes the file after the season starts. A 404 before the store holds any final
+    game of that season is no failure, so it adds no error and no known gap (#70).
+    """
+    if season != current or not isinstance(failure, SourceError) or failure.status != 404:
+        return None
+    if run.conn.execute(
+        "SELECT 1 FROM latest_final_games WHERE season = ? AND game_type IN (2, 3) LIMIT 1",
+        (season_code(season),),
+    ).fetchone():
+        return None
+    return (
+        f"{MONEYPUCK}: the goalie file of season {season} is not published yet, and the store "
+        "holds no final game of that season; the next refresh reads it again"
+    )
+
+
 def moneypuck(run: RefreshRun) -> None:
     """Read the team file and each goalie file that is missing or, for the team file and the
     current season, older than a week. A finished season is read once."""
@@ -114,29 +137,35 @@ def moneypuck(run: RefreshRun) -> None:
                 run, write_team_games(run.conn, fetch_team_games(run.client), stamp)
             ),
         )
-    failures = 0
-    for season in range(FIRST_SEASON, current + 1):
-        url = goalie_games_url(season)
-        if url in gaps:
-            continue
-        if failures >= MAX_UNIT_FAILURES:
-            run.notes.append(
-                f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried"
+    seasons = current - FIRST_SEASON + 1
+    with run.step("moneypuck", "goalie-files", seasons):
+        failures = 0
+        for season in range(FIRST_SEASON, current + 1):
+            progress_log.advance()
+            url = goalie_games_url(season)
+            if url in gaps:
+                continue
+            if failures >= MAX_UNIT_FAILURES:
+                run.stop(f"{MONEYPUCK}: stopped after {failures} failed files; the rest not tried")
+                _mark_incomplete(run)
+                break
+            if not _goalie_file_stale(run, season, current):
+                continue
+            if _stop_for_time(run, f"the goalie file of season {season}", tried):
+                break
+
+            def unit(stamp: datetime, season: int = season) -> int:
+                rows = fetch_goalie_games(run.client, season)
+                return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
+
+            ok = run.attempt(
+                MONEYPUCK,
+                url,
+                unit,
+                lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
             )
-            _mark_incomplete(run)
-            break
-        if not _goalie_file_stale(run, season, current):
-            continue
-        if _stop_for_time(run, f"the goalie file of season {season}", tried):
-            break
-
-        def unit(stamp: datetime, season: int = season) -> int:
-            rows = fetch_goalie_games(run.client, season)
-            return _note_credit(run, write_goalie_games(run.conn, rows, stamp))
-
-        ok = run.attempt(MONEYPUCK, url, unit)
-        tried += ok
-        failures = 0 if ok else failures + 1
+            tried += ok
+            failures = 0 if ok else failures + 1
     _note_unmatched(run)
 
 
@@ -171,11 +200,11 @@ def _attempt_live(run: RefreshRun, source: str, url: str, unit: Callable[[dateti
     ``stale_sources`` still names the feed, because it counts a failed single feed at any age.
     """
     was_gap = url in run.skipped(source)
+    errors_before = len(run.errors)
     if run.attempt(source, url, unit) or not was_gap:
         return
-    # ``attempt`` appends exactly one error on a failure and leaves ``run`` untouched after that,
-    # so the last error is the one of this read.
-    run.errors.pop()
+    # Drop the errors that this read added, and keep every earlier one.
+    del run.errors[errors_before:]
     run.notes.append(f"{source}: still failing after repeated failed reads; not an error")
 
 

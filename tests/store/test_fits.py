@@ -2,19 +2,31 @@
 
 import math
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hockey_model.game_model.features import ALL_FEATURE_NAMES, feature_name_problem
+from hockey_model.game_model.features import FEATURES, feature_name_problem
 from hockey_model.game_model.logistic import FitDiagnostics, LogisticFit
-from hockey_model.store.db import StoreError
-from hockey_model.store.fits import FitRecord, FitRef, load_fit, save_fit
+from hockey_model.store.db import StoreError, connect
+from hockey_model.store.fits import SYMMETRY_TOLERANCE, FitRecord, FitRef, load_fit, save_fit
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@contextmanager
+def _fresh_store(factory: pytest.TempPathFactory) -> Generator[sqlite3.Connection]:
+    """Yield an empty store that belongs to one Hypothesis example."""
+    connection = connect(factory.mktemp("store") / "store.db")
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _loaded(conn: sqlite3.Connection, fit_id: int) -> LogisticFit:
@@ -74,6 +86,7 @@ DIAGNOSTICS = FitDiagnostics(
     means={"elo_logit": 0.1, "rest": 0.0},
     scales={"elo_logit": 0.4, "rest": 1.0},
     stop_reason="converged: largest gradient entry below 1e-06",
+    covariance=((0.5, 0.0, 0.1), (0.0, 0.25, 0.0), (0.1, 0.0, 0.3)),
 )
 
 _NO_DIAGNOSTICS = '{"intercept": 0, "elo_weight": 1, "features": {}}'
@@ -103,25 +116,170 @@ def test_malformed_diagnostics_say_to_fit_again(store: sqlite3.Connection) -> No
         load_fit(store, FitRef(fit_id=1))
 
 
+def test_a_fit_saved_before_the_covariance_existed_loads_with_none(
+    store: sqlite3.Connection,
+) -> None:
+    stored = (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0, "means": {},'
+        ' "scales": {}, "stop_reason": "converged"}}'
+    )
+    store.execute(_INSERT, (stored,))
+    loaded = _loaded(store, 1)
+    assert loaded.diagnostics is not None and loaded.diagnostics.covariance is None
+
+
+@pytest.mark.parametrize(
+    "covariance",
+    ["[[1.0]]", "[[1.0, 0.0], [0.0]]", "[[1.0, NaN], [0.0, 1.0]]", '"x"', "[1.0, 2.0]"],
+)
+def test_a_saved_covariance_of_the_wrong_shape_says_to_fit_again(
+    store: sqlite3.Connection, covariance: str
+) -> None:
+    stored = (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0, "means":'
+        ' {"elo_logit": 0.0}, "scales": {"elo_logit": 1.0}, "stop_reason": "converged",'
+        f' "covariance": {covariance}}}}}'
+    )
+    store.execute(_INSERT, (stored,))
+    with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
+        load_fit(store, FitRef(fit_id=1))
+
+
+def _stored_with(means: str, scales: str, covariance: str) -> str:
+    return (
+        '{"intercept": 0, "elo_weight": 1, "features": {}, "diagnostics": {"iterations": 1,'
+        ' "objective": 1.0, "gradient_norm": 0.0, "condition": 1.0, "l2": 1.0,'
+        f' "means": {means}, "scales": {scales}, "stop_reason": "converged",'
+        f' "covariance": {covariance}}}}}'
+    )
+
+
+_GOOD_MEANS = '{"elo_logit": 0.0}'
+_GOOD_SCALES = '{"elo_logit": 1.0}'
+_GOOD_COVARIANCE = "[[1.0, 0.1], [0.1, 1.0]]"
+
+
+@pytest.mark.parametrize(
+    ("means", "scales", "covariance"),
+    [
+        (_GOOD_MEANS, _GOOD_SCALES, "[[1.0, 0.5], [0.0, 1.0]]"),
+        (_GOOD_MEANS, _GOOD_SCALES, "[[0.0, 0.0], [0.0, 1.0]]"),
+        (_GOOD_MEANS, _GOOD_SCALES, "[[1.0, 0.0], [0.0, -1.0]]"),
+        ("{}", _GOOD_SCALES, _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"rest": 1.0}', _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"elo_logit": 0.0}', _GOOD_COVARIANCE),
+        (_GOOD_MEANS, '{"elo_logit": -2.0}', _GOOD_COVARIANCE),
+        ('{"elo_logit": NaN}', _GOOD_SCALES, _GOOD_COVARIANCE),
+    ],
+)
+def test_a_covariance_that_cannot_give_a_range_says_to_fit_again(
+    store: sqlite3.Connection, means: str, scales: str, covariance: str
+) -> None:
+    store.execute(_INSERT, (_stored_with(means, scales, covariance),))
+    with pytest.raises(StoreError, match="malformed.*run `hockey-model fit` again"):
+        load_fit(store, FitRef(fit_id=1))
+
+
+def test_a_good_covariance_with_its_scaling_loads(store: sqlite3.Connection) -> None:
+    store.execute(_INSERT, (_stored_with(_GOOD_MEANS, _GOOD_SCALES, _GOOD_COVARIANCE),))
+    loaded = _loaded(store, 1)
+    assert loaded.diagnostics is not None
+    assert loaded.diagnostics.covariance == ((1.0, 0.1), (0.1, 1.0))
+
+
+_ENTRY = st.floats(min_value=-5.0, max_value=5.0)
+_LOOSE = st.one_of(_ENTRY, st.just(float("nan")), st.just(float("inf")))
+
+
+def _fit_with(features: list[str], covariance: tuple[tuple[float, ...], ...]) -> LogisticFit:
+    names = ("elo_logit", *features)
+    diagnostics = FitDiagnostics(
+        1, 1.0, 0.0, 1.0, 1.0, dict.fromkeys(names, 0.0), dict.fromkeys(names, 1.0), "c", covariance
+    )
+    return LogisticFit(tuple(features), 0.0, 1.0, dict.fromkeys(features, 0.1), diagnostics)
+
+
+def _symmetric(left: float, right: float) -> bool:
+    return abs(left - right) <= SYMMETRY_TOLERANCE * max(1.0, abs(left), abs(right))
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    features=st.lists(st.sampled_from(FEATURES), unique=True, max_size=len(FEATURES)),
+    rows=st.lists(st.lists(_LOOSE, max_size=6), max_size=6),
+)
+def test_save_fit_accepts_a_covariance_exactly_when_it_can_give_a_range(
+    tmp_path_factory: pytest.TempPathFactory, features: list[str], rows: list[list[float]]
+) -> None:
+    """A square, finite, symmetric matrix of the right size with a positive diagonal."""
+    covariance = tuple(tuple(row) for row in rows)
+    size = len(features) + 2
+    square = len(covariance) == size and all(len(row) == size for row in covariance)
+    valid = (
+        square
+        and all(math.isfinite(v) for row in covariance for v in row)
+        and all(covariance[i][i] > 0 for i in range(size))
+        and all(
+            _symmetric(covariance[i][j], covariance[j][i]) for i in range(size) for j in range(i)
+        )
+    )
+    with _fresh_store(tmp_path_factory) as store:
+        fit = _fit_with(features, covariance)
+        if valid:
+            save_fit(store, FitRecord(fit, 20252026, T0))
+        else:
+            with pytest.raises(StoreError):
+                save_fit(store, FitRecord(fit, 20252026, T0))
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    features=st.lists(st.sampled_from(FEATURES), unique=True, max_size=len(FEATURES)),
+    data=st.data(),
+)
+def test_a_covariance_round_trips_exactly_through_the_store(
+    tmp_path_factory: pytest.TempPathFactory, features: list[str], data: Any
+) -> None:
+    size = len(features) + 2
+    raw = [[data.draw(_ENTRY) for _ in range(size)] for _ in range(size)]
+    # A symmetric matrix with a positive diagonal, built from the draws.
+    covariance = tuple(
+        tuple(
+            abs(raw[i][i]) + 1.0 if i == j else (raw[i][j] + raw[j][i]) / 2.0 for j in range(size)
+        )
+        for i in range(size)
+    )
+    fit = _fit_with(features, covariance)
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
+
+
 _FINITE = st.floats(allow_nan=False, allow_infinity=False)
 
 
-@settings(max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=40, deadline=None)
 @given(
     iterations=st.integers(min_value=0, max_value=50),
     numbers=st.lists(_FINITE, min_size=4, max_size=4),
     scaling=st.dictionaries(st.text(min_size=1, max_size=8), _FINITE, max_size=3),
 )
 def test_any_diagnostics_round_trip_through_the_store(
-    store: sqlite3.Connection, iterations: int, numbers: list[float], scaling: dict[str, float]
+    tmp_path_factory: pytest.TempPathFactory,
+    iterations: int,
+    numbers: list[float],
+    scaling: dict[str, float],
 ) -> None:
     objective, gradient_norm, condition, l2 = numbers
     diagnostics = FitDiagnostics(
         iterations, objective, gradient_norm, condition, l2, scaling, dict(scaling), "stop"
     )
     fit = LogisticFit((), 0.0, 1.0, {}, diagnostics)
-    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
-    assert _loaded(store, fit_id) == fit
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
 
 
 @pytest.mark.parametrize(
@@ -147,7 +305,6 @@ def test_a_saved_fit_with_a_value_that_is_not_finite_says_to_fit_again(
 @pytest.mark.parametrize(
     ("features", "weights"),
     [
-        ('["luck"]', '{"intercept": 0, "elo_weight": 1, "features": {"luck": 1.0}}'),
         ('["rest"]', '{"intercept": 0, "elo_weight": 1, "features": {}}'),
         ("[]", '{"intercept": 0, "elo_weight": 1, "features": {"rest": 1.0}}'),
     ],
@@ -164,25 +321,46 @@ def test_a_saved_fit_whose_features_and_weights_disagree_says_to_fit_again(
         load_fit(store, FitRef(fit_id=1))
 
 
+@pytest.mark.parametrize("name", ["attempt_form", "luck"])
+def test_a_saved_fit_that_names_a_removed_feature_says_which_one(
+    store: sqlite3.Connection, name: str
+) -> None:
+    """A well-formed fit is not malformed. It names a feature that this version lacks."""
+    store.execute(
+        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
+        " VALUES (1, ?, ?, '2026-01-01T00:00:00.000000+00:00')",
+        (f'["{name}"]', f'{{"intercept": 0, "elo_weight": 1, "features": {{"{name}": 1.0}}}}'),
+    )
+    with pytest.raises(StoreError) as caught:
+        load_fit(store, FitRef(fit_id=1))
+    message = str(caught.value)
+    assert f"the saved fit names '{name}', which this version does not have" in message
+    assert "malformed" not in message
+    assert "features from xg_form, goalie_gsax, rest" in message
+
+
 _WEIGHT = st.floats(min_value=-1e3, max_value=1e3, allow_nan=False)
 
 
-@settings(max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=40, deadline=None)
 @given(
-    features=st.lists(
-        st.sampled_from(ALL_FEATURE_NAMES), unique=True, max_size=len(ALL_FEATURE_NAMES)
-    ),
+    features=st.lists(st.sampled_from(FEATURES), unique=True, max_size=len(FEATURES)),
     intercept=_WEIGHT,
     elo_weight=_WEIGHT,
     data=st.data(),
 )
 def test_any_fit_round_trips_through_the_store(
-    store: sqlite3.Connection, features: list[str], intercept: float, elo_weight: float, data: Any
+    tmp_path_factory: pytest.TempPathFactory,
+    features: list[str],
+    intercept: float,
+    elo_weight: float,
+    data: Any,
 ) -> None:
     weights = {name: data.draw(_WEIGHT) for name in features}
     fit = LogisticFit(tuple(features), intercept, elo_weight, weights)
-    fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
-    assert _loaded(store, fit_id) == fit
+    with _fresh_store(tmp_path_factory) as store:
+        fit_id = save_fit(store, FitRecord(fit, 20252026, T0))
+        assert _loaded(store, fit_id) == fit
 
 
 def _row_count(store: sqlite3.Connection) -> int:
@@ -207,31 +385,16 @@ def test_save_fit_refuses_an_invalid_fit_and_leaves_no_row(
     assert _row_count(store) == 0
 
 
-def test_a_saved_fit_with_a_removed_feature_says_it_is_incompatible(
-    store: sqlite3.Connection,
-) -> None:
-    store.execute(
-        "INSERT INTO model_fits (fit_through_season, features, weights, created_at)"
-        " VALUES (1, ?, ?, '2026-01-01T00:00:00.000000+00:00')",
-        (
-            '["old_feature"]',
-            '{"intercept": 0, "elo_weight": 1, "features": {"old_feature": 1}}',
-        ),
-    )
-    with pytest.raises(StoreError, match="unknown feature 'old_feature'.*run `hockey-model fit`"):
-        load_fit(store, FitRef(fit_id=1))
-
-
-_NAMES = st.lists(st.one_of(st.sampled_from(ALL_FEATURE_NAMES), st.text(max_size=6)), max_size=5)
+_NAMES = st.lists(st.one_of(st.sampled_from(FEATURES), st.text(max_size=6)), max_size=5)
 _NUMBER = st.one_of(
     st.floats(allow_nan=False, allow_infinity=False, width=32), st.just(float("nan"))
 )
 
 
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None)
 @given(names=_NAMES, intercept=_NUMBER, weight=_NUMBER, drop_a_weight=st.booleans())
 def test_save_fit_accepts_a_fit_exactly_when_it_follows_the_four_rules(
-    store: sqlite3.Connection,
+    tmp_path_factory: pytest.TempPathFactory,
     names: list[str],
     intercept: float,
     weight: float,
@@ -243,22 +406,22 @@ def test_save_fit_accepts_a_fit_exactly_when_it_follows_the_four_rules(
         weights.pop(next(iter(weights)))
     fit = LogisticFit(tuple(names), intercept, 1.0, weights)
     valid = (
-        all(name in ALL_FEATURE_NAMES for name in names)
+        all(name in FEATURES for name in names)
         and len(set(names)) == len(names)
         and set(weights) == set(names)
         and all(map(math.isfinite, [intercept, *weights.values()]))
     )
-    before = _row_count(store)
-    if valid:
-        save_fit(store, FitRecord(fit, 20252026, T0))
-        assert _row_count(store) == before + 1
-    else:
-        with pytest.raises(StoreError):
+    with _fresh_store(tmp_path_factory) as store:
+        if valid:
             save_fit(store, FitRecord(fit, 20252026, T0))
-        assert _row_count(store) == before
+            assert _row_count(store) == 1
+        else:
+            with pytest.raises(StoreError):
+                save_fit(store, FitRecord(fit, 20252026, T0))
+            assert _row_count(store) == 0
 
 
 @given(names=_NAMES)
 def test_feature_name_problem_is_none_exactly_for_distinct_known_names(names: list[str]) -> None:
-    ok = all(n in ALL_FEATURE_NAMES for n in names) and len(set(names)) == len(names)
+    ok = all(n in FEATURES for n in names) and len(set(names)) == len(names)
     assert (feature_name_problem(names) is None) == ok

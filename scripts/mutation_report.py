@@ -18,6 +18,8 @@ Subcommands:
 
 - ``status``: read the stats and the job results, print one status word. With ``--out``,
     also write the issue body to that file.
+    With ``--timeouts FILE``, the body also lists the timed-out mutants that
+    ``scripts/mutation_timeouts.py`` wrote, with the CPU limit of each (#274).
 - ``find --cap N``: read ``gh issue list --json number,body,author`` JSON on stdin. Print the
     number of the open report, or nothing when none exists. Only a bot-authored issue counts,
     so a user cannot hide a report by copying the marker. Raise when the list reaches N.
@@ -32,6 +34,8 @@ Usage: uv run python3 scripts/mutation_report.py status --stats mutants/mutmut-c
 
 import argparse
 import json
+import math
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -40,13 +44,16 @@ from pathlib import Path
 MARKER = "<!-- hockey-model-mutation-report -->"
 TITLE = "Mutation report: the weekly run needs a look"
 PROVISIONAL_BASELINE = 524
+# The report lists this many timed-out mutants, and counts the rest.
+TIMEOUT_LIST_CAP = 20
 # ``no_tests`` is a finished outcome: the test run reached the mutant and no test covers it.
 COUNT_KEYS = ("killed", "survived", "timeout", "no_tests", "total")
 STATUS_CLEAN = "clean"
 STATUS_REGRESSION = "regression"
 STATUS_FAILED = "execution_failed"
 # The job results that a run needs. Each must be success for the run to count as a run.
-RESULT_KEYS = ("shard", "merge", "export", "download")
+# The gate comes first: a gate that failed leaves every job after it skipped.
+RESULT_KEYS = ("gate", "shard", "merge", "export", "download")
 # The download runs as a step of the report job, so the body names it as a step.
 RESULT_NOUNS = {"download": "step"}
 # ``unknown`` is the value the shell passes for a job that did not report a result.
@@ -198,6 +205,80 @@ def build_body(
     return "\n".join(lines) + "\n"
 
 
+# A mutant name is a dotted path. mutmut writes a method name with a class mark that is a letter
+# for \w. The name goes into an issue body, so nothing else may pass: not a backtick, not a
+# line break, not an @.
+_MUTANT_NAME = re.compile(r"[\w.]{1,300}")
+
+
+def _is_finite(value: int | float) -> bool:
+    # A JSON integer has no size limit. An integer past the float range has no float value, so
+    # math.isfinite raises OverflowError for it.
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _timeout_entry(item: object) -> tuple[str, float, int]:
+    """Return one validated entry of the list. Raise ValueError that names the bad part."""
+    if not isinstance(item, dict):
+        raise ValueError("an entry is not an object")
+    name, seconds, limit = item.get("mutant"), item.get("estimated_s"), item.get("limit_s")
+    if not isinstance(name, str) or not _MUTANT_NAME.fullmatch(name):
+        raise ValueError(f"the mutant name {name!r} is not a dotted name")
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        raise ValueError(f"the estimate of {name} is not a number")
+    if not _is_finite(seconds) or seconds < 0:
+        raise ValueError(f"the estimate of {name} is not a finite number of 0 or more")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError(f"the limit of {name} is not a whole number of 0 or more")
+    return name, float(seconds), limit
+
+
+def _read_timeouts(path: Path) -> list[tuple[str, float, int]]:
+    """Read the list of timed-out mutants. Raise ValueError that names the file and the part."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{path}: {_reason(error)}") from error
+    items = data.get("timeouts") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError(f"{path}: the file has no timeouts list")
+    try:
+        return [_timeout_entry(item) for item in items]
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+def timeouts_section(path: Path) -> str:
+    """Return the body section that lists the timed-out mutants, or text that says why not.
+
+    Each run measures the test times again, so the CPU limit of a mutant moves from run to run.
+    The estimate and the limit let a reader tell a mutant that hangs from one near a moved limit.
+    A list that cannot be read changes nothing else in the report.
+    """
+    try:
+        items = _read_timeouts(path)
+    except ValueError as error:
+        return f"\nThe list of timed-out mutants could not be read: {error}\n"
+    if not items:
+        return ""
+    lines = [
+        "",
+        "Timed-out mutants. Each run measures the test times again, so the limit moves from run "
+        "to run, and a mutant near its limit can time out in one run and survive in the next:",
+        "",
+    ]
+    lines += [
+        f"- `{name}`: estimated {estimated:g} s, limit {limit} s"
+        for name, estimated, limit in items[:TIMEOUT_LIST_CAP]
+    ]
+    if len(items) > TIMEOUT_LIST_CAP:
+        lines.append(f"- and {len(items) - TIMEOUT_LIST_CAP} more")
+    return "\n".join(lines) + "\n"
+
+
 def _is_bot(author: object) -> bool:
     """Return True when gh reports the author as a bot account."""
     return isinstance(author, dict) and author.get("is_bot") is True
@@ -262,6 +343,7 @@ def _parser() -> argparse.ArgumentParser:
     for key in RESULT_KEYS:
         status.add_argument(f"--{key}-result", choices=RESULT_VALUES, default=None)
     status.add_argument("--out", type=Path)
+    status.add_argument("--timeouts", type=Path, help="the list of timed-out mutants")
     status.add_argument("--run-url")
     status.add_argument(
         "--reason",
@@ -299,6 +381,11 @@ def _status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             args.run_url,
             causes(stats, status, given, given_results or {k: "success" for k in RESULT_KEYS}),
         )
+        # A run that counts timed-out mutants and has no list says so, so a missing file is not
+        # taken for a run without a timeout.
+        timed_out = stats is not None and stats.counts["timeout"] > 0
+        if args.timeouts is not None and (args.timeouts.exists() or timed_out):
+            body += timeouts_section(args.timeouts)
         args.out.write_text(body, encoding="utf-8")
     print(status)
     return 0

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from experiment_support import ENOUGH_GAMES, FIT_SEASONS, make_record, register, seed
-from hypothesis import example, given
+from hypothesis import given
 from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_goalie_form, add_team_form
 
@@ -21,8 +21,9 @@ from hockey_model.experiments.cohort import (
     plan_for,
     require_scored_cohort,
 )
-from hockey_model.experiments.looks import BASE_TAIL
+from hockey_model.experiments.looks import BASE_TAIL, MAX_LOOKS
 from hockey_model.experiments.models import ExperimentRecord, HockeyModelError
+from hockey_model.experiments.status import confirmation_status
 from hockey_model.game_day import game_day_window
 from hockey_model.game_model.seasons import season_of
 
@@ -61,8 +62,8 @@ class TestRegistryLookNumbers:
 class TestRunUsesTheLook:
     """run_experiment scores a later look against a stricter bar."""
 
-    @pytest.mark.parametrize("look", [1, 3])
-    def test_the_interval_tail_is_the_base_tail_over_the_look(
+    @pytest.mark.parametrize("look", [1, MAX_LOOKS])
+    def test_the_interval_tail_follows_the_summable_schedule_of_the_look(
         self, registry_dir: Path, store, monkeypatch: pytest.MonkeyPatch, look: int
     ):
         _prepare(store)
@@ -78,7 +79,7 @@ class TestRunUsesTheLook:
 
         monkeypatch.setattr(check, "run_backtest", spy)
         run_experiment("0009-now", store, repo_root=registry_dir.parent)
-        assert seen == [pytest.approx(BASE_TAIL / look)]
+        assert seen == [pytest.approx(BASE_TAIL / (look * (look + 1)))]
 
     def test_a_wrong_look_number_refuses_before_any_run(self, registry_dir: Path, store):
         _prepare(store)
@@ -272,14 +273,17 @@ def _report_with_interval(low: float, high: float):
     width=st.floats(min_value=0.0, max_value=2.0),
     effect=st.one_of(st.none(), st.floats(min_value=-1.0, max_value=1.0)),
 )
-# Here low + width rounds back to low, so the interval has no width.
-@example(low=1.0, width=5.034543951081014e-35, effect=0.0)
 def test_the_status_follows_the_upper_end_and_the_power_rule(
     low: float, width: float, effect: float | None
 ) -> None:
     high = low + width
     record = make_record({"expected_effect": effect})
-    status = check._confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+    if not low < high:
+        # An interval with no width, which the addition can round into, decides nothing.
+        with pytest.raises(HockeyModelError):
+            confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
+        return
+    status = confirmation_status(record, _report_with_interval(low, high))  # type: ignore[invalid-argument-type]
     underpowered = effect is not None and (high - low) / 2 > abs(effect)
     if underpowered:
         assert status == "inconclusive"

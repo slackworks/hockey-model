@@ -63,6 +63,22 @@ def check_win_pair(values: object, operation: str) -> None:
         )
 
 
+def check_win_interval(point: float, interval: object, operation: str) -> None:
+    """Raise ``ProbabilityError`` unless ``interval`` is a ``(low, high)`` pair around ``point``."""
+    if not isinstance(interval, (tuple, list)) or len(interval) != 2:  # noqa: PLR2004
+        raise ProbabilityError(
+            f"{operation}: the win interval is {interval!r}, expected a (low, high) pair"
+        )
+    low, high = interval
+    validate_probability(low, operation, "win interval low")
+    validate_probability(high, operation, "win interval high")
+    if not low - 1e-9 <= point <= high + 1e-9:
+        raise ProbabilityError(
+            f"{operation}: the win interval {tuple(interval)!r} does not hold the home win "
+            f"chance {point}; return a range around the point"
+        )
+
+
 def playoff_probability(
     team_code: str,
     standings: Sequence[Standing],

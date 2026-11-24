@@ -16,6 +16,8 @@ from hockey_model.store.source_reads import (
     abandoned_urls,
     failed_since,
     failed_urls,
+    last_ok_read,
+    last_ok_reads,
     record_read,
 )
 
@@ -86,3 +88,15 @@ def test_failed_urls_names_only_the_newest_read_of_each_url(conn: sqlite3.Connec
     _record(conn, "a", [False, False])
     record_read(conn, SOURCE, "a", START + timedelta(days=3))
     assert failed_urls(conn, SOURCE) == ["b"]
+
+
+def test_the_good_reads_of_a_source_match_the_good_read_of_each_url(
+    conn: sqlite3.Connection,
+) -> None:
+    _record(conn, "a", [True, False, True, False])
+    _record(conn, "b", [False, False])
+    _record(conn, "c", [True])
+    record_read(conn, "other", "a", START + timedelta(days=9), None)
+    reads = last_ok_reads(conn, SOURCE)
+    assert reads == {url: last_ok_read(conn, SOURCE, url) for url in ("a", "c")}
+    assert "b" not in reads

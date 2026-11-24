@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Never
 
+from hockey_model import progress
 from hockey_model.identity import Catalog
 from hockey_model.matchup import matchup, playoff_probability
 from hockey_model.models import JointModel, MatchupModel, StandingsModel, StatModel
@@ -103,10 +104,12 @@ def _player(data: object) -> Player:
     if not isinstance(data, dict):
         raise ValueError("each roster player must be a JSON object")
     raw_eligible = data.get("eligible")
-    if isinstance(raw_eligible, list) and all(isinstance(value, str) for value in raw_eligible):
-        eligible: frozenset[Slot] | None = frozenset(Slot(value) for value in raw_eligible)
-    else:
-        eligible = None
+    if not isinstance(raw_eligible, list) or not all(isinstance(v, str) for v in raw_eligible):
+        who = data.get("canonical_id")
+        raise ValueError(
+            f"player {who!r}: eligible must be a list of slot strings, got {raw_eligible!r}"
+        )
+    eligible = frozenset(Slot(value) for value in raw_eligible)
     return Player(
         canonical_id=_required_string(data, "canonical_id"),
         yahoo_id=_optional_string(data, "yahoo_id"),
@@ -200,7 +203,9 @@ def main(argv: Sequence[str] | None = None, runtime: CliRuntime | None = None) -
     try:
         args = _parser().parse_args(argv)
         if args.command in STORE_COMMANDS:
-            payload, code = run_store_command(args)
+            # The lines go to stderr, so the JSON on stdout stays valid.
+            with progress.to_stderr(sys.stderr):
+                payload, code = run_store_command(args)
             print(json.dumps(payload, default=_json_default, sort_keys=True))
             return code
         if runtime is None:

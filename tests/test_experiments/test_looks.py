@@ -1,5 +1,7 @@
 """Tests for the promotion bar by look number."""
 
+from fractions import Fraction
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -8,8 +10,10 @@ from hockey_model.backtest.metrics import BOOTSTRAP_RESAMPLES
 from hockey_model.experiments.looks import (
     BASE_TAIL,
     MAX_LOOKS,
+    MIN_TAIL_RESAMPLES,
     look_problem,
     promotion_tail,
+    promotion_tail_exact,
 )
 from hockey_model.experiments.models import ExperimentRecord
 from hockey_model.types import HockeyModelError
@@ -37,12 +41,26 @@ def _record(**changes: object) -> ExperimentRecord:
     return ExperimentRecord.from_dict({**_DATA, **changes})
 
 
-def test_the_first_look_uses_the_base_tail() -> None:
-    assert promotion_tail(1) == BASE_TAIL
+@pytest.mark.parametrize("look", range(1, MAX_LOOKS + 1))
+def test_the_tail_is_the_base_tail_over_the_look_times_the_next_look(look: int) -> None:
+    assert promotion_tail(look) == pytest.approx(BASE_TAIL / (look * (look + 1)))
+    assert promotion_tail_exact(look) == Fraction(BASE_TAIL) / (look * (look + 1))
 
 
-def test_the_tail_is_the_base_tail_divided_by_the_look_number() -> None:
-    assert promotion_tail(4) == pytest.approx(BASE_TAIL / 4)
+def test_the_tails_of_all_supported_looks_stay_within_the_base_tail() -> None:
+    """Exact fractions: a float sum could round under a total that is over the limit."""
+    total = sum((promotion_tail_exact(k) for k in range(1, MAX_LOOKS + 1)), start=Fraction(0))
+    assert total <= Fraction(BASE_TAIL)
+    assert total == Fraction(BASE_TAIL) * MAX_LOOKS / (MAX_LOOKS + 1)
+
+
+def test_the_last_look_leaves_enough_resamples_in_the_tail() -> None:
+    assert promotion_tail_exact(MAX_LOOKS) * BOOTSTRAP_RESAMPLES >= MIN_TAIL_RESAMPLES
+
+
+def test_one_more_look_would_leave_too_few_resamples_in_the_tail() -> None:
+    next_tail = Fraction(BASE_TAIL) / ((MAX_LOOKS + 1) * (MAX_LOOKS + 2))
+    assert next_tail * BOOTSTRAP_RESAMPLES < MIN_TAIL_RESAMPLES
 
 
 @given(st.integers(min_value=1, max_value=MAX_LOOKS - 1))
@@ -54,6 +72,11 @@ def test_each_later_look_has_a_strictly_smaller_tail(look: int) -> None:
 def test_a_look_outside_the_range_is_refused_with_the_range(look: int) -> None:
     with pytest.raises(HockeyModelError, match=rf"look_number {look}.*1 to {MAX_LOOKS}"):
         promotion_tail(look)
+
+
+def test_the_refusal_names_a_remedy_the_registry_accepts() -> None:
+    with pytest.raises(HockeyModelError, match=r"raise BOOTSTRAP_RESAMPLES.*exploration record"):
+        promotion_tail(MAX_LOOKS + 1)
 
 
 def test_the_first_confirmation_record_is_look_one() -> None:
@@ -100,8 +123,3 @@ def test_look_problem_accepts_exactly_the_count_of_earlier_confirmations_plus_on
     else:
         assert problem is not None
         assert f"expected {expected}" in problem
-
-
-def test_the_first_look_keeps_the_registered_95th_percentile_bar() -> None:
-    """Record 0001 registered the 95th percentile. A new default must not move that bar."""
-    assert BASE_TAIL == 0.05

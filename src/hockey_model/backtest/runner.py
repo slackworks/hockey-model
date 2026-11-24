@@ -4,8 +4,9 @@ The backtest uses no price data. It scores the model against the results of the 
 home win rate, and the results-only Elo.
 """
 
-import math
 import sqlite3
+import sys
+import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -21,33 +22,32 @@ from hockey_model.backtest.metrics import (
     log_loss,
     per_game_log_loss,
 )
-from hockey_model.game_model.features import FEATURES, GOALIE_FEATURE, GoalieMode
+from hockey_model.backtest.report_notes import (
+    MONEYPUCK_FEATURES,
+    candidate_notes,
+    eligibility_notes,
+    is_production,
+    joint_test_notes,
+)
+from hockey_model.backtest.shards import build_sharded, can_shard
+from hockey_model.backtest.units import Unit, check_workers, run_units
+from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.imputation import (
     ImputationLimitError,
     check_imputation,
     feature_quality,
 )
-from hockey_model.game_model.logistic import LogisticFit, fit_logistic, predict_logistic
+from hockey_model.game_model.logistic import (
+    LogisticFit,
+    fit_logistic,
+    predict_logistic,
+    sigmoid,
+)
 from hockey_model.game_model.seasons import DEFAULT_PLAN, SeasonPlan, in_cohort, scored_label
 from hockey_model.game_model.training import TrainingRow, training_rows
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT
 from hockey_model.types import HockeyModelError
 
-MONEYPUCK_LEAK_NOTE = (
-    "The MoneyPuck expected-goals model is today's model. MoneyPuck possibly trained it on "
-    "games after the scored seasons, so results that use MoneyPuck data may look better than "
-    "they would have then."
-)
-GUESS_EQUALS_ACTUAL_NOTE = (
-    "No tested feature reads the starting goalie, so the actual run and the guess run are the "
-    "same by construction. The equal scores do not show that a wrong goalie costs nothing."
-)
-INJURY_HISTORY_NOTE = (
-    "The store has no ESPN injury history before it began to keep injury reads, so the goalie "
-    "guess run never leaves out an injured goalie. The live model does."
-)
-# Every feature here reads MoneyPuck data, so a run that uses one carries the credit and the note.
-MONEYPUCK_FEATURES = frozenset({"xg_form", "attempt_form", "goalie_gsax"})
 ELO = "elo"
 HOME_RATE = "home_rate"
 MODEL_ACTUAL = "model_actual"
@@ -55,6 +55,11 @@ MODEL_GUESS = "model_guess"
 RECORDED_RUNS = (ELO, MODEL_ACTUAL, MODEL_GUESS)
 # A feature is vetoed only when it is worse by more than rounding error.
 VETO_TOLERANCE = 1e-9
+# The wall time to meet with PARALLEL_TARGET_WORKERS workers on the real store: the season
+# shards, 20 units of up to 350 s each (1262 s measured), plus a margin. Table:
+# docs/design/backtest-speed.md
+PARALLEL_TARGET_WORKERS = 4
+PARALLEL_TARGET_S = 1500
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +129,23 @@ def _loss(fit: LogisticFit, rows: Sequence[TrainingRow]) -> float:
     return log_loss([predict_logistic(fit, r.features) for r in rows], _wins(rows))
 
 
+def _validation_unit(
+    train: Sequence[TrainingRow],
+    validate_actual: Sequence[TrainingRow],
+    validate_guess: Sequence[TrainingRow],
+    features: Sequence[str],
+) -> dict[str, float] | None:
+    """Fit on the training seasons and score the validation seasons. None means refused."""
+    try:
+        fit = _fit(train, features)
+    except ImputationLimitError:
+        # The Elo alone is never refused: it has no feature to impute.
+        if not features:
+            raise
+        return None
+    return {"actual": _loss(fit, validate_actual), "guess": _loss(fit, validate_guess)}
+
+
 def _validate(
     actual: Sequence[TrainingRow],
     guess: Sequence[TrainingRow],
@@ -134,7 +156,8 @@ def _validate(
 
     Each fit uses the training seasons with the goalie who started. It is scored with that
     goalie ("actual") and with the guessed goalie ("guess"). A feature is vetoed when its
-    guess score is worse than the Elo alone.
+    guess score is worse than the Elo alone. Each fit is a named unit. Each takes a fraction of a
+    second on the real store, so they run in this process (docs/design/backtest-speed.md).
     """
     train = _in(actual, *plan.select_train)
     validate_actual = _in(actual, *plan.select_validate)
@@ -144,22 +167,20 @@ def _validate(
             f"backtest: no games in the selection seasons {plan.select_train} and "
             f"{plan.select_validate}; run `hockey-model refresh --backfill-from 2014-10-01`"
         )
+    jobs = [(ELO, ()), *[(f"{ELO}+{f}", (f,)) for f in candidates]]
+    units = [
+        Unit(f"validate {name}", _validation_unit, (train, validate_actual, validate_guess, fs))
+        for name, fs in jobs
+    ]
     validation: dict[str, dict[str, float]] = {}
     # A candidate above the imputation limit is vetoed, so one such feature does not stop the
-    # run. The Elo alone is never refused: it has no feature to impute.
+    # run.
     refused: set[str] = set()
-    for name, features in [(ELO, ()), *[(f"{ELO}+{f}", (f,)) for f in candidates]]:
-        try:
-            fit = _fit(train, features)
-        except ImputationLimitError:
-            if not features:
-                raise
+    for (name, features), result in zip(jobs, run_units(units, 1, "validate"), strict=True):
+        if result is None:
             refused.update(features)
-            continue
-        validation[name] = {
-            "actual": _loss(fit, validate_actual),
-            "guess": _loss(fit, validate_guess),
-        }
+        else:
+            validation[name] = result
     refused |= _refused_in_windows(actual, plan, [f for f in candidates if f not in refused])
     baseline = validation[ELO]["guess"]
     vetoed = tuple(
@@ -206,6 +227,35 @@ def _refused_in_windows(
     return refused
 
 
+def _season_fit(
+    season: int, fit_rows: Sequence[TrainingRow], tested: Sequence[str]
+) -> tuple[int, LogisticFit, float]:
+    """Fit on the rows before ``season``. Return the fit and the home win rate of those rows."""
+    return season, _fit(fit_rows, tested), sum(_wins(fit_rows)) / len(fit_rows)
+
+
+def merge_scored(parts: Sequence[_Scored]) -> list[_Scored]:
+    """Order scored games by season, then start, then game ID.
+
+    The block bootstrap depends on the order of its input, so every merge of units uses this
+    order, whatever order the units finished in.
+    """
+    return sorted(parts, key=lambda g: (g.row.game.season, g.row.game.start, g.row.game.game_id))
+
+
+def _check_same_games(actual: Sequence[TrainingRow], guess: Sequence[TrainingRow]) -> None:
+    """Raise unless the actual run and the guess run scored the same games."""
+    only_actual = {r.game.game_id for r in actual} - {r.game.game_id for r in guess}
+    only_guess = {r.game.game_id for r in guess} - {r.game.game_id for r in actual}
+    if only_actual or only_guess:
+        raise HockeyModelError(
+            f"backtest: the actual run and the guess run differ in the scored games: "
+            f"{len(only_actual)} only in the actual run (first {sorted(only_actual)[:5]}), "
+            f"{len(only_guess)} only in the guess run (first {sorted(only_guess)[:5]}); "
+            "build both runs from the same games"
+        )
+
+
 def _score_seasons(
     actual: Sequence[TrainingRow],
     guess: Sequence[TrainingRow],
@@ -216,29 +266,35 @@ def _score_seasons(
     by_game = {r.game.game_id: r for r in guess}
     scored: list[_Scored] = []
     cohort = [r for r in actual if in_cohort(r.game, plan)]
-    for season, fit_rows in _fit_windows(actual, plan):
-        fit = _fit(fit_rows, tested)
-        home_rate = sum(_wins(fit_rows)) / len(fit_rows)
+    _check_same_games(cohort, [r for r in guess if in_cohort(r.game, plan)])
+    windows = _fit_windows(actual, plan)
+    units = [
+        Unit(f"walk-forward fit before season {season}", _season_fit, (season, rows, tested))
+        for season, rows in windows
+    ]
+    for season, fit, home_rate in run_units(units, 1, "walk-forward"):
         for row in [r for r in cohort if r.game.season == season]:
             scored.append(
                 _Scored(
                     row,
                     {
-                        ELO: 1.0 / (1.0 + math.exp(-row.features.elo_logit)),
+                        ELO: sigmoid(row.features.elo_logit),
                         HOME_RATE: home_rate,
                         MODEL_ACTUAL: predict_logistic(fit, row.features),
                         MODEL_GUESS: predict_logistic(fit, by_game[row.game.game_id].features),
                     },
                 )
             )
-    return scored
+    return merge_scored(scored)
 
 
 def _scored_run(
-    name: str, games: Sequence[_Scored], elo_losses: Sequence[float], tail: float
+    name: str,
+    probs: Sequence[float],
+    wins: Sequence[bool],
+    elo_losses: Sequence[float],
+    tail: float,
 ) -> ScoredRun:
-    probs = [g.by_run[name] for g in games]
-    wins = [g.row.home_won for g in games]
     ci = None
     mean_diff = None
     if name != ELO:
@@ -249,7 +305,7 @@ def _scored_run(
         mean_diff = sum(diffs) / len(diffs)
     return ScoredRun(
         name,
-        len(games),
+        len(probs),
         log_loss(probs, wins),
         brier(probs, wins),
         calibration(probs, wins),
@@ -282,47 +338,6 @@ def _missing_counts(games: Sequence[_Scored]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _notes(tested: Sequence[str], vetoed: Sequence[str], success: bool) -> tuple[str, ...]:
-    count = len(tested) + len(vetoed)
-    notes = [f"{count} candidate features were tested together as one joint test."]
-    if vetoed:
-        notes.append(f"The guess run vetoed: {', '.join(vetoed)}.")
-    if not success:
-        notes.append("The joint test failed, so the Elo alone ships.")
-    if MONEYPUCK_FEATURES & set(tested):
-        notes.append(MONEYPUCK_LEAK_NOTE)
-    if GOALIE_FEATURE not in tested:
-        notes.append(GUESS_EQUALS_ACTUAL_NOTE)
-    notes.append(INJURY_HISTORY_NOTE)
-    return tuple(notes)
-
-
-def _is_production(candidates: Sequence[str]) -> bool:
-    return tuple(candidates) == FEATURES
-
-
-def _candidate_notes(candidates: Sequence[str]) -> tuple[str, ...]:
-    """Say so when a run tests a set other than the production set, so no result reads as live."""
-    if _is_production(candidates):
-        return ()
-    return (
-        "This candidate set is a test. Nothing ships from it, and the live model reads only the "
-        "production features.",
-    )
-
-
-def _eligibility_notes(reasons: Sequence[str], coverage: Sequence[SeasonCount]) -> tuple[str, ...]:
-    """Say why success is refused, and name the seasons with stored games that never finished."""
-    notes = [f"Not eligible for success: {reason}." for reason in reasons]
-    notes.extend(
-        f"Season {c.season} game type {c.game_type} holds {c.unresolved} stored game(s) that are "
-        "not final long after their start."
-        for c in coverage
-        if c.unresolved
-    )
-    return tuple(notes)
-
-
 def _build_report(
     conn: sqlite3.Connection,
     plan: SeasonPlan,
@@ -334,10 +349,16 @@ def _build_report(
     validation, vetoed = scoring
     wins = [g.row.home_won for g in games]
     elo_losses = per_game_log_loss([g.by_run[ELO] for g in games], wins)
-    runs = tuple(
-        _scored_run(name, games, elo_losses, plan.interval_tail)
-        for name in (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
-    )
+    names = (HOME_RATE, ELO, MODEL_ACTUAL, MODEL_GUESS)
+    units = [
+        Unit(
+            f"score {name}",
+            _scored_run,
+            (name, [g.by_run[name] for g in games], wins, elo_losses, plan.interval_tail),
+        )
+        for name in names
+    ]
+    runs = tuple(run_units(units, 1, "score"))
     coverage = season_counts(conn, ((g.row.game.season, g.row.game.game_type) for g in games), plan)
     reasons = ineligibility_reasons(coverage, len(games))
     model = next(r for r in runs if r.name == MODEL_ACTUAL)
@@ -348,13 +369,13 @@ def _build_report(
         candidate_features=tuple(candidates),
         vetoed=vetoed,
         tested_features=tested,
-        live_features=tested if success and _is_production(candidates) else (),
+        live_features=tested if success and is_production(candidates) else (),
         validation=validation,
         runs=runs,
         success=success,
-        notes=_notes(tested, vetoed, success)
-        + _candidate_notes(candidates)
-        + _eligibility_notes(reasons, coverage),
+        notes=joint_test_notes(tested, vetoed, success)
+        + candidate_notes(candidates)
+        + eligibility_notes(reasons, coverage),
         credits=(MONEYPUCK_CREDIT,) if uses_moneypuck else (),
         missing_inputs=_missing_counts(games),
         coverage=coverage,
@@ -364,11 +385,23 @@ def _build_report(
     )
 
 
+def _build_rows(
+    conn: sqlite3.Connection,
+    first: int,
+    last: int,
+    mode: GoalieMode,
+    burn_in: int,
+    names: Sequence[str],
+) -> list[TrainingRow]:
+    return training_rows(conn, first, last, mode, burn_in, names=names)
+
+
 def run_backtest(
     conn: sqlite3.Connection,
     plan: SeasonPlan = DEFAULT_PLAN,
     *,
     candidates: Sequence[str],
+    workers: int = 1,
 ) -> tuple[BacktestReport, list[GameRecord]]:
     """Run the walk-forward backtest on the stored games.
 
@@ -376,10 +409,29 @@ def run_backtest(
     per-game log loss of the model minus that of the Elo, with the goalie who started,
     is below zero. The guess run never changes success. Success also needs a covered
     cohort and enough independent blocks; see ``BacktestReport.eligible``.
+
+    The feature builds, the fits, and the bootstrap runs are named units, and each logs its
+    wall time. ``workers`` above 1 builds the rows one season at a time in worker processes,
+    each with its own read-only store connection, because the builds take more than 99.9% of
+    the time. The report and the records are the same for every worker count. ``can_shard``
+    says which stores build this way, and a season then comes from the season row cache
+    (``row_cache``) when its key has not changed.
     """
+    check_workers(workers)
+    started = time.monotonic()
     first, last = plan.fit_first, plan.scored[1]
-    actual = training_rows(conn, first, last, GoalieMode.ACTUAL, plan.burn_in, names=candidates)
-    guess = training_rows(conn, first, last, GoalieMode.GUESS, plan.burn_in, names=candidates)
+    if can_shard(conn, workers):
+        actual, guess = build_sharded(conn, plan, candidates, workers)
+    else:
+        builds = [
+            Unit(
+                f"build {mode.value} rows",
+                _build_rows,
+                (conn, first, last, mode, plan.burn_in, candidates),
+            )
+            for mode in (GoalieMode.ACTUAL, GoalieMode.GUESS)
+        ]
+        actual, guess = run_units(builds, 1, "build-rows")
     scoring = _validate(actual, guess, plan, candidates)
     tested = tuple(f for f in candidates if f not in scoring[1])
     games = _score_seasons(actual, guess, tested, plan)
@@ -388,4 +440,12 @@ def run_backtest(
             f"backtest: no games in the scored {scored_label(plan)}; "
             "run `hockey-model refresh --backfill-from 2014-10-01`"
         )
-    return _build_report(conn, plan, candidates, scoring, tested, games), _records(games)
+    report = _build_report(conn, plan, candidates, scoring, tested, games)
+    elapsed = time.monotonic() - started
+    target = (
+        f"; the target on the real store is {PARALLEL_TARGET_S}s"
+        if workers == PARALLEL_TARGET_WORKERS
+        else ""
+    )
+    print(f"backtest: total {elapsed:.1f}s with {workers} worker(s){target}", file=sys.stderr)
+    return report, _records(games)

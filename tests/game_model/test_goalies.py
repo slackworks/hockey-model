@@ -4,6 +4,8 @@ import sqlite3
 from datetime import timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import add_game, add_goalie, add_injury, add_starter_read, utc
 
 from hockey_model.game import (
@@ -13,7 +15,9 @@ from hockey_model.game import (
     StarterSource,
     StarterStatus,
 )
+from hockey_model.game_model import goalies
 from hockey_model.game_model.goalies import STARTER_WINDOW, resolve_goalie
+from hockey_model.store.reads import StarterReadRow
 from hockey_model.types import Player, Slot
 
 START = utc("2026-01-20T00:00")
@@ -75,6 +79,30 @@ def test_resolve_first_confirmed_wins(season: sqlite3.Connection) -> None:
     assert start is not None
     assert names(start) == "C. Ingram"
     assert (start.source, start.status) == (StarterSource.DAILY_FACEOFF, StarterStatus.CONFIRMED)
+    assert kinds(missing) == [MissingKind.GOALIE_CONFLICT]
+    note = missing[0].note
+    assert missing[0].team == "TOR"
+    assert "C. Ingram was confirmed first (daily_faceoff, 2026-01-19T14:00" in note
+    assert "J. Woll was confirmed later (espn, 2026-01-19T15:00" in note
+
+
+def test_a_second_confirmation_of_the_same_goalie_is_not_a_conflict(
+    season: sqlite3.Connection,
+) -> None:
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "confirmed", fetched_at="2026-01-19T14:00"
+    )
+    add_starter_read(
+        season,
+        100,
+        "TOR",
+        "daily_faceoff",
+        "C. Ingram",
+        "confirmed",
+        fetched_at="2026-01-19T15:00",
+    )
+    start, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
+    assert names(start) == "C. Ingram"
     assert missing == ()
 
 
@@ -104,7 +132,34 @@ def test_resolve_likely_reports_unconfirmed(season: sqlite3.Connection) -> None:
     assert start is not None
     assert names(start) == "C. Ingram"
     assert start.status is StarterStatus.LIKELY
+    assert kinds(missing) == [MissingKind.GOALIE_CONFLICT, MissingKind.GOALIE_UNCONFIRMED]
+    assert "J. Woll was likely (espn, 2026-01-19T12:00" in missing[0].note
+    assert "C. Ingram is likely later (daily_faceoff, 2026-01-19T13:00" in missing[0].note
+
+
+def test_two_likely_reads_of_the_same_goalie_are_not_a_conflict(season: sqlite3.Connection) -> None:
+    for source, stamp in (("espn", "2026-01-19T12:00"), ("daily_faceoff", "2026-01-19T13:00")):
+        add_starter_read(season, 100, "TOR", source, "Connor Ingram", "likely", fetched_at=stamp)
+    _, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
     assert kinds(missing) == [MissingKind.GOALIE_UNCONFIRMED]
+
+
+def test_a_conflict_between_likely_reads_is_hidden_by_a_confirmed_read(
+    season: sqlite3.Connection,
+) -> None:
+    add_starter_read(
+        season, 100, "TOR", "espn", "Joseph Woll", "likely", fetched_at="2026-01-19T11:00"
+    )
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "likely", fetched_at="2026-01-19T12:00"
+    )
+    add_starter_read(
+        season, 100, "TOR", "espn", "Connor Ingram", "confirmed", fetched_at="2026-01-19T13:00"
+    )
+    start, missing = resolve_goalie(season, game(), "TOR", AS_OF, use_reads=True)
+    assert start is not None
+    assert start.status is StarterStatus.CONFIRMED
+    assert missing == ()
 
 
 def test_resolve_confirmed_beats_a_newer_likely(season: sqlite3.Connection) -> None:
@@ -285,3 +340,27 @@ def test_a_stale_injury_list_adds_a_note_to_the_guess(season: sqlite3.Connection
     # The old list is not used, so the guess is still Ingram, and the note says why.
     assert start is not None and start.player.full_name == "C. Ingram"
     assert any("injury list" in m.note for m in missing)
+
+
+_PLAYERS = [
+    Player(f"nhl:{i}", None, i + 1, f"Goalie {i}", frozenset({Slot.G}), "TOR") for i in range(4)
+]
+
+
+@settings(max_examples=100, deadline=None)
+@given(choices=st.lists(st.integers(min_value=0, max_value=3), min_size=1, max_size=8))
+def test_the_first_confirmed_goalie_is_kept_and_each_other_goalie_gets_one_note(
+    choices: list[int],
+) -> None:
+    kept = None
+    notes: list = []
+    for number, choice in enumerate(choices):
+        stamp = utc("2026-01-19T00:00") + timedelta(minutes=number)
+        read = StarterReadRow(
+            StarterSource.ESPN, f"Goalie {choice}", StarterStatus.CONFIRMED, stamp
+        )
+        kept = goalies._first_confirmed(kept, read, _PLAYERS[choice], "TOR", notes)
+    assert kept is not None
+    assert kept.player is _PLAYERS[choices[0]]
+    assert len(notes) == sum(1 for choice in choices[1:] if choice != choices[0])
+    assert {n.kind for n in notes} <= {MissingKind.GOALIE_CONFLICT}

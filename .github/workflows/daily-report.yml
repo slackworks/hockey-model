@@ -1,15 +1,16 @@
 # Publishes the daily NHL prediction report as a dated GitHub release.
 #
-# The schedule fires at each trigger slot. The gate job publishes at the first slot that runs
-# while the day's first puck drop is still ahead. Each later slot before the puck drop replaces
-# the release files and notes. After the puck drop, a run skips a published day, and a run that
-# finds no release publishes the first report of the day late. The cron minute and hours
-# MUST match TRIGGER_MINUTE_UTC and TRIGGER_HOURS_UTC in report_trigger.py.
+# The schedule fires every hour. The gate job builds at the first run that starts while the
+# day's first puck drop is still ahead. Each later run before the puck drop builds again, and it
+# publishes only when the inputs differ from the newest published report (inputs_sha256). Every
+# published build adds its own report-DATE-HHMMSSZ files. After the puck drop, a run skips a
+# published day, and a run that finds no release publishes the first report of the day late.
+# The cron minute MUST match TRIGGER_MINUTE_UTC in report_trigger.py.
 name: daily-report
 
 on:
   schedule:
-    - cron: "44 0,11,15-23 * * *"
+    - cron: "44 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -37,6 +38,10 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # The gate reads the live prepare runs, which the script reads from the runs API.
+      actions: read
     outputs:
       due: ${{ steps.gate.outputs.due }}
       publish: ${{ steps.gate.outputs.publish }}
@@ -52,7 +57,8 @@ jobs:
       - id: gate
         env:
           # A prepare run holds the store group. This job holds nothing, so it can read the
-          # running runs; a report run cannot wait for that answer.
+          # running runs; a report run cannot wait for that answer. report-gate.sh reads this
+          # token once and unsets it, then re-exports it for the release read alone.
           GH_TOKEN: ${{ github.token }}
           DISPATCH_FORCE: ${{ inputs.force }}
           DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
@@ -64,21 +70,25 @@ jobs:
           if [[ "$DISPATCH_DRY_RUN" == "true" ]]; then
             args+=(--dry-run)
           fi
-          if ! prep_started="$(bash scripts/prep-running.sh)"; then
+          # The lookup names the end of the window of the prepare job that holds the group
+          # (#311). A skip job of a prepared day holds the group for 10 minutes, and a rebuild
+          # job holds it for up to 180, so the timeout of each job is named here. A name that
+          # the workflow does not carry fails the test that compares the two files.
+          if ! prep_ends="$(bash scripts/prep-running.sh --timeout skip=10 \
+            --timeout prepare=180)"; then
             echo "::error::the prepare-run lookup failed, so this run cannot tell whether" \
               "it would wait behind a prepare run" >&2
             exit 1
           fi
-          args+=(--prep-started "$prep_started")
+          args+=(--prep-ends "$prep_ends")
           args+=(--margin-seconds "$REPORT_BUDGET_S")
           bash scripts/report-gate.sh ${args[@]+"${args[@]}"} > gate.json
           cat gate.json
-          {
-            echo "due=$(jq -r '.due' gate.json)"
-            echo "publish=$(jq -r '.publish' gate.json)"
-            echo "day=$(jq -r '.date' gate.json)"
-          } >> "$GITHUB_OUTPUT"
-          echo "Report gate for $(jq -r '.date' gate.json): $(jq -r '.reason' gate.json)" >> "$GITHUB_STEP_SUMMARY"
+          # The script checks the type of each field before it prints, so an empty or wrong value
+          # fails the step and never skips the build with a green result.
+          bash scripts/gate-outputs.sh gate.json >> "$GITHUB_OUTPUT"
+          echo "Report gate for $(jq -r '.date' gate.json): $(jq -r '.reason' gate.json)" \
+            >> "$GITHUB_STEP_SUMMARY"
       # The overhead of each job is measured here, so the trigger lead can be set from data.
       - if: always()
         name: Report the job time
@@ -97,6 +107,7 @@ jobs:
       cancel-in-progress: false
     env:
       DAY: ${{ needs.gate.outputs.day }}
+      PUBLISH: ${{ needs.gate.outputs.publish }}
     outputs:
       report_complete: ${{ steps.state.outputs.report_complete }}
     steps:
@@ -114,7 +125,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             hockey-model-store-
       # GitHub scopes a cache to its branch, so a prepare run from another branch is not found.
@@ -125,10 +136,22 @@ jobs:
           exit 1
       - env:
           HOCKEY_MODEL_DB: ${{ runner.temp }}/hockey-model/store.db
+          # daily-report.sh reads this token once and unsets it at the top, so only the gh
+          # release calls of the compare step carry it. The feed reads and the packages never
+          # see it.
+          REPORT_GH_TOKEN: ${{ github.token }}
         # The step limit stops a hung read while the job still holds the store group. The budget
         # that the script enforces is REPORT_BUDGET_S above.
         timeout-minutes: 15
-        run: bash scripts/daily-report.sh --date "$DAY" --out-dir "$RUNNER_TEMP/report"
+        run: |
+          args=()
+          # A build that will publish first checks that its inputs differ from the release. A dry
+          # run publishes nothing, so it always builds.
+          if [[ "$PUBLISH" == "true" ]]; then
+            args+=(--skip-unchanged)
+          fi
+          bash scripts/daily-report.sh --date "$DAY" --out-dir "$RUNNER_TEMP/report" \
+            ${args[@]+"${args[@]}"}
       # The script writes the complete marker only after every output file is copied. The
       # publish job reads this output, so a report cut short by a crash is never published.
       - id: state
@@ -152,12 +175,12 @@ jobs:
       # earlier cache entry holds the store that the backup copied.
       - if: always()
         name: Drop the upgrade backup
-        run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak
+        run: rm -f "$RUNNER_TEMP"/hockey-model/*.bak*
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}
       - if: always()
         name: Report the job time
         run: echo "::notice::build job took $(( $(date +%s) - JOB_START ))s"
@@ -166,16 +189,24 @@ jobs:
     needs: [gate, build]
     # Publishes only a complete report. A build that overran the budget still publishes, and
     # the build job stays failed, so the overrun remains visible. A crash never publishes.
+    # A cancel stops the run, so the condition uses !cancelled() and not always().
     if: >-
-      always() && needs.gate.outputs.publish == 'true'
+      !cancelled() && needs.gate.outputs.publish == 'true'
       && needs.build.outputs.report_complete == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The script reads index-DATE.json from the release, adds this build, and uploads it again.
+    # Two publishes of one day at once would drop an entry, so they run one at a time. A publish
+    # that waits behind another is replaced. While the day has no release, the next hourly run
+    # builds and publishes it again. After the first puck drop, the newer build stands for the
+    # day, and the replaced build leaves no entry in the index (#313).
+    concurrency:
+      group: hockey-model-publish-${{ needs.gate.outputs.day }}
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
       DAY: ${{ needs.gate.outputs.day }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Start the job timer
         run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -186,7 +217,16 @@ jobs:
         with:
           name: daily-report
           path: ${{ runner.temp }}/report
+      # The publish script checks the report against its schema with the package code.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --locked
+      # Only this step holds the release token. The sync above runs without it, and the script
+      # runs the synced environment as it is, so no package code is built while the token is set.
       - run: bash scripts/publish-daily-report.sh --date "$DAY" --report-dir "$RUNNER_TEMP/report"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UV_NO_SYNC: "1"
+          UV_FROZEN: "1"
       - if: always()
         name: Report the job time
         run: echo "::notice::publish job took $(( $(date +%s) - JOB_START ))s"

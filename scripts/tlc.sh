@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Run TLC on the daily prepare spec. The jar is pinned by SHA-256, and the copy that runs is the
-# one that the checksum covered.
+# Run TLC on the spec and the config of each shard of specs/shards.json. The jar is pinned by
+# SHA-256, and the copy that runs is the one that the checksum covered.
 #
-# Usage: bash scripts/tlc.sh [--help]
-#   --help  Print this usage and exit 0.
+# Usage: bash scripts/tlc.sh [--help | --list | --shard NAME]
+#   --help        Print this usage and exit 0.
+#   --list        Print each shard and the paths that start it, then exit 0.
+#   --shard NAME  Run one shard. An unknown name exits 2.
+#   No flag       Run every shard, in the order of specs/shards.json.
 #
 # Environment:
 #   TLA_TOOLS_DIR  Directory for the jar. Default: $HOME/.cache/hockey-model/tla.
@@ -23,13 +26,24 @@ TLA_TOOLS_DIR="${TLA_TOOLS_DIR:-$HOME/.cache/hockey-model/tla}"
 TLA_URL="https://github.com/tlaplus/tlaplus/releases/download/$TLA_TOOLS_VERSION/tla2tools.jar"
 JAR="$TLA_TOOLS_DIR/tla2tools-$TLA_TOOLS_VERSION.jar"
 
+# The shards are in specs/shards.json, which the workflow reads too. The helper needs the
+# standard library only, so --no-project skips the sync of the project environment. Each
+# shard must pass, and the small shards come first, so a mistake fails in seconds.
+shards() { uv run --no-project python3 -I scripts/tlc_shards.py "$@"; }
+
 usage() {
-  cat <<'EOF'
-Usage: bash scripts/tlc.sh [--help]
-Run TLC on specs/daily_prepare.tla with specs/daily_prepare_stall.cfg and specs/daily_prepare.cfg.
-  --help  Print this usage and exit 0.
+  local listing
+  listing="$(shards rows | awk -F'\t' '{ printf "  %-8s %s\n", $1, $3 }')"
+  cat <<EOF
+Usage: bash scripts/tlc.sh [--help | --list | --shard NAME]
+Run TLC on one spec and one config for each shard. TLC must find no violation.
+The shards, in run order, with the config of each:
+$listing
+  --help        Print this usage and exit 0.
+  --list        Print each shard and the paths that start it, as JSON lines.
+  --shard NAME  Run the shard NAME alone. An unknown name exits 2.
 Environment:
-  TLA_TOOLS_DIR  Directory for the jar. Default: $HOME/.cache/hockey-model/tla.
+  TLA_TOOLS_DIR  Directory for the jar. Default: \$HOME/.cache/hockey-model/tla.
 Exit codes: 0 when every property holds. 12 for a violated invariant. 13 for a violated
 action or temporal property. 11 for a deadlock. 2 for an unknown argument. 1 for a setup
 failure in this script, or for a JVM crash. Other codes come from TLC.
@@ -44,14 +58,30 @@ sha256_of() {
   fi
 }
 
-if (($# > 1)); then
-  echo "tlc.sh: unexpected argument '$2'; run with --help for the usage" >&2
-  exit 2
-fi
+shard=""
 case "${1:-}" in
-"") ;;
+--shard)
+  if (($# != 2)) || [[ -z "$2" ]]; then
+    echo "tlc.sh: --shard takes one shard name; run with --list to see them" >&2
+    exit 2
+  fi
+  shard="$2"
+  ;;
+*)
+  if (($# > 1)); then
+    echo "tlc.sh: unexpected argument '$2'; run with --help for the usage" >&2
+    exit 2
+  fi
+  ;;
+esac
+case "${1:-}" in
+"" | --shard) ;;
 --help)
   usage
+  exit 0
+  ;;
+--list)
+  shards list
   exit 0
   ;;
 *)
@@ -59,6 +89,10 @@ case "${1:-}" in
   exit 2
   ;;
 esac
+# An unknown shard name is a usage error, so it exits before the Java and jar checks.
+rows_args=(rows)
+if [[ -n "$shard" ]]; then rows_args+=(--shard "$shard"); fi
+rows="$(shards "${rows_args[@]}")" || exit $?
 
 if ! command -v java >/dev/null 2>&1; then
   echo "tlc.sh: java is not on PATH. Install Java 11 or later." >&2
@@ -125,19 +159,17 @@ if [[ "$actual" != "$TLA_TOOLS_SHA256" ]]; then
   exit 1
 fi
 
-# One spec, two configs. The small stall config runs first, so a mistake fails in seconds.
 rc=0
-for cfg in specs/daily_prepare_stall.cfg specs/daily_prepare.cfg; do
-  echo "tlc.sh: checking specs/daily_prepare.tla with $cfg"
-  mkdir -p "$tmp/states/$(basename "$cfg" .cfg)"
+while IFS=$'\t' read -r name spec cfg; do
+  echo "tlc.sh: checking $spec with $cfg (shard $name)"
+  mkdir -p "$tmp/states/$name"
   java -XX:+UseParallelGC -cp "$tmp/tla2tools.jar" tlc2.TLC -workers auto \
-    -metadir "$tmp/states/$(basename "$cfg" .cfg)" -config "$cfg" specs/daily_prepare.tla ||
-    rc=$?
+    -metadir "$tmp/states/$name" -config "$cfg" "$spec" || rc=$?
   if ((rc != 0)); then
-    echo "tlc.sh: the check of $cfg failed." >&2
+    echo "tlc.sh: the check of $cfg failed (shard $name)." >&2
     break
   fi
-done
+done <<<"$rows"
 
 case "$rc" in
 0) ;;

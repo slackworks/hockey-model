@@ -12,7 +12,7 @@ Four parts of the code stop that work today:
 1. `game_model/features.py` holds a closed list of four features (`ALL_FEATURE_NAMES`). A new feature must edit that module, which is near its line cap.
 2. `run_backtest` scores a candidate against the Elo only. A research feature must show value beyond the live model (`xg_form`, `rest`), not beyond the Elo.
 3. The registry and the backtest score the home win only. Goal and player experiments have no scorer.
-4. The package has no runtime dependency, so each method would be written by hand.
+4. The package has one runtime dependency, `jsonschema` (#119), so each other method would be written by hand.
 
 ## H1. Dependencies
 
@@ -33,7 +33,7 @@ The builder MUST check the versions again at build time (global rule), and MUST 
 Rules:
 
 1. Add a library in the first pull request that needs it, not before. Add it to `[project] dependencies` in `pyproject.toml` with `~=`, then run `uv lock`.
-2. Run `uv run python3 scripts/smoke_wheel.py` after the change. The wheel now installs its dependencies, so the smoke test proves the pins resolve.
+2. Run `uv run python3 scripts/smoke_wheel.py` after the change. The smoke test installs the dependencies that `uv.lock` pins, so once the project has a runtime dependency it proves the pins resolve.
 3. Seed every random draw with `numpy.random.default_rng(seed)`. Never use the global NumPy or `random` state.
 4. Do not rewrite `game_model/logistic.py` with a library in a research pull request. The live fit must not change. #138 owns any change to it.
 5. A library result that feeds a stored value MUST be checked by a test against a small case that is solved by hand or by a second method.
@@ -83,8 +83,8 @@ Rules:
 1. `register(spec)` adds a spec to a module-level dict. A second spec with the same name raises `ValueError`.
 2. `ALL_FEATURE_NAMES` becomes `tuple(REGISTRY)`. `MONEYPUCK_FEATURES` in `backtest/runner.py` becomes the names whose spec has `reads_moneypuck`. `GOALIE_FEATURE` checks become `reads_goalie`.
 3. `FEATURES` (the production set) stays an explicit tuple in `features.py`. A registered feature is a candidate, never live, until a promoted record changes `FEATURES`.
-4. Move `xg_form`, `attempt_form`, `goalie_gsax`, and `rest` into registered specs with no change in behavior. The pull request MUST show that `hockey-model backtest --games-out` gives a byte-identical JSON report and CSV on the seeded test store before and after (`tests/seeding.py`).
-5. A feature that needs a sequential state, such as a rating, sets `replay`. `training_rows` and `NhlGameModel.predict` create one state per feature and call `update` after each final game, in the same loop that updates `EloBook`. The `compute` call reads the state from `context.replay[name]`, which holds only games that started before the cutoff.
+4. Move `xg_form`, `goalie_gsax`, and `rest` into registered specs with no change in behavior. The pull request MUST show that `hockey-model backtest --games-out` gives a byte-identical JSON report and CSV on the seeded test store before and after (`tests/seeding.py`).
+5. A feature that needs a sequential state, such as a rating, sets `replay`. `training_rows` and `NhlGameModel.predict` create one state per feature and call `update` after each final game, in the same loop that updates `EloBook`. The `compute` call reads the state from `context.replay[name]`, which holds only games that started before the cutoff. The season shards of the backtest (`backtest/shards.py`) start from the Elo ratings before a season, so each replay state MUST also have a boundary snapshot in `season_boundaries` and in `Shard`, and the shard equality tests MUST cover it.
 6. A feature module registers itself when `hockey_model.game_model.feature_modules` imports it. That module imports every feature module, so the registry is complete before any lookup.
 7. Tuning constants of a feature, such as a prior strength or a decay, are module constants. A script under `scripts/research/` chooses them on the `SELECT_TRAIN` seasons only and prints the chosen value. The pull request records the script output. A constant never comes from a scored season.
 

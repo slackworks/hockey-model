@@ -2,25 +2,42 @@
 # Prepare one game day: refresh every source, run the backtest, and fit the model on the
 # features that the backtest kept.
 #
-# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--help]
-#   --date  Eastern game day to prepare. Default: today in Eastern time.
+# Usage: daily-prepare.sh [--date YYYY-MM-DD] [--force] [--check-only] [--help]
+#   --date   Eastern game day to prepare. Default: today in Eastern time.
+#   --force  Rebuild the backtest and the fit for a day that is already prepared.
+#            Without it, a day with a prepared-DATE marker and a valid backtest-DATE.json
+#            skips both steps and exits 0 after the refresh. It also deletes the season row
+#            cache beside the store, so every season is built again.
+#   --check-only
+#            Refresh and report whether the day needs a rebuild, then stop. Exit code 0 means
+#            the day is prepared and nothing else is needed. Exit code 4 means the caller must
+#            run this script again without --check-only. The check takes minutes, so the
+#            workflow puts it in a short job that the report gate measures (#311). A store with
+#            no finished backfill exits 4 at once, because the backfill needs the long window.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The first backfill runs until a marker file
 # next to the store says it finished. The backfill reads one year at a time, newest year
 # first, and stops after BACKFILL_BUDGET_S seconds (default 1800). A stopped backfill
 # writes no marker and exits with code 75. It resumes on the next run, because refresh
-# skips what it already read. A budget that stops the backfill before it reads one older
-# day or game, not counting the last two days, exits with code 1, and the message names
-# --budget-seconds: raise BACKFILL_BUDGET_S. The backtest files and a prepared-DATE
-# marker go next to the store, where daily-report.sh finds them. Any failed step stops
-# the script with its exit code, so a failed run writes no marker.
+# skips what it already read. A budget that stops the backfill before it finishes one
+# day or game exits with code 1, and so does a stop that reads no older day or game while
+# older days wait. The message names --budget-seconds: raise BACKFILL_BUDGET_S. The
+# backtest files and a prepared-DATE
+# marker go next to the store, where daily-report.sh finds them. The backtest and the fit build
+# their feature rows one season at a time in up to BACKTEST_WORKERS processes (default 4, the
+# cores of a GitHub runner), and the output does not change with the count. Any failed step
+# stops the script with its exit code, so a failed run writes no marker.
 set -euo pipefail
 
 day=""
+force=0
+check_only=0
+# A --check-only run stops at 4 when the day needs a rebuild. The exit code is a contract with
+# daily-prepare.yml, so it sits in one place.
+REBUILD_NEEDED=4
 
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-}
+# shellcheck source=scripts/usage.sh
+source "$(dirname "$0")/usage.sh"
 
 while (($# > 0)); do
   case "$1" in
@@ -31,6 +48,14 @@ while (($# > 0)); do
     fi
     day="$2"
     shift 2
+    ;;
+  --force)
+    force=1
+    shift
+    ;;
+  --check-only)
+    check_only=1
+    shift
     ;;
   -h | --help)
     usage
@@ -59,10 +84,14 @@ day="${day:-$(TZ=America/New_York date +%F)}"
 store_dir="$(dirname "$HOCKEY_MODEL_DB")"
 mkdir -p "$store_dir"
 
+# shellcheck source=scripts/run-step.sh
+source "$(dirname "$0")/run-step.sh"
+RUN_STEP_COMMAND=daily-prepare
+
 # The cache restores a store that older code wrote. The upgrade keeps every row and writes a
 # backup, so the run continues on the same store instead of stopping at the version check. A
 # missing store file is skipped, because the first backfill below writes a current version.
-uv run hockey-model store upgrade --if-missing skip >&2
+run_step upgrade uv run hockey-model store upgrade --if-missing skip >&2
 
 # The marker is written only after a backfill finishes. A store file without it is partial.
 if ! command -v jq >/dev/null; then
@@ -70,12 +99,18 @@ if ! command -v jq >/dev/null; then
   exit 1
 fi
 marker="$HOCKEY_MODEL_DB.backfilled"
+# A check-only run cannot run the backfill, because the backfill needs the long window. It
+# reports the rebuild at once, and the long job then reads the store again.
+if [[ "$check_only" == 1 && ! -f "$marker" ]]; then
+  echo "daily-prepare: the store has no finished backfill; the rebuild needs the long job" >&2
+  exit "$REBUILD_NEEDED"
+fi
 if [[ ! -f "$marker" ]]; then
   echo "daily-prepare: the store has no finished backfill; backfilling from 2014-10-01." >&2
   echo "daily-prepare: the backfill reads one year per window, newest first." >&2
   report="$store_dir/refresh-report.json"
   refresh_rc=0
-  uv run hockey-model refresh --backfill-from 2014-10-01 \
+  run_step refresh uv run hockey-model refresh --backfill-from 2014-10-01 \
     --budget-seconds "${BACKFILL_BUDGET_S:-1800}" >"$report" || refresh_rc=$?
   cat "$report"
   if ((refresh_rc != 0)); then
@@ -98,22 +133,72 @@ if [[ ! -f "$marker" ]]; then
   esac
   touch "$marker"
 else
-  uv run hockey-model refresh
+  run_step refresh uv run hockey-model refresh
 fi
 
-# Files from earlier days are stale. The release of each day already holds its own copy.
-find "$store_dir" -maxdepth 1 -type f \( -name 'prepared-*' -o -name 'backtest-*' \) -delete
-backtest_games="$store_dir/backtest-games-$day.csv"
+# A day is complete when its marker and a backtest file with a live_features list of names
+# exist. The refresh above runs first, because it is cheap and keeps the store current for the
+# report. The check runs before any file is replaced, so a skip leaves the day's files in place.
 backtest_json="$store_dir/backtest-$day.json"
-uv run hockey-model backtest --games-out "$backtest_games" >"$backtest_json"
+backtest_games="$store_dir/backtest-games-$day.csv"
+workers="${BACKTEST_WORKERS:-4}"
+if [[ -f "$store_dir/prepared-$day" ]]; then
+  why=""
+  if [[ ! -f "$backtest_json" ]]; then
+    why="$backtest_json is missing"
+  elif ! jq_error="$(jq -e '.live_features | type == "array" and all(type == "string")' \
+    "$backtest_json" 2>&1 >/dev/null)"; then
+    why="$backtest_json has no live_features list of names (${jq_error:-jq found a wrong type})"
+  fi
+  if [[ -z "$why" && "$force" == 0 ]]; then
+    echo "daily-prepare: $day is already prepared (prepared-$day and backtest-$day.json exist);" \
+      "pass --force to rebuild" >&2
+    exit 0
+  fi
+  if [[ -n "$why" ]]; then
+    echo "daily-prepare: prepared-$day exists but $why; rebuilding" >&2
+  fi
+fi
+# A day that reaches this line needs the backtest and the fit. A check-only run says so and
+# stops before it removes any file, so the short job never rebuilds the store. The upgrade
+# and the refresh above already ran, and the check-only run reports from the store they left.
+if [[ "$check_only" == 1 ]]; then
+  echo "daily-prepare: $day needs the backtest and the fit; the rebuild runs in the long job" >&2
+  exit "$REBUILD_NEEDED"
+fi
+
+# Files of earlier days are stale. The release of each day already holds its own copy. A file of
+# a later day stays, because a manual run for a past day must not remove the marker of today.
+shopt -s nullglob
+for stale in "$store_dir"/prepared-* "$store_dir"/backtest-*; do
+  if [[ "${stale##*/}" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) && "${BASH_REMATCH[1]}" < "$day" ]]; then
+    rm -f "$stale"
+  fi
+done
+shopt -u nullglob
+
+# A forced rebuild reads no cached season, so a wrong cache file cannot survive a rebuild.
+# SQLite resolves a link to the store file, and the cache sits beside the file it resolves to.
+if [[ "$force" == 1 ]]; then
+  store_file="$(realpath "$HOCKEY_MODEL_DB" 2>/dev/null || printf '%s' "$HOCKEY_MODEL_DB")"
+  rm -rf "$(dirname "$store_file")/season-rows"
+fi
+
+# The backtest writes beside the final names. The final files and the marker change only after
+# the fit succeeds, so a failed rebuild keeps the files of a day that was already prepared.
+run_step backtest uv run hockey-model backtest --games-out "$backtest_games.new" \
+  --workers "$workers" >"$backtest_json.new"
 # The fit serves only the features that passed the backtest's joint test. An empty list is
 # the Elo alone, and the fit command takes it as an empty --features value.
-if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json")"; then
-  echo "daily-prepare: $backtest_json has no live_features list of names; the fit needs it" >&2
+if ! live_features="$(jq -er '.live_features | if type == "array" and all(type == "string") then join(",") else error("not names") end' "$backtest_json.new")"; then
+  echo "daily-prepare: $backtest_json.new has no live_features list of names; the fit needs it" >&2
   exit 1
 fi
 if [[ -z "$live_features" ]]; then
   echo "daily-prepare: no feature passed the joint test, so the fit is the Elo alone" >&2
 fi
-uv run hockey-model fit --features "$live_features" --label live
+run_step fit uv run hockey-model fit --features "$live_features" --label live \
+  --workers "$workers"
+mv "$backtest_games.new" "$backtest_games"
+mv "$backtest_json.new" "$backtest_json"
 touch "$store_dir/prepared-$day"

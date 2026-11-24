@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Player stat rate and game win models for hockey"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "jsonschema~=4.26.0",
+]
 
 [project.scripts]
 hockey-model = "hockey_model.cli:main"
@@ -13,14 +15,16 @@ hockey-model = "hockey_model.cli:main"
 dev = [
     "hypothesis~=6.170.14",
     "mutmut~=3.8.1",
+    "packaging~=26.3.0",
     "pytest~=9.2.0",
     "pytest-cov~=7.1.0",
+    "pytest-xdist~=3.8.0",
     "ruff~=0.17.3",
     "ty~=0.0.95",
 ]
 
 [build-system]
-requires = ["uv_build>=0.13,<0.14"]
+requires = ["uv_build~=0.13.9"]
 build-backend = "uv_build"
 
 [tool.pytest.ini_options]
@@ -52,10 +56,18 @@ max-complexity = 8
 source_paths = ["src"]
 # The parsers and the rate math: pure functions whose tests need a strong oracle.
 only_mutate = [
+    "src/hockey_model/backtest/golden.py",
     "src/hockey_model/backtest/metrics.py",
+    "src/hockey_model/backtest/row_cache.py",
+    "src/hockey_model/backtest/row_codec.py",
+    "src/hockey_model/backtest/runner.py",
+    "src/hockey_model/backtest/season_key.py",
+    "src/hockey_model/backtest/shards.py",
+    "src/hockey_model/backtest/units.py",
     "src/hockey_model/experiments/models.py",
     "src/hockey_model/game_model/elo.py",
     "src/hockey_model/game_model/logistic.py",
+    "src/hockey_model/json_schema.py",
     "src/hockey_model/sources/*.py",
 ]
 pytest_add_cli_args = ["--no-cov", "-p", "no:cacheprovider"]

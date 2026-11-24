@@ -65,7 +65,7 @@ def test_the_report_upgrades_the_store_before_it_reads_anything(
                 "date": DAY,
                 "games": 3,
                 "games_outside_window": 0,
-                "prep_too_early": False,
+                "puck_drop_passed": True,
             }
         ),
     )
@@ -74,7 +74,7 @@ def test_the_report_upgrades_the_store_before_it_reads_anything(
     calls = _calls(tmp_path)
     assert calls[0] == UPGRADE
     assert any("refresh --starters-only" in line for line in calls)
-    assert "step upgrade took" in result.stderr
+    assert "progress daily-report upgrade end elapsed=" in result.stderr
 
 
 def test_the_report_stops_when_the_upgrade_fails(fakes: Path, tmp_path: Path) -> None:
@@ -88,7 +88,8 @@ def test_the_report_stops_when_the_upgrade_fails(fakes: Path, tmp_path: Path) ->
     )
     result = _run("daily-report.sh", env, "--date", DAY, "--out-dir", str(tmp_path / "out"))
     assert result.returncode == 2
-    assert "step upgrade failed with exit code 2" in result.stderr
+    assert "progress daily-report upgrade stop elapsed=" in result.stderr
+    assert "reason=exit code 2" in result.stderr
     assert not any("refresh" in line or "hockey-model daily" in line for line in _calls(tmp_path))
     assert not (tmp_path / "out" / "complete").exists()
 

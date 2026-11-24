@@ -13,7 +13,7 @@ NOW = utc("2026-01-20T12:00")
 
 
 def _team_row(game_id: int, team: str = "TOR") -> TeamGameRow:
-    return TeamGameRow(game_id, team, "2026-01-10", 2.5, 1.5, 50, 40, 30, 20)
+    return TeamGameRow(game_id, team, "2026-01-10", 2.5, 1.5, 50, 40)
 
 
 def _goalie_row(game_id: int) -> GoalieGameRow:

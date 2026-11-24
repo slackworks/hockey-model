@@ -4,7 +4,8 @@ Usage: uv run python3 scripts/smoke_wheel.py [--drop NAME]
 
 --drop NAME removes every file called NAME from the wheel before the install.
 This is the disposable build probe.
-It shows that the smoke checks catch a missing package-data file or a missing entry point.
+It shows that the smoke checks catch a missing package-data file, such as a schema, or a
+missing entry point.
 
 Exit code 0 means every smoke check passed.
 Exit code 1 means a smoke check failed. With --drop, this is the result the probe expects.
@@ -28,6 +29,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SEED_SCRIPT = ROOT / "scripts" / "smoke_seed.py"
 SCHEDULED_ID = "2025020001"
+# The Eastern game day of the seeded scheduled game, which starts at 2026-12-01 00:00 UTC.
+SCHEDULED_DAY = "2026-11-30"
 TOLERANCE = 1e-9
 GOAL_KEYS = ("low", "point", "high")
 # The seeded store has no goalie start and no MoneyPuck row, so the model must say so.
@@ -141,16 +144,79 @@ def _parse_json(text: str) -> object:
         ) from error
 
 
-def _install(work: Path, wheel: Path, env: dict[str, str]) -> Path:
-    venv = work / "venv"
-    _run(["uv", "venv", "--python", "3.14", str(venv)], cwd=work, env=env, setup=True)
-    python = venv / "bin" / "python"
+def _check_index(report: object, printed: object, index: object) -> None:
+    """Raise SmokeError unless the index holds one build that matches the report."""
+    builds = _field(index, "builds", "the index")
+    if not isinstance(builds, list) or len(builds) != 1:
+        raise SmokeError(f"check the index: want one build, got {index!r}")
+    build = builds[0]
+    file_name = _field(build, "file", "the build")
+    if not isinstance(file_name, str) or not file_name.startswith(f"report-{SCHEDULED_DAY}-"):
+        raise SmokeError(
+            f"check the index: the build file is {file_name!r}, not a build of the day"
+        )
+    for key in ("generated_at", "inputs_sha256", "schema_version"):
+        if _field(build, key, "the build") != _field(report, key, "the report"):
+            raise SmokeError(f"check the index: {key} differs between the build and the report")
+    if _field(printed, "file", "the report-index output") != file_name:
+        raise SmokeError("check the index: report-index printed another file than it listed")
+
+
+def _check_report(work: Path, cli: str, env: dict[str, str]) -> None:
+    """Write the daily report and its index. Both read a schema file that the wheel must hold."""
+    out = work / "report"
+    out.mkdir()
+    _run([cli, "daily", "--date", SCHEDULED_DAY, "--out-dir", str(out)], cwd=work, env=env)
+    report_path = out / f"report-{SCHEDULED_DAY}.json"
+    report = _parse_json(report_path.read_text(encoding="utf-8"))
+    games = _field(report, "games", "the report")
+    version = _field(report, "schema_version", "the report")
+    if not isinstance(games, list) or len(games) != 1:
+        raise SmokeError(f"check the report: want one game, got {games!r}")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise SmokeError(f"check the report: schema_version is not an integer: {version!r}")
+    index_path = out / f"index-{SCHEDULED_DAY}.json"
+    command = [cli, "report-index", "--report", str(report_path), "--date", SCHEDULED_DAY]
+    printed = _parse_json(_run([*command, "--out", str(index_path)], cwd=work, env=env))
+    _check_index(report, printed, _parse_json(index_path.read_text(encoding="utf-8")))
+
+
+def _locked_requirements(work: Path, env: dict[str, str]) -> Path:
+    """Export the runtime dependencies that uv.lock pins, with hashes, to a requirements file."""
+    path = work / "requirements.txt"
     _run(
-        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        [
+            "uv",
+            "export",
+            "--locked",
+            "--no-dev",
+            "--no-emit-project",
+            "--format",
+            "requirements-txt",
+            "--project",
+            str(ROOT),
+            "-o",
+            str(path),
+        ],
         cwd=work,
         env=env,
         setup=True,
     )
+    return path
+
+
+def _install(work: Path, wheel: Path, env: dict[str, str]) -> Path:
+    """Install the locked dependencies, then the wheel alone, so the tree matches uv.lock."""
+    venv = work / "venv"
+    _run(["uv", "venv", "--python", "3.14", str(venv)], cwd=work, env=env, setup=True)
+    python = str(venv / "bin" / "python")
+    requirements = _locked_requirements(work, env)
+    # An export with no requirement is a normal case, and uv installs nothing from it.
+    install = ["uv", "pip", "install", "--python", python]
+    _run([*install, "--require-hashes", "-r", str(requirements)], cwd=work, env=env, setup=True)
+    _run([*install, "--no-deps", str(wheel)], cwd=work, env=env, setup=True)
+    # A dependency that the wheel needs and the lock lacks is a setup failure, not a smoke failure.
+    _run(["uv", "pip", "check", "--python", python], cwd=work, env=env, setup=True)
     return venv
 
 
@@ -175,6 +241,7 @@ def _smoke(work: Path, venv: Path, env: dict[str, str]) -> None:
         env=seeded,
     )
     _check_prediction(_parse_json(_run([cli, "game", SCHEDULED_ID], cwd=work, env=seeded)))
+    _check_report(work, cli, seeded)
     print("smoke test passed")
 
 

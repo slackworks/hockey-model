@@ -1,0 +1,21 @@
+{
+  "id": "0002-v1-forward-test",
+  "title": "v1 forward test: live fit on 2026-27 games, summable look schedule",
+  "hypothesis": "The live fit with xg_form and rest, fit through 2025-26, scores below Elo on 2026-27 regular season games. This record replaces 0001-v1-forward-test, which is withdrawn before any result because the look schedule changed from harmonic to summable (#200).",
+  "cohort": "confirmation",
+  "data_cutoff": "2026-10-31",
+  "primary_metric": "mean_per_game_log_loss",
+  "baseline": {
+    "fit_id": 1,
+    "commit": "fe985f1"
+  },
+  "selection_folds": null,
+  "min_games": 1000,
+  "candidate_features": ["xg_form", "rest"],
+  "look_number": 1,
+  "expected_effect": -0.003,
+  "promotion_criterion": "97.5th percentile of block_bootstrap_mean_ci (16-game blocks) of the paired difference, candidate minus Elo, must be below zero (look 1 of the schedule BASE_TAIL / (k * (k + 1)): a tail of 0.025)",
+  "failure_outcome": "ship Elo alone",
+  "status": "registered",
+  "result": null
+}

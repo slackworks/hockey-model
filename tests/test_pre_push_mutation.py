@@ -183,6 +183,74 @@ def test_generated_mutants_are_removed(mod: ModuleType, repo: Path) -> None:
     assert not (repo / "mutants").exists()
 
 
+def test_the_coverage_reports_of_the_run_are_removed_with_the_tree(
+    mod: ModuleType, repo: Path
+) -> None:
+    """mutmut runs pytest inside the copy, so the project's coverage reports land there.
+
+    The addopts write ``coverage.json`` and ``lcov.info``. A push that left them would block
+    every later push with a file the user never wrote (#316).
+    """
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "mutmut-stats.json").write_text("{}", encoding="utf-8")
+    (repo / "mutants" / "coverage.json").write_text("{}", encoding="utf-8")
+    (repo / "mutants" / "lcov.info").write_text("", encoding="utf-8")
+    mod.clear_generated_mutants(repo)
+    assert not (repo / "mutants").exists()
+
+
+def test_a_run_that_failed_before_its_stats_leaves_a_directory_to_remove(
+    mod: ModuleType, repo: Path
+) -> None:
+    """A failed stats phase writes no mutmut-stats.json, and the next push must still clear it.
+
+    The directory that such a run leaves holds only copied sources and tests (#316).
+    """
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "pyproject.toml").write_text("", encoding="utf-8")
+    (repo / "mutants" / "uv.lock").write_text("", encoding="utf-8")
+    (repo / "mutants" / "src").mkdir()
+    (repo / "mutants" / "tests").mkdir()
+    (repo / "mutants" / ".hypothesis").mkdir()
+    mod.clear_generated_mutants(repo)
+    assert not (repo / "mutants").exists()
+
+
+def test_a_mutants_directory_with_no_file_that_mutmut_writes_is_left_alone(
+    mod: ModuleType, repo: Path
+) -> None:
+    """The allowlist holds generic names, so it alone cannot tell mutmut output from a user."""
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "pyproject.toml").write_text("", encoding="utf-8")
+    (repo / "mutants" / "uv.lock").write_text("", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match="which mutmut always writes"):
+        mod.clear_generated_mutants(repo)
+    assert (repo / "mutants").exists()
+
+
+def test_a_mutants_path_that_is_a_file_names_its_own_fix(mod: ModuleType, repo: Path) -> None:
+    """rmtree raises NotADirectoryError on a file, and that names no fix to the reader."""
+    (repo / "mutants").write_text("mine", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match="is a file, not a directory"):
+        mod.clear_generated_mutants(repo)
+    assert (repo / "mutants").exists()
+
+
+def test_a_log_that_cannot_be_written_keeps_the_cause_of_the_failure(
+    mod: ModuleType, repo: Path
+) -> None:
+    """A missing .tmp that is a file stops the log, and the cause must still reach the reader."""
+    (repo / ".tmp").write_text("not a directory", encoding="utf-8")
+    assert mod._write_log(repo, ["run"], "out", "err").startswith("no log was written")
+
+
+def test_the_refusal_names_the_name_that_is_not_mutmut_output(mod: ModuleType, repo: Path) -> None:
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "notes.md").write_text("mine", encoding="utf-8")
+    with pytest.raises(mod.PushCheckError, match=r"\['notes.md'\]"):
+        mod.clear_generated_mutants(repo)
+
+
 @pytest.fixture
 def fake_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mod: ModuleType) -> Path:
     """A stub mutmut. Its output comes from the FAKE_* environment variables."""
@@ -191,6 +259,8 @@ def fake_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mod: ModuleType
         "#!/usr/bin/env bash\n"
         'case "$1" in\n'
         '  run) echo "run $*" >> "$FAKE_CALLS";'
+        '    printf "%s" "${FAKE_RUN_OUT:-}";'
+        '    printf "%s" "${FAKE_RUN_ERR:-}" >&2;'
         '    [[ -n "${FAKE_CHILD_PID:-}" ]] && { sleep 60 & echo $! > "$FAKE_CHILD_PID"; };'
         '    sleep "${FAKE_SLEEP:-0}";'
         '    exit "${FAKE_RUN_RC:-0}";;\n'
@@ -357,6 +427,43 @@ def test_a_failed_mutmut_run_fails(
     monkeypatch.setenv("FAKE_RUN_RC", "3")
     with pytest.raises(mod.PushCheckError, match="exited 3"):
         mod.run_mutmut(repo, ["run", TOP])
+
+
+def test_a_failed_mutmut_run_names_the_failing_test(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stats phase prints the failed test, and the error carries it (#316)."""
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RUN_RC", "1")
+    monkeypatch.setenv(
+        "FAKE_RUN_OUT",
+        "some progress\n"
+        "FAILED tests/backtest/test_shards_cache.py::test_a_change - AssertionError: x\n"
+        "1 failed, 23 passed in 5.04s\n"
+        "failed to collect stats. runner returned 1\n",
+    )
+    with pytest.raises(mod.PushCheckError) as caught:
+        mod.run_mutmut(repo, ["run", TOP])
+    message = str(caught.value)
+    assert "tests/backtest/test_shards_cache.py::test_a_change" in message
+    assert "failed to collect stats" in message
+
+
+def test_a_failed_run_writes_its_full_output_to_a_log(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The error names the cause and its log, so the traceback is one file away (#316)."""
+    _changed_top(repo)
+    monkeypatch.setenv("FAKE_RUN_RC", "1")
+    monkeypatch.setenv("FAKE_RUN_OUT", "failed to collect stats. runner returned 1\n")
+    monkeypatch.setenv("FAKE_RUN_ERR", "".join(f"  frame {n} in the worker\n" for n in range(40)))
+    with pytest.raises(mod.PushCheckError, match=r"\.tmp/mutation-changed\.log") as caught:
+        mod.run_mutmut(repo, ["run", TOP])
+    assert "failed to collect stats" in str(caught.value)
+    log = (repo / ".tmp" / "mutation-changed.log").read_text(encoding="utf-8")
+    assert "failed to collect stats" in log
+    assert "frame 39 in the worker" in log
+    assert "frame 39" not in str(caught.value)
 
 
 def test_a_run_past_the_timeout_fails_with_the_fix(
@@ -586,3 +693,52 @@ def test_mutant_names_follow_mutmut_for_functions_and_methods(
     assert mod.mutant_glob("src/hockey_model/a/b.py", f"{owner}.{name}") == (
         f"hockey_model.a.b.xǁ{owner}ǁ{name}__mutmut_*"
     )
+
+
+# A path segment as a source folder holds it. A bracket is in the set, because a folder name
+# can hold one, and fnmatch reads a bracket in a pattern as a character class.
+_SEGMENT = st.from_regex(r"[a-z_][a-z0-9_.\-\[\]]{0,10}", fullmatch=True)
+_PATH = st.builds(
+    lambda parts: "src/" + "/".join(parts) + ".py",
+    st.lists(_SEGMENT, min_size=1, max_size=4),
+)
+
+
+@given(path=_PATH)
+def test_a_literal_entry_covers_its_own_path(mod: ModuleType, path: str) -> None:
+    """A literal path must match itself, whatever characters it holds.
+
+    ``fnmatch`` reads a ``[`` in the pattern as a character class, so a covered path that
+    holds a bracket did not match its own literal entry.
+    """
+    assert mod.is_covered(path, [path])
+
+
+@given(path=_PATH, other=_PATH)
+def test_an_extra_glob_never_takes_a_covered_path_away(
+    mod: ModuleType, path: str, other: str
+) -> None:
+    """A list is a union, so one more entry can add a match and never remove one."""
+    assert mod.is_covered(path, [path, other])
+
+
+@given(parts=st.lists(_PYTHON_NAME, min_size=1, max_size=4))
+def test_a_module_name_round_trips_with_its_path(mod: ModuleType, parts: list[str]) -> None:
+    """The dotted name is the path under ``src/`` with its folders and suffix swapped.
+
+    A name that does not round-trip selects no mutant, so a changed function reads as
+    uncovered. ``__init__`` is the package itself, so it is dropped.
+    """
+    path = "src/" + "/".join(parts) + ".py"
+    assert mod.module_name(path) == ".".join(parts)
+
+
+@given(parts=st.lists(_PYTHON_NAME, min_size=1, max_size=4))
+def test_a_package_module_name_drops_the_init_suffix(mod: ModuleType, parts: list[str]) -> None:
+    path = "src/" + "/".join(parts) + "/__init__.py"
+    assert mod.module_name(path) == ".".join(parts)
+
+
+def test_a_glob_entry_still_matches_the_files_it_names(mod: ModuleType) -> None:
+    assert mod.is_covered("src/hockey_model/sources/nhl.py", ["src/hockey_model/sources/*.py"])
+    assert not mod.is_covered("src/hockey_model/other/nhl.py", ["src/hockey_model/sources/*.py"])

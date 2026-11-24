@@ -3,14 +3,16 @@
 import sqlite3
 from collections import Counter
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from hockey_model import progress
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.db import StoreError
-from hockey_model.store.source_reads import abandoned_urls, record_read
+from hockey_model.store.source_reads import abandoned_urls, record_failed_read, record_read
 from hockey_model.types import HockeyModelError
 
 # Errors that a bad source response or a bad stored schedule cause. Other errors are bugs.
@@ -48,8 +50,7 @@ class RefreshRun:
     written: Counter[str] = field(default_factory=Counter)
     errors: list[HockeyModelError] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    # Read the MoneyPuck files even when they are fresh. The upgrade needs this so the
-    # attempt counts arrive at once, instead of after the weekly refresh.
+    # Read the MoneyPuck files even when they are fresh, instead of after the weekly refresh.
     reread_moneypuck: bool = False
     # Read a unit again that earlier reads left as a known gap. One good read clears the gap.
     retry_skipped: bool = False
@@ -59,10 +60,30 @@ class RefreshRun:
     timed_out: bool = False
     # The boxscores this refresh already read, so one game costs one request per refresh.
     boxscores_read: set[int] = field(default_factory=set)
+    # The time of the newest read of the clock, for the progress lines.
+    last_stamp: datetime | None = None
 
     def stamp(self) -> datetime:
         """Return the time to store with a read: the clock when one is set, else ``now``."""
-        return self.now if self.clock is None else self.clock()
+        self.last_stamp = self.now if self.clock is None else self.clock()
+        return self.last_stamp
+
+    def stop(self, note: str) -> None:
+        """Record why a read stopped, in the notes of the refresh and in the progress step."""
+        self.notes.append(note)
+        progress.stopped(note)
+
+    def step(self, kind: str, label: str, total: int) -> AbstractContextManager[progress.Step]:
+        """Return the progress step of one read: ``kind`` names the work, ``label`` its range."""
+        return progress.step("refresh", f"{kind}[{label}]", total=total, budget=self.seconds_left())
+
+    def seconds_left(self) -> float | None:
+        """Return the seconds of the time budget that are left, or None when there is none."""
+        if self.deadline is None:
+            return None
+        # The last stamp is the time of the latest read. The clock is not read again here, so a
+        # progress line does not change the times that a refresh stores.
+        return max(0.0, (self.deadline - (self.last_stamp or self.now)).total_seconds())
 
     def out_of_time(self) -> bool:
         """Return True once the time budget of this refresh is spent."""
@@ -72,11 +93,23 @@ class RefreshRun:
         """Return the URLs of ``source`` that this refresh skips as known gaps."""
         return frozenset() if self.retry_skipped else abandoned_urls(self.conn, source)
 
-    def attempt(self, source: str, url: str, unit: Callable[[datetime], int]) -> bool:
-        """Run one unit of work in one transaction. Return False when it failed.
+    def attempt(
+        self,
+        source: str,
+        url: str,
+        unit: Callable[[datetime], int],
+        expected_absence: Callable[[Exception], str | None] | None = None,
+    ) -> bool:
+        """Run one unit of work in one transaction. Return False when it wrote nothing.
 
         A failed unit writes nothing, adds its error to the report, and leaves a
         ``source_reads`` row with ``ok = 0``. The unit returns the rows it wrote.
+
+        ``expected_absence`` takes the failure and returns a note when the failure is a resource
+        that does not exist yet. The note replaces the error, and no failed read is stored, so the
+        absence never becomes a known gap. The next refresh tries the unit again. The
+        return value is False for an expected absence too, so a caller that counts
+        failures counts it, and the callback must name one file only.
         """
         stamp = self.stamp()
         try:
@@ -84,8 +117,12 @@ class RefreshRun:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
         except SOURCE_FAILURES as exc:
+            absent = expected_absence(exc) if expected_absence else None
+            if absent is not None:
+                self.notes.append(absent)
+                return False
             with self.conn:
-                record_read(self.conn, source, url, stamp, error=str(exc))
+                record_failed_read(self.conn, source, url, stamp, exc)
             self.errors.append(exc)
             return False
         self.written[source] += written

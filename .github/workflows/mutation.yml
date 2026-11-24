@@ -11,13 +11,48 @@ on:
 permissions:
   contents: read
 
-# One run at a time for each ref. A queued run waits, so two runs never write the report.
-concurrency:
-  group: mutation-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
+  # The work of this run holds no concurrency group, because the group is where a newer
+  # scheduled run would replace a manual run that waits. The next step is the guard that
+  # stands aside instead. GitHub keeps one waiting run for a group, and a newer waiting run
+  # replaces an older one, so a scheduled run that joined a group would cancel a manual run
+  # that waits there (#296), as the gate job of daily-prepare.yml does (#285).
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.manual.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" != "schedule" ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only a manual run on main files a report, so a run on another branch does not count.
+          pending="$(bash scripts/manual-prepare-pending.sh mutation.yml --branch main)" || {
+            echo "::error::The lookup of manual mutation runs failed, so this run stops."
+            exit 1
+          }
+          if [[ "$pending" == "yes" ]]; then
+            echo "::warning::A manual mutation run waits or runs, so this run stands aside."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
   shard:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -61,8 +96,11 @@ jobs:
           path: mutants/
 
   merge:
-    needs: shard
-    if: always()
+    needs: [gate, shard]
+    # A gate that stood aside skips the shard job, and a merge of no shard fails. The run then
+    # reports an execution failure and files an issue for work it never did (#296). The
+    # condition uses !cancelled() and not always(), so a cancelled run files no issue.
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -86,6 +124,17 @@ jobs:
         run: |
           uv run mutmut export-cicd-stats
           uv run mutmut results >mutation-results.txt
+      - name: List the timed-out mutants
+        id: timeouts
+        # The list is advisory. A failure here is not an export failure, so the report still
+        # judges the stats, and the report names a list that is missing.
+        if: always()
+        continue-on-error: true
+        run: uv run python3 scripts/mutation_timeouts.py --out mutants/mutmut-timeouts.json
+      - name: Note a failed list
+        if: steps.timeouts.outcome == 'failure'
+        run: |
+          echo "The list of timed-out mutants failed. Its error is in the log of that step." >>"$GITHUB_STEP_SUMMARY"
       - name: Note a failed export
         if: steps.export.outcome == 'failure'
         run: |
@@ -102,12 +151,17 @@ jobs:
           path: |
             mutation-results.txt
             mutants/mutmut-cicd-stats.json
+            mutants/mutmut-timeouts.json
 
   report:
-    needs: [shard, merge]
+    needs: [gate, shard, merge]
     # The decision runs on every ref, so a manual run judges its own stats. A branch run
-    # files nothing, and the file job below runs only on main.
-    if: always()
+    # files nothing, and the file job below runs only on main. A gate that stood aside ran
+    # no shard, so there is nothing to judge and no report to file (#296). A gate that failed
+    # left no answer, so the report still runs and names the gate as the cause.
+    if: >-
+      !cancelled()
+      && (needs.gate.outputs.go == 'true' || needs.gate.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -117,6 +171,7 @@ jobs:
       status: ${{ steps.decide.outputs.status }}
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GATE_RESULT: ${{ needs.gate.result }}
       SHARD_RESULT: ${{ needs.shard.result }}
       MERGE_RESULT: ${{ needs.merge.result }}
       EXPORT_RESULT: ${{ needs.merge.outputs.export }}
@@ -143,7 +198,7 @@ jobs:
           set -euo pipefail
           stats=.tmp/mutation/mutants/mutmut-cicd-stats.json
           # Each job result reaches the script, so a failed job names itself in the body.
-          args=(--stats "$stats" --run-url "$RUN_URL"
+          args=(--stats "$stats" --run-url "$RUN_URL" --gate-result "$GATE_RESULT"
             --shard-result "$SHARD_RESULT" --merge-result "$MERGE_RESULT"
             --export-result "$EXPORT_RESULT" --download-result "$DOWNLOAD_RESULT")
           status="$(scripts/report-mutation.sh "${args[@]}")"
@@ -168,9 +223,22 @@ jobs:
           path: .tmp/mutation-report.md
 
   file:
-    needs: [shard, merge, report]
+    needs: [gate, shard, merge, report]
     # Only the default branch may write an issue. This job is the only holder of that token.
-    if: always() && github.ref == 'refs/heads/main'
+    # A gate that stood aside leaves no status, and the script rejects an empty one (#296).
+    # A gate that failed still files, so mutation testing on main does not stop unseen.
+    if: >-
+      !cancelled()
+      && (needs.gate.outputs.go == 'true' || needs.gate.result == 'failure')
+      && github.ref == 'refs/heads/main'
+    # The script lists the open reports and then creates one, so two file jobs that run
+    # together can both find none and both create an issue. The group serializes them. A
+    # newer waiting run replaces an older one. The replaced run's report body is dropped, and
+    # the newer run files its own body after the same lookup. Only this job joins the group,
+    # so the gate still stands aside for a waiting manual run (#296).
+    concurrency:
+      group: mutation-file-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

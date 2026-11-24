@@ -1,35 +1,39 @@
 """Tests for the as-of reads."""
 
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from seeding import (
+    FETCHED,
     add_game,
     add_goalie,
     add_goalie_form,
     add_injury,
     add_starter_read,
     add_team_form,
+    fresh_store,
     record_injury_snapshot,
     utc,
 )
 
-from hockey_model.store import reads
+from hockey_model.sources.moneypuck import TeamGameRow
+from hockey_model.store.moneypuck_writes import write_team_games
 from hockey_model.store.reads import (
     RESULT_DELAY,
     final_games_before,
     franchise_codes,
     goalie_starts_before,
     injury_reads_before,
-    mp_attempt_form_before,
     mp_goalie_form_before,
     mp_team_form_before,
     player_catalog,
     starter_reads_before,
     team_games_before,
 )
-from hockey_model.types import Slot
+from hockey_model.types import HockeyModelError, Slot
 
 
 def ids(games) -> list[int]:
@@ -186,17 +190,69 @@ def test_an_empty_injury_list_clears_the_earlier_one(store: sqlite3.Connection) 
     ]
 
 
-def test_mp_attempt_form_is_newest_first_and_hides_recent(store: sqlite3.Connection) -> None:
-    for number in (1, 2, 3):
+def test_a_stored_team_game_without_expected_goals_fails_the_read_and_names_the_game(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 1, "2026-01-01T00:00")
+    add_team_form(store, 1, "TOR", 1.0, 0.5)
+    store.execute("UPDATE mp_team_games SET xg_against = NULL WHERE game_id = 1")
+    with pytest.raises(HockeyModelError, match="team expected goals of TOR: game 1 has no value"):
+        mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 5)
+
+
+def test_a_stored_goalie_game_without_expected_goals_fails_the_read_and_names_the_game(
+    store: sqlite3.Connection,
+) -> None:
+    add_game(store, 2, "2026-01-02T00:00")
+    add_goalie_form(store, 2, 11, 2.0, 1)
+    store.execute("UPDATE mp_goalie_games SET xg_against = NULL WHERE game_id = 2")
+    with pytest.raises(HockeyModelError, match="goalie expected goals of 11: game 2 has no value"):
+        mp_goalie_form_before(store, 11, utc("2026-02-01T00:00"), 5)
+
+
+def test_a_null_row_outside_the_window_does_not_fail_the_read(store: sqlite3.Connection) -> None:
+    for number in (1, 2):
         add_game(store, number, f"2026-01-0{number}T00:00")
-        add_team_form(store, number, "TOR", 0.5, 0.5, attempts=(number, 9))
-    rows = mp_attempt_form_before(store, "TOR", utc("2026-01-03T00:00"), 10)
-    assert rows == [(2, 9), (1, 9)]
-    assert mp_attempt_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(3, 9)]
+        add_team_form(store, number, "TOR", float(number), 0.5)
+    store.execute("UPDATE mp_team_games SET xg_for = NULL WHERE game_id = 1")
+    assert mp_team_form_before(store, "TOR", utc("2026-02-01T00:00"), 1) == [(2.0, 0.5)]
 
 
-def test_the_form_reader_refuses_a_column_that_is_not_known(store: sqlite3.Connection) -> None:
-    with pytest.raises(ValueError, match="unknown column 'game_id; DROP TABLE games'"):
-        reads._mp_pairs_before(
-            store, ("xg_for", "game_id; DROP TABLE games"), "TOR", utc("2026-01-01T00:00"), 5
-        )
+_DAY0 = datetime(2026, 1, 1, tzinfo=FETCHED.tzinfo)
+
+
+@settings(max_examples=50, deadline=None)
+@given(
+    start_days=st.lists(
+        st.integers(min_value=1, max_value=30), min_size=1, max_size=8, unique=True
+    ),
+    forms=st.lists(
+        st.lists(st.sampled_from([0.5, 1.0, 2.5, 3.0]), max_size=2), min_size=8, max_size=8
+    ),
+    cutoff_day=st.integers(min_value=0, max_value=31),
+    limit=st.integers(min_value=1, max_value=10),
+)
+def test_mp_team_form_is_the_newest_read_of_the_newest_games_that_were_over(
+    tmp_path_factory: pytest.TempPathFactory,
+    start_days: list[int],
+    forms: list[list[float]],
+    cutoff_day: int,
+    limit: int,
+) -> None:
+    """Game numbers run against start order, so the read must sort by start, not by number.
+
+    A game keeps its form in a list of reads, oldest first. An empty list means no stored row.
+    """
+    expected: list[tuple[int, float]] = []
+    with fresh_store(tmp_path_factory.mktemp("form")) as store:
+        for number, (day, reads) in enumerate(zip(start_days, forms, strict=False), start=1):
+            add_game(store, number, f"2026-01-{day:02d}T00:00")
+            for age, xg_for in enumerate(reads):
+                row = TeamGameRow(number, "TOR", "2026-01-01", xg_for, 0.5, 50, 50)
+                write_team_games(store, [row], FETCHED + timedelta(days=age))
+            if reads and _DAY0 + timedelta(days=day - 1) <= _DAY0 + timedelta(days=cutoff_day):
+                expected.append((day, reads[-1]))
+        before = _DAY0 + timedelta(days=cutoff_day) + RESULT_DELAY
+        found = mp_team_form_before(store, "TOR", before, limit)
+    newest_first = sorted(expected, reverse=True)[:limit]
+    assert found == [(xg_for, 0.5) for _, xg_for in newest_first]

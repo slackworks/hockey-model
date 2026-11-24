@@ -7,6 +7,7 @@ way. A postponed game gets no prediction.
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -23,9 +24,11 @@ from hockey_model.game import (
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
 from hockey_model.models import GameModel
+from hockey_model.report_interval import away_interval, interval_json, interval_notes, win_cell
+from hockey_model.report_schema import SCHEMA_VERSION, check_report
 from hockey_model.sources.nhl import GameRow
 from hockey_model.store.reads import games_on_day
-from hockey_model.store.staleness import training_gaps
+from hockey_model.store.staleness import OLD_GAP_MEASURED_SHIFT_PP, training_gaps
 from hockey_model.store.timestamps import iso_utc
 from hockey_model.utc import require_utc
 
@@ -61,6 +64,11 @@ class DailyReport:
     footer_gaps: tuple[str, ...] = ()
 
 
+def _json_sha256(values: dict[str, Any]) -> str:
+    """Return the SHA-256 of ``values`` as JSON with sorted keys, so key order changes nothing."""
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
     """Return the identity of ``fit``. The hash covers every value that changes a prediction.
 
@@ -72,8 +80,7 @@ def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
         "elo_weight": fit.elo_weight,
         "weights": dict(fit.weights),
     }
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
-    return ModelIdentity(tuple(fit.features), digest, code_sha or None)
+    return ModelIdentity(tuple(fit.features), _json_sha256(values), code_sha or None)
 
 
 def report_tag(day: date) -> str:
@@ -152,6 +159,7 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
             "missing": [],
             "degraded_inputs": [],
             "training": None,
+            "win_interval": None,
         }
     return {
         **base,
@@ -161,14 +169,57 @@ def _line_json(line: DailyLine) -> dict[str, Any]:
         "missing": _missing_json(prediction.missing),
         "degraded_inputs": _degraded_json(prediction),
         "training": _training_json(prediction.training),
+        "win_interval": interval_json(prediction),
     }
+
+
+# A stale-source note carries the age of the newest read, which grows with the clock and is not
+# an input. The hash replaces the age with a fixed word.
+_AGE = re.compile(r"[0-9]+ hours old")
+
+
+def _fingerprint_line(line: DailyLine) -> dict[str, Any]:
+    payload = _line_json(line)
+    payload["missing"] = [
+        {**m, "note": _AGE.sub("aged", m["note"])} if m["kind"] == "stale_source" else m
+        for m in payload["missing"]
+    ]
+    return payload
+
+
+def inputs_sha256(report: DailyReport) -> str:
+    """Return the fingerprint of what a reader sees in the report, without the time of the run.
+
+    Two builds with the same fingerprint publish the same numbers, so the second need not
+    publish. The hash covers: the ``schema_version``; the date and the interval level; the
+    model identity (features,
+    ``fit_sha256``, ``code_sha``); ``training_gaps``; the source ``credits``; and, for each game,
+    the game ID, the start, the state, the skip note, both win chances, the win ranges,
+    ``made_after_start``,
+    ``missing`` (the goalie and injury state that the prediction used), ``degraded_inputs``, and
+    ``training``. It leaves out ``generated_at``, and the age in a stale-source note. A source
+    read that changes no covered value, such as a fresh read of the same starter, does not
+    change the hash.
+    """
+    values = {
+        "schema_version": SCHEMA_VERSION,
+        "date": report.day.isoformat(),
+        "level": report.level,
+        "credits": _credits(report),
+        "games": [_fingerprint_line(line) for line in report.lines],
+        "model": _model_json(report.model),
+        "training_gaps": list(report.footer_gaps),
+    }
+    return _json_sha256(values)
 
 
 def report_json(report: DailyReport) -> dict[str, Any]:
     """Return the JSON copy of the report. Every game has the same keys."""
     return {
+        "schema_version": SCHEMA_VERSION,
         "date": report.day.isoformat(),
         "generated_at": iso_utc(report.generated_at),
+        "inputs_sha256": inputs_sha256(report),
         "level": report.level,
         "games": [_line_json(line) for line in report.lines],
         "credits": _credits(report),
@@ -185,10 +236,6 @@ def _model_json(model: ModelIdentity | None) -> dict[str, Any] | None:
         "fit_sha256": model.fit_sha256,
         "code_sha": model.code_sha,
     }
-
-
-def _percent(value: float | None) -> str:
-    return "-" if value is None else f"{value:.1%}"
 
 
 def _cell(text: str) -> str:
@@ -238,10 +285,13 @@ def report_markdown(report: DailyReport) -> str:
             out.append(
                 f"| {_cell(f'{row.away} at {row.home}')} ({row.game_id}) | {iso_utc(row.start)}"
                 f" | {_cell(row.state)}"
-                f" | {_percent(p.home_win if p else None)}"
-                f" | {_percent(p.away_win if p else None)} | {_notes(line)} |"
+                f" | {win_cell(p.home_win if p else None, p.home_win_interval if p else None)}"
+                f" | {win_cell(p.away_win if p else None, away_interval(p))} | {_notes(line)} |"
             )
     out.append("")
+    predictions = [line.prediction for line in report.lines if line.prediction is not None]
+    for note in interval_notes(predictions, report.level):
+        out.extend([note, ""])
     if report.model is not None:
         features = ", ".join(report.model.features) or "Elo only"
         code = report.model.code_sha or "unknown"
@@ -253,7 +303,9 @@ def report_markdown(report: DailyReport) -> str:
         out.append("")
     if report.footer_gaps:
         out.append(
-            "Gaps outside the scored and current seasons (no game row; Elo effect not measured):"
+            "Gaps outside the scored, current, and previous seasons (no game row; in the measured "
+            "case, a gap of up to a week two seasons back moved a win chance by at most "
+            f"{OLD_GAP_MEASURED_SHIFT_PP} percentage points):"
         )
         out.extend(f"- {gap}" for gap in report.footer_gaps)
         out.append("")
@@ -263,13 +315,27 @@ def report_markdown(report: DailyReport) -> str:
 def write_report(report: DailyReport, out_dir: Path) -> tuple[Path, Path]:
     """Write the Markdown and JSON copies. Return their paths, Markdown first.
 
-    Both strings are built before either file is written, so a failed build writes nothing.
+    Both strings are built before either file is written, and the JSON must pass the report
+    schema, so a build failure or an invalid report writes no file. Both copies go to temporary
+    names first, so a failed disk write leaves the files of an earlier build as they were.
     """
     markdown = report_markdown(report)
-    payload = json.dumps(report_json(report), indent=2, sort_keys=True) + "\n"
+    data = report_json(report)
+    check_report(data)
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
     stem = f"report-{report.day.isoformat()}"
     md_path = out_dir / f"{stem}.md"
     json_path = out_dir / f"{stem}.json"
-    md_path.write_text(markdown, encoding="utf-8")
-    json_path.write_text(payload, encoding="utf-8")
+    staged = [(md_path, markdown), (json_path, payload)]
+    partials = [path.with_name(f"{path.name}.tmp") for path, _ in staged]
+    try:
+        for partial, (_, text) in zip(partials, staged, strict=True):
+            partial.write_text(text, encoding="utf-8")
+    except OSError:
+        for partial in partials:
+            partial.unlink(missing_ok=True)
+        raise
+    # The JSON is the copy that a program reads, so it moves into place last.
+    for partial, (path, _) in zip(partials, staged, strict=True):
+        partial.replace(path)
     return md_path, json_path

@@ -67,11 +67,6 @@ def test_no_form_feature_means_nothing_is_degraded(store: sqlite3.Connection) ->
     assert [d.feature for d in _row(store, names=("rest",)).imputed] == ["rest"]
 
 
-def test_the_attempt_feature_reports_its_own_kind(store: sqlite3.Connection) -> None:
-    row = _row(store, names=("attempt_form",))
-    assert row.imputed == (DegradedInput("attempt_form", MissingKind.ATTEMPT_FORM, (HOME, AWAY)),)
-
-
 def test_the_prediction_carries_the_degraded_inputs(store: sqlite3.Connection) -> None:
     _form(store, AWAY, 3.0, 1.0)
     result = NhlGameModel(store, artifact(XG_FIT), GoalieMode.GUESS).predict(GAME, AS_OF, 0.8)
@@ -114,10 +109,12 @@ def test_a_team_with_no_earlier_game_is_a_degraded_rest_feature(
 def test_rest_does_not_use_a_result_after_the_cutoff(store: sqlite3.Connection) -> None:
     # A game that started before puck drop but after as_of is not known at as_of.
     add_game(store, 10, "2026-01-19T20:00", home=HOME, away="MTL")
-    add_game(store, 11, "2026-01-15T00:00", home="MTL", away=HOME)
+    add_game(store, 11, "2026-01-18T00:00", home="MTL", away=HOME)
     row = _row(store, names=("rest",))
-    # TOR rested the cap from the 15th, BOS has no game: both count as fully rested.
+    # TOR has two days of rest from the 18th, and BOS has no game, so the difference is neutral.
     assert row.values["rest"] == pytest.approx(0.0)
+    # Under a rule that gave BOS the rest cap, the value would be 2 days minus the cap.
+    assert row.imputed == (DegradedInput("rest", MissingKind.REST_UNKNOWN, (AWAY,)),)
 
 
 def test_a_one_sided_goalie_form_gives_the_neutral_differential(store: sqlite3.Connection) -> None:

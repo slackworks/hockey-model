@@ -86,7 +86,6 @@ def test_report_due_prints_only_the_gate_fields(
         "games_outside_window",
         "first_puck_drop_utc",
         "puck_drop_passed",
-        "prep_too_early",
         "prep_blocks_report",
         "due",
     }
@@ -150,13 +149,12 @@ def test_daily_names_the_fit_and_the_commit(
     assert len(payload["model"]["fit_sha256"]) == 64
 
 
-def test_report_due_never_skips_a_day_that_is_not_the_current_game_day(
+def test_report_due_says_a_future_day_has_no_puck_drop_yet(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A mistyped future date must not read as "prep is early": prep_too_early is for today only.
     _feed(monkeypatch, {})
     assert main(["report-due", "--date", "2099-01-01"]) == 0
-    assert json.loads(capsys.readouterr().out)["prep_too_early"] is False
+    assert json.loads(capsys.readouterr().out)["puck_drop_passed"] is False
 
 
 def test_report_due_reads_no_prepare_run_as_no_block(
@@ -176,9 +174,10 @@ def _slate(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_report_due_says_a_late_prepare_blocks_the_report(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A prepare that started at 22:00 runs until 01:00 UTC, past the midnight puck drop.
+    # The window of a prepare that holds the group now ends at 01:00 UTC, past the midnight puck
+    # drop of the 7 pm EST game.
     _slate(monkeypatch)
-    args = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T22:00:00Z"]
+    args = ["report-due", "--date", "2026-11-04", "--prep-ends", "2026-11-05T01:00:00Z"]
     assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is True
 
@@ -186,9 +185,9 @@ def test_report_due_says_a_late_prepare_blocks_the_report(
 def test_report_due_says_an_on_time_prepare_blocks_nothing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The 08:00 prepare plus 180 minutes ends at 11:00, well before the midnight puck drop.
+    # A window that ends at 11:00 is well before the midnight puck drop.
     _slate(monkeypatch)
-    args = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T08:00:00Z"]
+    args = ["report-due", "--date", "2026-11-04", "--prep-ends", "2026-11-04T11:00:00Z"]
     assert main(args) == 0
     assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False
 
@@ -198,7 +197,7 @@ def test_report_due_counts_the_report_budget_after_the_prepare(
 ) -> None:
     """A prepare that ends a minute before the puck drop leaves no time for the report."""
     _slate(monkeypatch)
-    base = ["report-due", "--date", "2026-11-04", "--prep-started", "2026-11-04T20:58:00Z"]
+    base = ["report-due", "--date", "2026-11-04", "--prep-ends", "2026-11-04T23:59:00Z"]
     assert main(base) == 0
     assert json.loads(capsys.readouterr().out)["prep_blocks_report"] is False
     assert main([*base, "--margin-seconds", "600"]) == 0

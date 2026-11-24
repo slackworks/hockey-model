@@ -51,10 +51,26 @@ MUTANTS_DIR = "mutants"
 # A changed-code run that passes this many seconds fails with an actionable message.
 MUTMUT_TIMEOUT_S = 900
 MUTMUT_COMMAND = ("uv", "run", "mutmut")
+# The full output of a failed run. A push that fails names this file, and git ignores it.
+MUTATION_LOG = Path(".tmp") / "mutation-changed.log"
 # Top-level names that mutmut writes into its output directory. Any other name is refused.
+# The coverage reports are here because mutmut runs pytest from inside the copy, and the
+# project's addopts name those two files (#316).
 MUTANTS_OUTPUT_NAMES = frozenset(
-    {"mutmut-stats.json", "pyproject.toml", "src", "tests", "uv.lock", ".hypothesis"}
+    {
+        "mutmut-stats.json",
+        "pyproject.toml",
+        "src",
+        "tests",
+        "uv.lock",
+        ".hypothesis",
+        "coverage.json",
+        "lcov.info",
+    }
 )
+# A directory that names only the generic part of the allowlist can be a directory of the user.
+# mutmut always writes the stats file or the copied sources, so the clean needs one of these.
+MUTANTS_OWNER_NAMES = frozenset({"mutmut-stats.json", "src"})
 # Statuses that a mutant can carry when the tests do not kill it. The changed lines gate them.
 SURVIVING = frozenset({"survived", "no tests"})
 # A mutant that ran past its limit. The changed lines gate it like a survivor.
@@ -237,8 +253,13 @@ def covered_globs(repo: Path) -> list[str]:
 
 
 def is_covered(path: str, globs: list[str]) -> bool:
-    """Return True when ``path`` matches one of the covered globs."""
-    return any(fnmatch.fnmatchcase(path, glob) for glob in globs)
+    """Return True when ``path`` matches one of the covered globs.
+
+    An entry of ``[tool.mutmut] only_mutate`` is often a literal path, and a literal path
+    must match itself. ``fnmatch`` reads a ``[`` in the pattern as a character class, so a
+    literal equal is checked first, and only an entry that the literal check missed is a glob.
+    """
+    return any(path == glob or fnmatch.fnmatchcase(path, glob) for glob in globs)
 
 
 def changed_lines(repo: Path, base: str, path: str) -> set[int]:
@@ -345,18 +366,78 @@ def parse_results(text: str) -> dict[str, str]:
 
 
 def clear_generated_mutants(repo: Path) -> None:
-    """Remove the mutants directory only when it holds mutmut output and nothing else."""
+    """Remove the mutants directory only when it holds mutmut output and nothing else.
+
+    A run that fails before its stats phase writes no ``mutmut-stats.json``, and the directory
+    then holds only copied sources and tests. That is still mutmut output, so it is removed
+    (#316). Any other name is left in place, because the hook does not own it. A directory
+    that names none of the files mutmut always writes is left in place too, because the
+    allowlist alone cannot tell it from a directory of the user.
+    """
     target = repo / MUTANTS_DIR
     if not target.exists():
         return
-    names = {entry.name for entry in target.iterdir()} if target.is_dir() else set()
-    generated = {"mutmut-stats.json", PYPROJECT} <= names and names <= MUTANTS_OUTPUT_NAMES
-    if not generated:
+    if not target.is_dir():
+        raise PushCheckError(
+            f"{MUTANTS_DIR} is a file, not a directory, so it was not removed. Move it aside, "
+            "then push again."
+        )
+    names = {entry.name for entry in target.iterdir()}
+    if not names <= MUTANTS_OUTPUT_NAMES:
         raise PushCheckError(
             f"{MUTANTS_DIR}/ does not hold only mutmut output, so it was not removed. "
-            "Move it aside, then push again."
+            f"Move {sorted(names - MUTANTS_OUTPUT_NAMES)} aside, then push again."
+        )
+    # The allowlist holds generic names, so a directory of the user can pass the check above.
+    if not names & MUTANTS_OWNER_NAMES:
+        raise PushCheckError(
+            f"{MUTANTS_DIR}/ holds none of {sorted(MUTANTS_OWNER_NAMES)}, which mutmut always "
+            f"writes, so it was not removed. Move it aside, then push again."
         )
     shutil.rmtree(target)
+
+
+# The lines that name what stopped a mutmut run. The stats phase prints the failed test and a
+# one-line summary; the rest of the output is the traceback and the captured log.
+_CAUSE_PATTERNS = (
+    re.compile(r"^FAILED (\S+)"),
+    re.compile(r"^ERROR (\S+)"),
+    re.compile(r"^failed to .+"),
+    re.compile(r"^Filtered for specific mutants"),
+    re.compile(r"^AssertionError: .+"),
+    re.compile(r"^[Ee]rror: .+"),
+    re.compile(r"^\d+ (?:failed|passed|error)"),
+)
+
+
+def _cause(stdout: str, stderr: str) -> str:
+    """Return the lines of a failed mutmut run that name its cause, or the tail of its output.
+
+    A failure names the test that failed, or the message that stopped the run (#316). The full
+    output stays out of the message, so a push that fails names its cause in one screen.
+    """
+    lines = [line for text in (stdout, stderr) for line in text.splitlines() if line.strip()]
+    named = [line for line in lines if any(p.match(line) for p in _CAUSE_PATTERNS)]
+    if named:
+        return " | ".join(named[-5:])
+    tail = " | ".join(lines[-5:])
+    return tail or "the run printed nothing"
+
+
+def _write_log(repo: Path, args: list[str], stdout: str, stderr: str) -> str:
+    """Write the full output of a failed run to ``.tmp/mutation-changed.log``, return its name.
+
+    The message names the cause in one screen, and the traceback goes to the log (#316). A log
+    that cannot be written is part of the cause, so it never hides why the run failed.
+    """
+    path = repo / MUTATION_LOG
+    body = f"$ mutmut {' '.join(args)}\n\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        return f"no log was written ({exc})"
+    return MUTATION_LOG.as_posix()
 
 
 def run_mutmut(repo: Path, args: list[str]) -> str:
@@ -377,14 +458,19 @@ def run_mutmut(repo: Path, args: list[str]) -> str:
         stdout, stderr = proc.communicate(timeout=MUTMUT_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
+        stdout, stderr = proc.communicate()
+        log = _write_log(repo, args, stdout or "", stderr or "")
         raise PushCheckError(
             f"mutmut {args[0]} ran past {MUTMUT_TIMEOUT_S}s and was stopped. Push fewer "
             "functions per change, or raise MUTMUT_TIMEOUT_S in scripts/pre_push_mutation.py "
-            "with a reason."
+            f"with a reason. The full output is in {log}."
         ) from exc
     if proc.returncode != 0:
-        raise PushCheckError(f"mutmut {' '.join(args)} exited {proc.returncode}: {stderr.strip()}")
+        log = _write_log(repo, args, stdout, stderr)
+        raise PushCheckError(
+            f"mutmut {' '.join(args)} exited {proc.returncode}: {_cause(stdout, stderr)}. "
+            f"The full output is in {log}."
+        )
     return stdout
 
 

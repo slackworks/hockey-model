@@ -203,3 +203,36 @@ def test_injury_rejects_a_return_date_that_is_not_text(value: object) -> None:
     payload["injuries"][0]["injuries"][0]["details"]["returnDate"] = value
     with pytest.raises(SourceParseError, match="returnDate"):
         parse_injuries(payload)
+
+
+def test_scoreboard_game_with_an_empty_probables_list_gives_no_read() -> None:
+    payload = load(SCOREBOARD)
+    for competitor in payload["events"][0]["competitions"][0]["competitors"]:
+        competitor["probables"] = []
+    assert len(parse_scoreboard_starters(payload)) == 20
+
+
+@pytest.mark.parametrize("value", [None, "none", {}, 3])
+def test_scoreboard_probables_that_are_not_a_list_raise(value: object) -> None:
+    payload = load(SCOREBOARD)
+    payload["events"][0]["competitions"][0]["competitors"][0]["probables"] = value
+    with pytest.raises(SourceParseError, match="probables must be a list"):
+        parse_scoreboard_starters(payload)
+
+
+def test_scoreboard_with_no_probables_key_anywhere_raises() -> None:
+    payload = load(SCOREBOARD)
+    for event in payload["events"]:
+        for competitor in event["competitions"][0]["competitors"]:
+            competitor.pop("probables", None)
+    with pytest.raises(SourceParseError, match="probables"):
+        parse_scoreboard_starters(payload)
+
+
+def test_scoreboard_with_only_started_games_gives_no_read() -> None:
+    payload = load(SCOREBOARD)
+    for event in payload["events"]:
+        event["status"]["type"]["state"] = "in"
+        for competitor in event["competitions"][0]["competitors"]:
+            competitor.pop("probables", None)
+    assert parse_scoreboard_starters(payload) == []

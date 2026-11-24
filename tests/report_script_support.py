@@ -19,6 +19,23 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 REAL_UV = shutil.which("uv") or ""
 
 
+def valid_report(generated: str = GENERATED, **fields: object) -> dict[str, object]:
+    """Return a daily report that passes the report schema. Pass a field to change it."""
+    report: dict[str, object] = {
+        "schema_version": 1,
+        "date": DAY,
+        "generated_at": generated,
+        "inputs_sha256": "a" * 64,
+        "level": 0.8,
+        "games": [],
+        "credits": [],
+        "model": {"features": LIVE, "fit_sha256": "b" * 64, "code_sha": SHA},
+        "training_gaps": [],
+    }
+    report.update(fields)
+    return report
+
+
 def due_json(**fields: object) -> str:
     """Return one ``report-due`` payload, with every field the gate prints filled in.
 
@@ -31,7 +48,8 @@ def due_json(**fields: object) -> str:
         "date": DAY,
         "games": 3,
         "games_outside_window": 0,
-        "prep_too_early": False,
+        "first_puck_drop_utc": "2026-11-04T23:00:00.000000+00:00",
+        "puck_drop_passed": True,
         "prep_blocks_report": False,
     }
     payload.update(fields)
@@ -75,3 +93,33 @@ def _run(script: str, env: dict[str, str], *args: str) -> subprocess.CompletedPr
         text=True,
         check=False,
     )
+
+
+def report_game(
+    home: str = "MTL",
+    away: str = "TOR",
+    *,
+    home_win: float | None = 0.42,
+    interval: tuple[float, float] | None = (0.36, 0.48),
+    skipped: str | None = None,
+) -> dict[str, object]:
+    """Return one game of a report JSON, as the report writes it, with the range of both sides."""
+    win = None
+    if home_win is not None and interval is not None:
+        low, high = interval
+        win = {"home_low": low, "home_high": high, "away_low": 1 - high, "away_high": 1 - low}
+    return {
+        "game_id": 1,
+        "away": away,
+        "home": home,
+        "start_utc": "2026-11-04T23:00:00.000000+00:00",
+        "state": "FUT",
+        "skipped": skipped,
+        "home_win": home_win,
+        "away_win": None if home_win is None else 1 - home_win,
+        "made_after_start": False,
+        "missing": [],
+        "degraded_inputs": [],
+        "training": None,
+        "win_interval": win,
+    }

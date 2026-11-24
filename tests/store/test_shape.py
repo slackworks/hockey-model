@@ -5,7 +5,7 @@ import sqlite3
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hockey_model.store.shape import REQUIREMENTS, earned_version, holds
+from hockey_model.store.shape import REQUIREMENTS, Requirement, earned_version, holds
 
 
 def _store(held: tuple[bool, ...]) -> sqlite3.Connection:
@@ -14,7 +14,8 @@ def _store(held: tuple[bool, ...]) -> sqlite3.Connection:
     tables: dict[str, list[str]] = {}
     for requirement, present in zip(REQUIREMENTS, held, strict=True):
         columns = tables.setdefault(requirement.table, [])
-        if present:
+        # A held requirement has its column, or lacks it when the version dropped the column.
+        if present == requirement.present:
             rule = " NOT NULL" if requirement.not_null else ""
             columns.append(f"{requirement.column} TEXT{rule}")
     for table, columns in tables.items():
@@ -64,5 +65,18 @@ def test_a_not_null_requirement_fails_on_a_column_that_allows_null(
             earned, _ = earned_version(conn)
             assert earned < requirement.version
             return
+    finally:
+        conn.close()
+
+
+def test_a_missing_table_does_not_hold_a_dropped_column_requirement() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        dropped = Requirement(7, "starter_reads", "nhl_id", False, present=False)
+        assert not holds(conn, dropped)
+        conn.execute("CREATE TABLE starter_reads (id INTEGER)")
+        assert holds(conn, dropped)
+        conn.execute("ALTER TABLE starter_reads ADD COLUMN nhl_id INTEGER")
+        assert not holds(conn, dropped)
     finally:
         conn.close()
