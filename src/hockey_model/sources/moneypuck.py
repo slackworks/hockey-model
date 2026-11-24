@@ -19,6 +19,10 @@ from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.sources.teams import from_moneypuck
 
 SOURCE = "moneypuck"
+# The parser names that an archived payload records. Change a version when a parser change can
+# change a parsed row.
+TEAM_PARSER = "moneypuck_team:1"
+GOALIE_PARSER = "moneypuck_goalie:1"
 MONEYPUCK_CREDIT = "Data from MoneyPuck.com."
 TEAM_GAMES_URL = "https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv"
 _GOALIES_URL = "https://peter-tanner.com/moneypuck/downloads/seasonPlayersSummary/goalies/{}.zip"

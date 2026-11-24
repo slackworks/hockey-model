@@ -23,6 +23,10 @@ from hockey_model.sources.teams import from_espn
 
 SOURCE = "espn"
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
+# The parser name that an archived payload records. Change the version when a parser change can
+# change a parsed row. The injuries parser took version 2 with the unnamed-status handling (#325).
+SCOREBOARD_PARSER = "espn_scoreboard:1"
+INJURIES_PARSER = "espn_injuries:2"
 PROBABLE_GOALIE = "probableStartingGoalie"
 # ESPN writes the morning status as "Expected" and the confirmed status as "Confirmed".
 _STATUS_MAP = {"Confirmed": StarterStatus.CONFIRMED, "Expected": StarterStatus.LIKELY}

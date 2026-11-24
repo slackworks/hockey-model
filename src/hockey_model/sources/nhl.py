@@ -21,6 +21,10 @@ from hockey_model.team_codes import NHL_TEAM_CODES
 
 SOURCE = "nhl"
 NHL_BASE = "https://api-web.nhle.com/v1"
+# The parser name that an archived payload records. Change the version when a parser change can
+# change a parsed row.
+SCORE_PARSER = "nhl_score:1"
+BOXSCORE_PARSER = "nhl_boxscore:1"
 # Regular season and playoffs. Preseason (1), All-Star (4), and national teams (9, 19) are out.
 GAME_TYPES_KEPT = frozenset({2, 3})
 FINAL_STATES = frozenset({"FINAL", "OFF"})

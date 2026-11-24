@@ -15,6 +15,9 @@ from hockey_model.sources.teams import from_daily_faceoff
 
 SOURCE = "daily_faceoff"
 STARTERS_URL = "https://www.dailyfaceoff.com/starting-goalies"
+# The parser name that an archived payload records. Change the version when a parser change can
+# change a parsed row.
+PARSER = "daily_faceoff:1"
 _NEXT_DATA = re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 # A goalie that the page names without a strength is the page's projection only.
 _STATUS_MAP = {
