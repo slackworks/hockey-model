@@ -40,6 +40,24 @@ COMPRESS_LEVEL: Final = 6
 ARCHIVED_SOURCES = frozenset(
     {SCORES, BOXSCORES, ESPN_STARTERS, ESPN_INJURIES, DAILY_FACEOFF, MONEYPUCK}
 )
+# The sources whose payload holds a betting market. The capture removes those fields before the
+# bytes reach the parser or the archive, so the source name decides that, not the caller (#82).
+MARKET_SOURCES = frozenset({ESPN_STARTERS, ESPN_INJURIES})
+
+
+def is_market_source(source: str) -> bool:
+    """Return True when the payload of ``source`` holds betting-market fields.
+
+    Raises ``StoreError`` for a source that the archive does not list, so a new source cannot
+    reach the store without a decision on its market fields.
+    """
+    if source not in ARCHIVED_SOURCES:
+        raise StoreError(
+            f"read {source}: this source is not in ARCHIVED_SOURCES, so its bytes would never "
+            "reach the archive; add the source to store/archive.py with its archive rule from "
+            "docs/design/payload-archive.md"
+        )
+    return source in MARKET_SOURCES
 
 
 @dataclass(frozen=True, slots=True)

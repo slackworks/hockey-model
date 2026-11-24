@@ -15,7 +15,7 @@ from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import refresh_other
 from hockey_model.store.archive import OK, observations_for, payload_bytes
-from hockey_model.store.db import connect
+from hockey_model.store.db import StoreError, connect
 from hockey_model.store.recording import Reading, RecordingClient, key_of
 from hockey_model.store.refresh_context import RefreshRun
 
@@ -71,28 +71,35 @@ def test_a_url_with_no_date_suffix_gets_no_key() -> None:
     assert key_of("nhl_scores", "https://api-web.nhle.com/v1/score/now") is None
 
 
-def test_a_sanitized_fetch_removes_the_market_fields() -> None:
+def test_a_market_source_loses_its_market_fields() -> None:
     """The unit reads no odds, and the archive keeps no odds either (#82)."""
     payload = {"events": [{"odds": [{"spread": -1.5}]}], "pickcenter": {"providers": []}}
-    client = RecordingClient(_OneBody(json.dumps(payload).encode()), sanitize=True)
+    client = RecordingClient(_OneBody(json.dumps(payload).encode()), "espn_injuries")
     body = client.get("espn_injuries", ESPN_URL)
     assert json.loads(body) == {"events": [{}]}
 
 
-def test_an_unsanitized_fetch_keeps_every_field() -> None:
+@pytest.mark.parametrize("source", ["nhl_scores", "daily_faceoff", "moneypuck", "nhl_boxscores"])
+def test_a_source_with_no_market_keeps_every_field(source: str) -> None:
     payload = {"odds": [{"spread": -1.5}]}
-    client = RecordingClient(_OneBody(json.dumps(payload).encode()))
-    assert json.loads(client.get("nhl_scores", SCORE_URL)) == payload
+    client = RecordingClient(_OneBody(json.dumps(payload).encode()), source)
+    assert json.loads(client.get(source, SCORE_URL)) == payload
 
 
 def test_a_body_that_is_not_json_passes_through_sanitized() -> None:
     """The sanitizer must not turn a non-JSON body into an error the parser cannot name."""
-    client = RecordingClient(_OneBody(b"<html>not json</html>"), sanitize=True)
+    client = RecordingClient(_OneBody(b"<html>not json</html>"), "espn_injuries")
     assert client.get("espn_injuries", ESPN_URL) == b"<html>not json</html>"
 
 
+def test_a_source_outside_the_archive_is_refused() -> None:
+    """A new source cannot reach the store without a decision on its market fields."""
+    with pytest.raises(StoreError, match="not in ARCHIVED_SOURCES"):
+        RecordingClient(_OneBody(b"{}"), "a_new_source")
+
+
 def test_a_failed_request_is_recorded_with_no_body() -> None:
-    client = RecordingClient(_Fails())
+    client = RecordingClient(_Fails(), "nhl_scores")
     with pytest.raises(SourceError):
         client.get("nhl_scores", SCORE_URL)
     assert [(r.url, r.status, r.body) for r in client.records] == [(SCORE_URL, "http_error", None)]
@@ -109,7 +116,7 @@ def test_a_refresh_writes_one_observation_for_each_request(conn: sqlite3.Connect
         run.client.get("espn_injuries", second)
         return 1
 
-    assert run.attempt("espn_injuries", first, unit, Reading("espn_injuries:2", sanitize=True))
+    assert run.attempt("espn_injuries", first, unit, Reading("espn_injuries:2"))
     found = observations_for(conn, "espn_injuries", None)
     assert [o.url for o in found] == [first, second]
     assert {o.parser for o in found} == {"espn_injuries:2"}
@@ -229,5 +236,4 @@ def test_the_stored_scoreboard_holds_no_market_field(conn: sqlite3.Connection) -
 def test_the_reading_defaults_to_no_parser_and_kept_bytes() -> None:
     reading = Reading("nhl_score:1")
     assert reading.keep_body is True
-    assert reading.sanitize is False
     assert reading.expected_absence is None

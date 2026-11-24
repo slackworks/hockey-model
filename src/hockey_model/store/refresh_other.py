@@ -246,7 +246,7 @@ def espn_starters(run: RefreshRun) -> None:
         reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day, notes)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
-    _attempt_live(run, ESPN_STARTERS, url, unit, Reading(SCOREBOARD_PARSER, sanitize=True))
+    _attempt_live(run, ESPN_STARTERS, url, unit, Reading(SCOREBOARD_PARSER))
     # A status that this code does not name never fails the read, so it needs its own line.
     run.notes.extend(notes)
 
@@ -259,9 +259,7 @@ def espn_injuries(run: RefreshRun) -> None:
         reads = fetch_injuries(run.client, notes)
         return write_injury_reads(run.conn, reads, stamp)
 
-    _attempt_live(
-        run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", unit, Reading(INJURIES_PARSER, sanitize=True)
-    )
+    _attempt_live(run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", unit, Reading(INJURIES_PARSER))
     # A status that this code does not name never fails the read, so it needs its own line.
     run.notes.extend(notes)
 

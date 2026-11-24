@@ -17,6 +17,7 @@ from hockey_model.store.archive import (
     STORE_ERROR,
     Fetch,
     canonical_bytes,
+    is_market_source,
 )
 from hockey_model.store.source_reads import BOXSCORES, SCORES
 
@@ -43,14 +44,15 @@ class RecordingClient(HttpClient):
     ``records`` holds one entry for each request that the unit made, in call order, so a
     request that failed still reaches the archive with the stage that failed.
 
-    With ``sanitize`` set, a JSON body loses its market fields before it reaches the unit and
-    the archive, so no price data reaches the store (#82).
+    A payload of a market source loses its market fields before it reaches the unit and the
+    archive, so no price data reaches the store (#82). The source name decides that, so a
+    caller cannot forget it.
     """
 
-    def __init__(self, inner: HttpClient, *, sanitize: bool = False) -> None:
+    def __init__(self, inner: HttpClient, source: str) -> None:
         super().__init__()
         self._inner = inner
-        self._sanitize = sanitize
+        self._sanitize = is_market_source(source)
         self.records: list[RecordedFetch] = []
 
     def get(self, source: str, url: str) -> bytes:
@@ -84,14 +86,12 @@ class Reading:
     that can change a parsed row gets a new version. ``keep_body`` is False for a file that the
     store keeps at the row level only, so its observation says that the fetch ran and no bytes
     of it are kept. ``expected_absence`` turns a failure into a note when the resource does not
-    exist yet. ``sanitize`` strips the market fields of a JSON body, and the model reads no price
-    data (#82).
+    exist yet.
     """
 
     parser: str
     expected_absence: Callable[[Exception], str | None] | None = None
     keep_body: bool = True
-    sanitize: bool = False
 
 
 # The reading of a unit that names no parser. ``attempt`` uses it so an existing caller keeps

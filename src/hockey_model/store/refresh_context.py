@@ -133,7 +133,7 @@ class RefreshRun:
         stamp = self.stamp()
         capture = Capture(source, key_of(source, url), stamp, reading)
         inner = self.client
-        recorded = RecordingClient(inner, sanitize=reading.sanitize)
+        recorded = RecordingClient(inner, source)
         self.client = recorded
         try:
             with self.conn:
