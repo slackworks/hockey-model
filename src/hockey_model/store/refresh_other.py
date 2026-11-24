@@ -240,12 +240,15 @@ def espn_starters(run: RefreshRun) -> None:
     days: list[date] = [today, today + timedelta(days=1)]
     # The record keeps this URL with no query, so both days share one gap key.
     url = f"{ESPN_BASE}/scoreboard"
+    notes: list[str] = []
 
     def unit(stamp: datetime) -> int:
-        reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day)]
+        reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day, notes)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
     _attempt_live(run, ESPN_STARTERS, url, unit, Reading(SCOREBOARD_PARSER, sanitize=True))
+    # A status that this code does not name never fails the read, so it needs its own line.
+    run.notes.extend(notes)
 
 
 def espn_injuries(run: RefreshRun) -> None:

@@ -77,12 +77,20 @@ def test_scoreboard_ignores_other_probables() -> None:
     assert len(parse_scoreboard_starters(payload)) == 21
 
 
-def test_scoreboard_rejects_unknown_status() -> None:
+def test_scoreboard_reads_unknown_status_with_a_note() -> None:
     payload = load(SCOREBOARD)
     competitor = payload["events"][0]["competitions"][0]["competitors"][0]
     competitor["probables"][0]["status"]["name"] = "Scratched"
-    with pytest.raises(SourceParseError, match="Scratched"):
-        parse_scoreboard_starters(payload)
+    notes: list[str] = []
+    reads = parse_scoreboard_starters(payload, notes)
+    # One unnamed status must not drop the other 21 starters on the page (#325).
+    assert len(reads) == 22
+    # The read is kept and stored as unknown, and the label is named in a note.
+    unknown = [read for read in reads if read.status is StarterStatus.UNKNOWN]
+    assert len(unknown) == 1
+    assert len(notes) == 1
+    assert "Scratched" in notes[0]
+    assert unknown[0].goalie_name in notes[0]
 
 
 def test_scoreboard_rejects_missing_athlete() -> None:

@@ -60,7 +60,7 @@ def test_a_refresh_names_the_parser_of_every_source_it_reads(conn: sqlite3.Conne
     assert recorded == {
         "daily_faceoff": {"daily_faceoff:1"},
         "espn_injuries": {"espn_injuries:2"},
-        "espn_starters": {"espn_scoreboard:1"},
+        "espn_starters": {"espn_scoreboard:2"},
         "moneypuck": {"moneypuck_team:1", "moneypuck_goalie:1"},
         "nhl_boxscores": {"nhl_boxscore:1"},
         "nhl_scores": {"nhl_score:1"},
