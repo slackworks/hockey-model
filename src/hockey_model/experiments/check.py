@@ -56,6 +56,7 @@ from hockey_model.experiments.status import (
     inconclusive_notes,
     interval_of,
     require_interval,
+    require_run_interval,
     status_problem,
 )
 from hockey_model.experiments.withdrawn import check_withdrawn
@@ -184,7 +185,8 @@ def run_experiment(
     )
     # The checks come before any write, so a refused run leaves no file behind.
     if record.cohort == CONFIRMATION:
-        require_scored_cohort(record, require_interval(record, report).games, cohort_games)
+        model = require_run_interval(record, report)
+        require_scored_cohort(record, model.games, cohort_games)
     # The caller's export goes first. A write failure then leaves the look unspent.
     if games_out is not None:
         write_game_records(games_out, game_records)

@@ -23,7 +23,7 @@ from experiment_support import (
 )
 from seeding import add_game
 
-from hockey_model.backtest.runner import BacktestReport
+from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun
 from hockey_model.experiments.check import (
     check_all,
     record_with_result,
@@ -547,6 +547,54 @@ class TestRunExperiment:
         checked = check_all(repo_root=registry_dir.parent)
         assert checked["ok"] is True
         assert checked["records"][0]["has_result"] is True
+
+    def test_a_zero_width_interval_refuses_before_any_write(
+        self, registry_dir: Path, store, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A run whose every per-game diff is equal carries no spread to judge.
+
+        The ordered check must run before any write, and its message must name the record
+        and a fix for the run path. A zero-width interval would otherwise fail after the
+        CSV was written, which breaks the "checks come before any write" contract.
+        """
+        seed(store, FIT_SEASONS)
+        seed(store, [20262027], first_id=1000, games=ENOUGH_GAMES)
+        record = register(registry_dir, {"id": "0002-flat"})
+        report = BacktestReport(
+            (),
+            (),
+            (),
+            (),
+            {},
+            (
+                ScoredRun(
+                    name=MODEL_ACTUAL,
+                    games=ENOUGH_GAMES,
+                    log_loss=0.6,
+                    brier=0.2,
+                    calibration=(),
+                    diff_vs_elo_ci=(0.01, 0.01),
+                    mean_diff_vs_elo=0.01,
+                ),
+            ),
+            True,
+            (),
+            (),
+            {},
+        )
+        monkeypatch.setattr(
+            "hockey_model.experiments.check.run_backtest",
+            lambda *_args, **_kwargs: (report, []),
+        )
+        out = registry_dir / "scratch-games.csv"
+        with pytest.raises(HockeyModelError, match="0002-flat") as raised:
+            run_experiment(record.id, store, games_out=out, repo_root=registry_dir.parent)
+        assert "zero-width" in str(raised.value)
+        assert not out.exists()
+        assert not (registry_dir / "results" / "0002-flat-games.csv").exists()
+        saved = ExperimentRecord.load(registry_dir / "0002-flat.json")
+        assert saved.status == "registered"
+        assert saved.result is None
 
     def test_run_experiment_writes_the_named_games_file(self, registry_dir: Path, store):
         """A run writes the per-game file the caller names, one row per exported game."""

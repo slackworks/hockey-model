@@ -119,6 +119,26 @@ def require_interval(record: ExperimentRecord, report: BacktestReport) -> Scored
     return model
 
 
+def require_run_interval(record: ExperimentRecord, report: BacktestReport) -> ScoredRun:
+    """Return the model run, and refuse an interval whose ends are swapped or equal.
+
+    The run writes its result after this check, so a run with no spread to judge leaves no
+    file behind. The message names the record and the run path, because the fix is in the
+    scores and not in a stored result.
+    """
+    model = require_interval(record, report)
+    low, high = interval_of(model)
+    try:
+        require_ordered((low, high))
+    except HockeyModelError as exc:
+        span = "a zero-width" if low == high else "a swapped"
+        raise HockeyModelError(
+            f"experiment {record.id!r}: the backtest gave {span} interval {low!r} to "
+            f"{high!r}, so there is no spread to judge; check the scores, then run again"
+        ) from exc
+    return model
+
+
 def inconclusive_notes(record: ExperimentRecord) -> tuple[str, ...]:
     """Say why a run is inconclusive when the interval is wider than the expected effect."""
     if record.status != STATUS_INCONCLUSIVE or record.result is None:

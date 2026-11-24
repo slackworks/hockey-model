@@ -108,3 +108,5 @@ Before the run, the cohort count must reach `min_games`.
 After the run, the games that the model run scored must equal that cohort count.
 A run that scored a different count fails before it writes any file, so the look stays unspent.
 A run with no interval fails the same way.
+A run with a swapped or zero-width interval fails the same way, and the message names the record and the scores to check.
+The `experiments check` command keeps its own message, because its fix is a correction of the stored result.
