@@ -105,6 +105,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Publish the daily report again when its release is behind its newest build, even when the inputs are unchanged. A failed upload or notes edit, or a retry of an older build, left `report-DATE.json` or the notes on an older build, and `--skip-unchanged` then skipped every later build with the same inputs, so the stale alias stayed. The skip now needs the index, the alias, and the notes to name the newest build. A release with no index publishes again instead of picking the newest build by name. (#318) [fix:report]
+- Keep `report-DATE` files, the backtest files, and the notes with the newest build of the day when an older build is published again. The retry adds its own version files and its index entry. A release from before the index gets a warning and a notes line that name the earlier builds the new index leaves out. [fix:report]
+- Write the report Markdown and JSON under temporary names and move them into place, so a failed write leaves the files of the earlier build. [fix:report]
+- Give each attempt of a workflow run its own store cache key. A re-run kept its `run_id`, so it restored the store that attempt 1 saved, not the newest one, and its own save was dropped with a warning. [fix:ci]
+- Read every page of the push runs of a commit in `check-commit-ci.sh`. [fix:ci]
+- Name a failed or empty download in `publish-daily-report.sh` and `publish-release.sh`. An empty download of a package file reached the byte compare, which then said to remove a good release by hand. [fix:ci]
+- Bring the error of a backtest worker back with its own type and message. Five package errors take their own constructor arguments, so the parent could not rebuild them, and the run reported a worker that died, probably out of memory. A broken pool now names only the units that did not finish. [fix:backtest]
+- Put a length before each path and each content in the code hash of the season row cache, so a file that holds a NUL byte cannot give two trees one cache key. [fix:backtest]
+- Say that the backtest failed, not that the out directory is not writable, when `backtest_golden.py` gets an `OSError` from the run. [fix:backtest]
+- Refuse a timed-out mutant estimate past the float range, and name a merged shard result that cannot be read, in the mutation report and the shard merge. The merge also refuses a target that holds results of an earlier merge. [fix:ci]
+
 - Compare every commit of an experiment record with its registration commit. A frozen field that changed before a run and changed back after it passed `experiments check`, because only the head was compared. The error names the commit that held the changed field.
 - Read the history of one record path, and find deleted records without rename detection. `git log --follow` dropped the commits of a path when a later commit moved a file onto it, so a committed result could leave the history. A rename is now a deletion and an addition.
 - Count a higher record as outliving a deleted record only when it is in the parent of the deleting commit and in the commit. A squash merge of a branch that deleted a record and added a higher record failed on main after the branch passed.
