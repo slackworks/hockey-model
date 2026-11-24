@@ -34,7 +34,8 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # The token is unset here, as daily-report.sh unsets it, because a read of the store needs
-# no credential and this check must never use a write scope.
+# no credential and this check must never use a write scope. The caller holds no job-level
+# token either (#313), so a value here is a leftover from the caller's environment.
 report="$(env -u GH_TOKEN -u REPORT_GH_TOKEN uv run hockey-model store gaps --live)" || {
   echo "check-live-feeds: 'store gaps --live' failed; its error is above" >&2
   exit 1

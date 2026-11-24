@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from mutation_copy import require_path
-from workflow_support import job_condition
+from workflow_support import job_condition, job_env, job_text
 
 from hockey_model.report_trigger import TRIGGER_MINUTE_UTC
 
@@ -95,6 +95,21 @@ def test_the_publish_job_runs_one_at_a_time_for_a_day_and_holds_the_token_for_th
     step = publish[publish.index("      - run: bash scripts/publish-daily-report.sh") :]
     assert "GH_TOKEN: ${{ github.token }}" in step
     assert 'UV_NO_SYNC: "1"' in step
+
+
+def test_the_check_job_holds_no_token_outside_the_game_day_step() -> None:
+    """The live feed check reads the store, and a job-level token reaches it anyway.
+
+    `env -u GH_TOKEN` inside that script cannot remove a token that the job sets for every
+    step, so only the step that reads the release may carry it.
+    """
+    check_file = require_path(WORKFLOW.with_name("daily-report-check.yml"))
+    text = check_file.read_text(encoding="utf-8")
+    assert "GH_TOKEN" not in job_env(text, "check")
+    step = job_text(text, "check")
+    step = step[step.index("- name: Check the game day") :]
+    step = step[: step.index("- id: restore")]
+    assert "GH_TOKEN: ${{ github.token }}" in step
 
 
 def test_a_cancelled_run_does_not_publish() -> None:
