@@ -26,6 +26,7 @@ Build this one first.
 | MoneyPuck goalie ZIP | ZIP | full payload, because one season file is small and changes only while the season runs |
 
 The builder MUST read `store/refresh_nhl.py`, `store/refresh_other.py`, and `sources/*.py` and list the exact source names in a constant `ARCHIVED_SOURCES` in the new module.
+`RefreshRun.attempt` MUST raise `StoreError` for a source that the list does not hold, before it makes any request.
 A source that is not in the list MUST be named in a test as "not archived", with the reason, so a new source cannot skip the archive by accident.
 
 ## Storage
@@ -44,7 +45,7 @@ CREATE TABLE observations (
     url TEXT NOT NULL,
     key TEXT,                         -- the game id or day, when the source has one
     fetched_at TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'parse_error')),
+    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'store_error')),
     sha256 TEXT REFERENCES payloads (sha256),   -- NULL when no body arrived
     parser TEXT NOT NULL,             -- parser name and version, such as 'nhl_boxscore:1'
     error TEXT
@@ -79,11 +80,11 @@ Rules:
 ## Code
 
 1. New module `store/archive.py`:
-   - `record_observation(conn, *, source, url, key, fetched_at, status, body, parser, error) -> int` returns `obs_id`.
+   - `record_observation(conn, fetch: Fetch) -> int` writes one row and returns `obs_id`. `Fetch` holds the source, URL, key, fetch time, status, parser, body, and error of one request.
    - `payload_bytes(conn, sha256) -> bytes` returns the uncompressed bytes. A missing hash raises `StoreError` that names the hash.
    - `observations_for(conn, source, key, *, before: datetime | None) -> list[Observation]`.
-2. New module `sources/sanitize.py` with `strip_market_fields(payload: object) -> object`. It removes every key in `MARKET_KEYS = ("pickcenter", "odds", "againstTheSpread")` at any depth, and returns a new object. The ESPN parsers call it, and the archive hashes its `json.dumps(..., sort_keys=True, separators=(",", ":"))` bytes.
-3. `HttpClient` stays as it is. `RefreshRun.attempt` passes a recording wrapper to the unit: the wrapper calls the client and keeps `(source, url, bytes, fetched_at)` for each request of the unit. After the unit ends, `attempt` writes the observations in the same transaction as the parsed rows. A failed unit writes its observations in the `except` branch, after the rollback, with the failure status and the bytes that did arrive.
+2. New module `sources/sanitize.py` with `strip_market_fields(payload: object) -> object`. It removes every key in `MARKET_KEYS = ("pickcenter", "odds", "againstTheSpread")` at any depth, and returns a new object. The capture wrapper calls it when a unit's `Reading` sets `sanitize`, so the parser and the archive both read the sanitized body, and the archive hashes its `canonical_bytes` (`json.dumps(..., sort_keys=True, separators=(",", ":"))`).
+3. `HttpClient` stays as it is. `RefreshRun.attempt` passes a `RecordingClient` wrapper to the unit: the wrapper calls the client and keeps the URL, status, body, and error of each request of the unit. After the unit ends, `attempt` writes the observations in the same transaction as the parsed rows. A failed unit writes its observations in the `except` branch, after the rollback. A request that failed keeps its own status, and a parser failure marks the bytes that the parser rejected.
 4. Each parser module gets a `PARSER = "<name>:<version>"` constant. Change the version when a parser change can change a parsed row.
 5. Boxscore revisit: `REVISIT_AFTER_DAYS = (2, 14)` in `store/refresh_nhl.py`. A final game is read again when the newest observation is older than the next revisit day and the game started at least that many days ago. A revisit uses the same unit, failure, and abandon rules as the first read. The `boxscores_read` set of `RefreshRun` still limits one game to one request in one refresh.
 6. New reader `boxscore_rows(conn, game_id, *, policy)` in `store/reads.py`. `policy` is `FIRST`, `LATEST`, or `AsOf(instant)`. It never mixes rows of two revisions. No current caller changes: they keep the first-final tables.

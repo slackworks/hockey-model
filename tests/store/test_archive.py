@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from refresh_support import fixture
+from refresh_support import FakeClient, fixture
 from seeding import with_market_fields
 
 from hockey_model.sources.sanitize import strip_market_fields
@@ -15,8 +15,8 @@ from hockey_model.store.archive import (
     ARCHIVED_SOURCES,
     HTTP_ERROR,
     OK,
-    PARSE_ERROR,
     SHAPE_ERROR,
+    STORE_ERROR,
     Fetch,
     canonical_bytes,
     observations_for,
@@ -24,6 +24,7 @@ from hockey_model.store.archive import (
     record_observation,
 )
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
+from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.source_reads import KNOWN_SOURCES, MONEYPUCK
 from hockey_model.store.upgrade import upgrade_store
 
@@ -103,8 +104,8 @@ def test_an_http_failure_stores_no_bytes(conn: sqlite3.Connection) -> None:
     assert conn.execute("SELECT COUNT(*) FROM payloads").fetchone() == (0,)
 
 
-def test_a_parse_failure_stores_its_error_text(conn: sqlite3.Connection) -> None:
-    fetch = Fetch("nhl_scores", URL, FIRST, PARSE_ERROR, "nhl_score:1", body=b"oops", error="bad")
+def test_a_store_failure_stores_its_error_text(conn: sqlite3.Connection) -> None:
+    fetch = Fetch("nhl_scores", URL, FIRST, STORE_ERROR, "nhl_score:1", body=b"oops", error="bad")
     record_observation(conn, fetch)
     (row,) = observations_for(conn, "nhl_scores", None)
     assert row.error == "bad"
@@ -158,9 +159,16 @@ NO_BODY_KEPT = {
 }
 
 
-def test_every_source_that_a_refresh_reads_is_archived() -> None:
+def test_every_source_that_a_refresh_records_is_archived() -> None:
     """A new source cannot skip the archive by accident (docs/design/payload-archive.md)."""
     assert ARCHIVED_SOURCES == KNOWN_SOURCES
+
+
+def test_attempt_refuses_a_source_that_is_not_archived(conn: sqlite3.Connection) -> None:
+    """The gate runs before the request, so a new source fails loud instead of losing bytes."""
+    run = RefreshRun(conn, FakeClient(), FIRST)
+    with pytest.raises(StoreError, match="ARCHIVED_SOURCES"):
+        run.attempt("not_a_source", "https://example.test/a", lambda stamp: 0)
 
 
 def test_the_one_source_with_no_body_is_the_one_the_design_names() -> None:

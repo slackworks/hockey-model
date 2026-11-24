@@ -135,14 +135,14 @@ CREATE TABLE payloads (
 );
 
 -- One row for every fetch, also when the bytes did not change. A row that failed keeps the
--- bytes that did arrive, and its stage: http_error, shape_error, or parse_error.
+-- bytes that did arrive, and its stage: http_error, shape_error, or store_error.
 CREATE TABLE observations (
     obs_id INTEGER PRIMARY KEY,
     source TEXT NOT NULL,
     url TEXT NOT NULL,
     key TEXT,
     fetched_at TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'parse_error')),
+    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'store_error')),
     sha256 TEXT REFERENCES payloads (sha256),
     parser TEXT NOT NULL,
     error TEXT

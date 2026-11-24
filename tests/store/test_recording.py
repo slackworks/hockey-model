@@ -12,6 +12,7 @@ from seeding import with_market_fields
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
+from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import refresh_other
 from hockey_model.store.archive import OK, observations_for, payload_bytes
 from hockey_model.store.db import connect
@@ -115,8 +116,33 @@ def test_a_refresh_writes_one_observation_for_each_request(conn: sqlite3.Connect
     assert all(o.status == "ok" for o in found)
 
 
+def test_a_good_request_beside_a_failed_one_keeps_its_own_outcome(
+    conn: sqlite3.Connection,
+) -> None:
+    """The espn_starters step reads two days, so one day can fail while the other is good."""
+    good = "https://example.test/a"
+    bad = "https://example.test/b"
+    overrides: dict[str, bytes | Exception] = {
+        good: b'{"n": 1}',
+        bad: SourceError("espn_starters", bad, "HTTP 503"),
+    }
+    run = RefreshRun(conn, FakeClient(overrides), NOW)
+
+    def unit(stamp: datetime) -> int:
+        run.client.get("espn_starters", good)
+        run.client.get("espn_starters", bad)
+        return 1
+
+    assert run.attempt("espn_starters", good, unit, Reading("espn_starters:2")) is False
+    first, second = observations_for(conn, "espn_starters", None)
+    assert (first.url, first.status, first.error) == (good, "ok", None)
+    assert first.sha256 is not None
+    assert (second.url, second.status, second.sha256) == (bad, "http_error", None)
+    assert "HTTP 503" in (second.error or "")
+
+
 def test_a_failed_unit_still_archives_the_bytes_that_arrived(conn: sqlite3.Connection) -> None:
-    """A shape failure keeps the payload, so a parser fix can read it again (#82)."""
+    """A failed unit keeps the payload, so a second read has the bytes that broke it."""
     body = b'{"unexpected": true}'
     run = RefreshRun(conn, _OneBody(body), NOW)
 
@@ -128,6 +154,27 @@ def test_a_failed_unit_still_archives_the_bytes_that_arrived(conn: sqlite3.Conne
     (found,) = observations_for(conn, "nhl_scores", "2026-01-10")
     assert found.status == "http_error"
     assert payload_bytes(conn, str(found.sha256)) == body
+
+
+def test_a_parser_failure_marks_the_bytes_that_the_parser_rejected(
+    conn: sqlite3.Connection,
+) -> None:
+    """The parser rejected the good response, so the good response is the shape failure."""
+    good = "https://example.test/a"
+    other = "https://example.test/b"
+    run = RefreshRun(conn, FakeClient({good: b'{"n": 1}', other: b'{"n": 2}'}), NOW)
+
+    def unit(stamp: datetime) -> int:
+        run.client.get("espn_starters", good)
+        run.client.get("espn_starters", other)
+        raise SourceParseError("espn_starters", "a field is missing")
+
+    assert run.attempt("espn_starters", good, unit, Reading("espn_starters:2")) is False
+    first, second = observations_for(conn, "espn_starters", None)
+    for row in (first, second):
+        assert row.status == "shape_error"
+        assert "a field is missing" in (row.error or "")
+        assert row.sha256 is not None
 
 
 def test_the_client_is_the_inner_one_again_after_a_unit(conn: sqlite3.Connection) -> None:
@@ -166,10 +213,12 @@ def test_the_stored_scoreboard_holds_no_market_field(conn: sqlite3.Connection) -
     payload = with_market_fields(json.loads(fixture("espn/scoreboard_20261103.json")))
     base = ESPN_URL.rsplit("/injuries", 1)[0]
     body = json.dumps(payload).encode()
-    run = RefreshRun(conn, FakeClient({f"{base}/scoreboard": body}), NOW)
+    # The step asks for today and tomorrow, each in a URL that carries its date.
+    dates = (f"{base}/scoreboard?dates=20260110", f"{base}/scoreboard?dates=20260111")
+    run = RefreshRun(conn, FakeClient({url: body for url in dates}), NOW)
     refresh_other.espn_starters(run)
     found = observations_for(conn, "espn_starters", None)
-    assert found, "the step must archive each scoreboard it reads"
+    assert [row.url for row in found] == list(dates)
     for row in found:
         assert row.status == OK
         stored = payload_bytes(conn, str(row.sha256))

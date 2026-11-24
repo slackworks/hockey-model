@@ -24,12 +24,13 @@ from hockey_model.store.source_reads import (
 )
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
-# The status of an observation. A failed fetch names the stage that failed.
+# The status of an observation. A failed fetch names the stage that failed. ``store_error``
+# is a unit that the store refused, so the bytes arrived and the store rejected the rows.
 OK = "ok"
 HTTP_ERROR = "http_error"
 SHAPE_ERROR = "shape_error"
-PARSE_ERROR = "parse_error"
-STATUSES = frozenset({OK, HTTP_ERROR, SHAPE_ERROR, PARSE_ERROR})
+STORE_ERROR = "store_error"
+STATUSES = frozenset({OK, HTTP_ERROR, SHAPE_ERROR, STORE_ERROR})
 # Level 6 is the zlib default. A body of a few hundred kilobytes costs little time at that
 # level, and the store keeps every byte that the source sent.
 COMPRESS_LEVEL: Final = 6

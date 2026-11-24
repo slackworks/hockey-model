@@ -10,16 +10,19 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.sanitize import strip_market_fields
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
-from hockey_model.store.archive import Fetch, canonical_bytes
+from hockey_model.store.archive import (
+    HTTP_ERROR,
+    OK,
+    SHAPE_ERROR,
+    STORE_ERROR,
+    Fetch,
+    canonical_bytes,
+)
 from hockey_model.store.source_reads import BOXSCORES, SCORES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# The archive status of a failure, by the stage that failed.
-_HTTP_ERROR = "http_error"
-_SHAPE_ERROR = "shape_error"
-_PARSE_ERROR = "parse_error"
 _SCORE_DAY = re.compile(r"/([0-9]{4}-[0-9]{2}-[0-9]{2})$")
 _BOXSCORE = re.compile(r"/gamecenter/([0-9]{1,10})/boxscore$")
 
@@ -55,10 +58,10 @@ class RecordingClient(HttpClient):
         try:
             body = self._inner.get(source, url)
         except SourceError as exc:
-            self.records.append(RecordedFetch(url, _HTTP_ERROR, None, str(exc)))
+            self.records.append(RecordedFetch(url, HTTP_ERROR, None, str(exc)))
             raise
         body = self._cleaned(body)
-        self.records.append(RecordedFetch(url, "ok", body, None))
+        self.records.append(RecordedFetch(url, OK, body, None))
         return body
 
     def _cleaned(self, body: bytes) -> bytes:
@@ -106,28 +109,50 @@ class Capture:
     reading: Reading
 
     def fetches(self, records: list[RecordedFetch], failure: Exception | None) -> list[Fetch]:
-        """Return one ``Fetch`` for each request, marked with ``failure`` when the unit failed."""
-        status = None if failure is None else status_of(failure)
-        return [
-            Fetch(
-                self.source,
-                record.url,
-                self.stamp,
-                record.status if status is None else status,
-                self.reading.parser,
-                key=self.key,
-                body=record.body if self.reading.keep_body else None,
-                error=record.error if failure is None else str(failure),
-            )
-            for record in records
-        ]
+        """Return one ``Fetch`` for each request that the unit made.
+
+        A request that failed keeps its own status and error, so a good response beside a
+        failed one stays ``ok``. ``failure`` names a unit that raised after its requests, and
+        ``_outcome`` says which record it belongs to.
+        """
+        return [self._fetch(record, failure) for record in records]
+
+    def _fetch(self, record: RecordedFetch, failure: Exception | None) -> Fetch:
+        """Return the ``Fetch`` to store for ``record``, with the failure that belongs to it."""
+        status, error = self._outcome(record, failure)
+        return Fetch(
+            self.source,
+            record.url,
+            self.stamp,
+            status,
+            self.reading.parser,
+            key=self.key,
+            body=record.body if self.reading.keep_body else None,
+            error=error,
+        )
+
+    def _outcome(self, record: RecordedFetch, failure: Exception | None) -> tuple[str, str | None]:
+        """Return the status and error to store for ``record``.
+
+        A parser failure rejected the bytes that arrived, so it marks each kept body. A source
+        failure came from one request, and ``SourceError`` names it, so only that request takes
+        the failure. A request that already failed keeps its own outcome.
+        """
+        if record.status != OK or failure is None:
+            return record.status, record.error
+        status = status_of(failure)
+        if status in (SHAPE_ERROR, STORE_ERROR):
+            return status, str(failure)
+        if isinstance(failure, SourceError) and failure.url == record.url:
+            return status, str(failure)
+        return record.status, record.error
 
 
 def status_of(failure: Exception) -> str:
     """Return the archive status that names the stage of ``failure``."""
     if isinstance(failure, SourceShapeError | SourceParseError):
-        return _SHAPE_ERROR
-    return _HTTP_ERROR if isinstance(failure, SourceError) else _PARSE_ERROR
+        return SHAPE_ERROR
+    return HTTP_ERROR if isinstance(failure, SourceError) else STORE_ERROR
 
 
 def key_of(source: str, url: str) -> str | None:

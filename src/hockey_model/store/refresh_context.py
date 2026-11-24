@@ -11,7 +11,7 @@ from hockey_model import progress
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
-from hockey_model.store.archive import record_observation
+from hockey_model.store.archive import ARCHIVED_SOURCES, record_observation
 from hockey_model.store.db import StoreError
 from hockey_model.store.recording import (
     DEFAULT_READING,
@@ -124,6 +124,12 @@ class RefreshRun:
         The return value is False for an expected absence too, so a caller that counts failures
         counts it, and the callback must name one file only.
         """
+        if source not in ARCHIVED_SOURCES:
+            raise StoreError(
+                f"read {source}: this source is not in ARCHIVED_SOURCES, so its bytes would "
+                "never reach the archive; add the source to store/archive.py with its archive "
+                "rule from docs/design/payload-archive.md"
+            )
         stamp = self.stamp()
         capture = Capture(source, key_of(source, url), stamp, reading)
         inner = self.client

@@ -124,7 +124,7 @@ _ARCHIVE_V9 = (
     "CREATE TABLE observations ("
     " obs_id INTEGER PRIMARY KEY, source TEXT NOT NULL, url TEXT NOT NULL, key TEXT,"
     " fetched_at TEXT NOT NULL,"
-    " status TEXT NOT NULL CHECK (status IN ('ok','http_error','shape_error','parse_error')),"
+    " status TEXT NOT NULL CHECK (status IN ('ok','http_error','shape_error','store_error')),"
     " sha256 TEXT REFERENCES payloads (sha256), parser TEXT NOT NULL, error TEXT)",
     "CREATE INDEX IF NOT EXISTS observations_key ON observations (source, key, fetched_at)",
 )
