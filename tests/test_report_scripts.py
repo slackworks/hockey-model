@@ -389,6 +389,23 @@ def test_gate_decision_calls_carry_no_token(fakes: Path, tmp_path: Path) -> None
     assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
 
 
+def test_gate_decision_calls_carry_no_report_token(fakes: Path, tmp_path: Path) -> None:
+    """The report workflow sets REPORT_GH_TOKEN on its build step, so a uv call must drop it.
+
+    A gate step that inherits the variable from a parent step would hand the token to the
+    schedule read and the decision call, and neither needs one (#313).
+    """
+    log = tmp_path / "env.log"
+    env = _env(fakes, tmp_path, FAKE_ENV_LOG=str(log), REPORT_GH_TOKEN="a-token")
+    result = _run("report-gate.sh", env, "--date", DAY)
+    assert result.returncode == 0, result.stderr
+    calls = [
+        line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("uv ")
+    ]
+    assert len(calls) == 3, calls
+    assert all(" REPORT_GH_TOKEN=unset" in line for line in calls), calls
+
+
 def test_gate_refuses_a_feed_whose_games_fall_outside_the_window(
     fakes: Path, tmp_path: Path
 ) -> None:
