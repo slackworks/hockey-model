@@ -45,6 +45,28 @@ def count(conn: sqlite3.Connection, table: str) -> int:
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
 
 
+def test_a_refresh_names_the_parser_of_every_source_it_reads(conn: sqlite3.Connection) -> None:
+    """A stored row must name its parser, or `store rebuild --parser` finds nothing (#82)."""
+    refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    recorded = {
+        source: {
+            parser
+            for (parser,) in conn.execute(
+                "SELECT DISTINCT parser FROM observations WHERE source = ?", (source,)
+            )
+        }
+        for (source,) in conn.execute("SELECT DISTINCT source FROM observations")
+    }
+    assert recorded == {
+        "daily_faceoff": {"daily_faceoff:1"},
+        "espn_injuries": {"espn_injuries:2"},
+        "espn_starters": {"espn_scoreboard:1"},
+        "moneypuck": {"moneypuck_team:1", "moneypuck_goalie:1"},
+        "nhl_boxscores": {"nhl_boxscore:1"},
+        "nhl_scores": {"nhl_score:1"},
+    }
+
+
 def test_refresh_writes_every_source(conn: sqlite3.Connection) -> None:
     report = refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
     assert report.errors == ()
