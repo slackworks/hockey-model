@@ -467,6 +467,26 @@ def test_publish_downloads_overwrite_an_earlier_check_file(fakes: Path, tmp_path
 @pytest.mark.parametrize(
     ("env", "message"),
     [
+        ({"FAKE_DOWNLOAD_FAIL": "1"}, f"cannot download index-{DAY}.json from {TAG}"),
+        ({"FAKE_DOWNLOAD_EMPTY": "1"}, f"the download of index-{DAY}.json from {TAG} is empty"),
+    ],
+)
+def test_a_failed_index_download_names_the_index_and_publishes_nothing(
+    fakes: Path, tmp_path: Path, env: dict[str, str], message: str
+) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(
+        fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_ASSETS=f"index-{DAY}.json", **env
+    )
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "Nothing was published" in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", "")
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
         ({"FAKE_DOWNLOAD_FAIL": "1"}, "cannot download"),
         ({"FAKE_DOWNLOAD_EMPTY": "1"}, "is empty"),
     ],

@@ -113,8 +113,15 @@ if [[ "$answer" == "published" ]]; then
     exit 1
   }
   if grep -qxF "index-$day.json" <<<"$existing_assets"; then
-    gh release download "$tag" --pattern "index-$day.json" --dir "$check_dir" --clobber
+    if ! gh release download "$tag" --pattern "index-$day.json" --dir "$check_dir" --clobber; then
+      echo "publish-daily-report: cannot download index-$day.json from $tag; gh's error is above. Nothing was published. Run the report workflow again." >&2
+      exit 1
+    fi
     existing_index="$check_dir/index-$day.json"
+    if [[ ! -s "$existing_index" ]]; then
+      echo "publish-daily-report: the download of index-$day.json from $tag is empty. Nothing was published. Run the report workflow again." >&2
+      exit 1
+    fi
   fi
 fi
 
