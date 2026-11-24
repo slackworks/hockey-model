@@ -27,6 +27,18 @@ def test_the_saved_cache_keeps_no_upgrade_backup(workflow: Path) -> None:
     assert save != -1 and drop < save, "the backup drop must run before the cache save"
 
 
+CHECK = require_path(ROOT / ".github" / "workflows" / "daily-report-check.yml")
+_STORE_KEY = re.compile(r"^\s*key: (hockey-model-store-.*)$", re.MULTILINE)
+
+
+@pytest.mark.parametrize("workflow", [PREPARE, REPORT, CHECK])
+def test_each_attempt_of_a_run_has_its_own_store_key(workflow: Path) -> None:
+    """A re-run keeps its run_id, so a key of the run_id alone restores the store of attempt 1."""
+    keys = _STORE_KEY.findall(workflow.read_text(encoding="utf-8"))
+    assert keys
+    assert set(keys) == {"hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}"}
+
+
 def test_only_a_manual_dispatch_can_force_a_rebuild() -> None:
     """The force flag comes from a dispatch input, so a scheduled run never rebuilds a day."""
     text = PREPARE.read_text(encoding="utf-8")
