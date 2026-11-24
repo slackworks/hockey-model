@@ -27,6 +27,8 @@ GOOD_RESULTS = [
     "success",
     "--download-result",
     "success",
+    "--gate-result",
+    "success",
 ]
 
 if not REAL_UV:
@@ -122,6 +124,16 @@ def test_a_failed_shard_fails_the_run(fakes: Path, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "execution_failed"
     assert "the shard job did not finish (failure)" in _body()
+
+
+def test_a_failed_gate_names_itself_in_the_report(fakes: Path, tmp_path: Path) -> None:
+    # A gate that failed leaves every other job skipped, so the body must name the gate.
+    results = list(GOOD_RESULTS)
+    results[9] = "failure"
+    result = _run(fakes, tmp_path, "--stats", str(_stats(tmp_path)), "--run-url", URL, *results)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "execution_failed"
+    assert "the gate job did not finish (failure)" in _body()
 
 
 def test_a_skipped_download_is_a_cause(fakes: Path, tmp_path: Path) -> None:

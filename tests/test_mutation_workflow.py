@@ -161,3 +161,20 @@ def test_the_gate_stands_aside_only_for_a_manual_run_of_main() -> None:
     """A manual run on a feature branch writes no report, so it must not stop the main run."""
     gate = _job("gate")
     assert "scripts/manual-prepare-pending.sh mutation.yml --branch main" in gate
+
+
+@pytest.mark.parametrize("name", ["report", "file"])
+def test_a_failed_gate_still_reaches_the_report_and_the_issue(name: str) -> None:
+    """A failed run lookup leaves go empty, so the condition also reads the gate result.
+
+    Without it, mutation testing on main stops with no report and no issue.
+    """
+    condition = job_condition(_text(), name)
+    assert "needs.gate.result == 'failure'" in condition
+    assert "needs.gate.outputs.go == 'true'" in condition
+
+
+def test_the_report_passes_the_gate_result_to_the_script() -> None:
+    report = _job("report")
+    assert "GATE_RESULT: ${{ needs.gate.result }}" in report
+    assert '--gate-result "$GATE_RESULT"' in report

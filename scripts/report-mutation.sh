@@ -2,8 +2,8 @@
 # Files, updates, or comments on the one open mutation report for a run.
 #
 # Usage: scripts/report-mutation.sh --stats FILE --run-url URL
-#         (--execution success|failure | --shard-result R --merge-result R
-#          --export-result R --download-result R)
+#         (--execution success|failure | --gate-result R --shard-result R
+#          --merge-result R --export-result R --download-result R)
 #         [--reason TEXT]... [--file-issue]
 #        scripts/report-mutation.sh --status S --body FILE --run-url URL --file-issue
 #
@@ -67,7 +67,7 @@ while [[ $# -gt 0 ]]; do
     RUN_URL="${2:-}"
     shift 2
     ;;
-  --shard-result | --merge-result | --export-result | --download-result)
+  --gate-result | --shard-result | --merge-result | --export-result | --download-result)
     need_value "$@"
     if [[ ! "${2:-}" =~ ^($OUTCOMES)$ ]]; then
       echo "report-mutation: $1 must be one of $OUTCOMES, got ${2:-}" >&2
@@ -141,7 +141,7 @@ else
   # One call decides the status and writes the body, so both read the same stats.
   args=(status --stats "$STATS" --out "$BODY" --run-url "$RUN_URL")
   if ((${#RESULTS[@]} > 0)); then
-    for key in shard merge export download; do
+    for key in gate shard merge export download; do
       args+=("--$key-result" "${RESULTS[$key]:-unknown}")
     done
   else

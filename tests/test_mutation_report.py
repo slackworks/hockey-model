@@ -317,23 +317,63 @@ def test_status_names_the_reason_from_the_options(
     ("results", "expected"),
     [
         (
-            {"shard": "success", "merge": "success", "export": "success", "download": "success"},
+            {
+                "gate": "success",
+                "shard": "success",
+                "merge": "success",
+                "export": "success",
+                "download": "success",
+            },
             "success",
         ),
         (
-            {"shard": "failure", "merge": "success", "export": "success", "download": "success"},
+            {
+                "gate": "success",
+                "shard": "failure",
+                "merge": "success",
+                "export": "success",
+                "download": "success",
+            },
             "failure",
         ),
         (
-            {"shard": "success", "merge": "cancelled", "export": "success", "download": "success"},
+            {
+                "gate": "failure",
+                "shard": "success",
+                "merge": "success",
+                "export": "success",
+                "download": "success",
+            },
             "failure",
         ),
         (
-            {"shard": "success", "merge": "success", "export": "skipped", "download": "success"},
+            {
+                "gate": "success",
+                "shard": "success",
+                "merge": "cancelled",
+                "export": "success",
+                "download": "success",
+            },
             "failure",
         ),
         (
-            {"shard": "success", "merge": "success", "export": "success", "download": "failure"},
+            {
+                "gate": "success",
+                "shard": "success",
+                "merge": "success",
+                "export": "skipped",
+                "download": "success",
+            },
+            "failure",
+        ),
+        (
+            {
+                "gate": "success",
+                "shard": "success",
+                "merge": "success",
+                "export": "success",
+                "download": "failure",
+            },
             "failure",
         ),
     ],
@@ -360,6 +400,8 @@ def test_a_failed_job_names_itself_under_the_counts(tmp_path: Path) -> None:
             str(out),
             "--run-url",
             "https://example.test/run/7",
+            "--gate-result",
+            "success",
             "--shard-result",
             "failure",
             "--merge-result",
@@ -691,3 +733,33 @@ def test_a_run_with_no_timed_out_mutant_and_no_list_says_nothing(tmp_path: Path)
     args = ["--stats", str(stats), "--execution", "success", "--out", str(out), "--run-url", "u"]
     report.main(["status", *args, "--timeouts", str(tmp_path / "none.json")])
     assert "timed-out mutants" not in out.read_text(encoding="utf-8")
+
+
+def test_a_failed_gate_names_itself_in_the_body(tmp_path: Path) -> None:
+    """A failed run lookup leaves the other jobs skipped, so the body must name the gate."""
+    out = tmp_path / "body.md"
+    code = report.main(
+        [
+            "status",
+            "--stats",
+            str(tmp_path / "absent.json"),
+            "--out",
+            str(out),
+            "--run-url",
+            "https://example.test/run/10",
+            "--gate-result",
+            "failure",
+            "--shard-result",
+            "skipped",
+            "--merge-result",
+            "skipped",
+            "--export-result",
+            "unknown",
+            "--download-result",
+            "skipped",
+        ]
+    )
+    assert code == 0
+    body = out.read_text(encoding="utf-8")
+    assert "the gate job did not finish (failure)" in body
+    assert body.index("the gate job") < body.index("the shard job")
