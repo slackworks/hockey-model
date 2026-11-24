@@ -56,13 +56,21 @@ def _run(args: argparse.Namespace) -> int:
             report, records = run_backtest(conn, candidates=FEATURES, workers=args.workers)
         finally:
             conn.close()
-        hashes = write_golden_files(report, records, args.out)
     except HockeyModelError as error:
         print(f"backtest_golden: {error}", file=sys.stderr)
         return 1
     except sqlite3.Error as error:
         print(f"backtest_golden: {error}; {sqlite_failure_fix(error)}", file=sys.stderr)
         return 1
+    except OSError as error:
+        # A worker pool can run out of open files, and a code file can be unreadable.
+        print(
+            f"backtest_golden: the backtest failed: {error}; fix the cause, then run again",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        hashes = write_golden_files(report, records, args.out)
     except OSError as error:
         print(
             f"backtest_golden: cannot write the files to {args.out}: {error}; "
