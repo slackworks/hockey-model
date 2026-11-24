@@ -179,6 +179,30 @@ def test_write_report_writes_markdown_and_json(store: sqlite3.Connection, tmp_pa
     assert md_path.read_text(encoding="utf-8").startswith("# NHL predictions for 2026-01-20")
 
 
+def test_a_failed_write_changes_neither_report_file(
+    store: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    report = build_report(store, _model(store), DAY, now=NOW)
+    md_path, json_path = write_report(report, out)
+    before = (md_path.read_bytes(), json_path.read_bytes())
+    later = build_report(store, _model(store), DAY, now=NOW + timedelta(minutes=5))
+    real_write = Path.write_text
+
+    def full_disk(path: Path, text: str, encoding: str | None = None) -> int:
+        if path.name.endswith(".json.tmp"):
+            path.write_bytes(b"{")
+            raise OSError(28, "No space left on device")
+        return real_write(path, text, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    with pytest.raises(OSError, match="No space"):
+        write_report(later, out)
+    assert (md_path.read_bytes(), json_path.read_bytes()) == before
+    assert {p.name for p in out.iterdir()} == {md_path.name, json_path.name}
+
+
 def test_remote_state_cannot_break_the_markdown_table(tmp_path: Path) -> None:
     hostile = GameRow(
         99, 20252026, 2, utc("2026-01-20T23:00"), "TOR", "BOS", "A|B\nC", None, None, None
