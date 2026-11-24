@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import time
 from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from hypothesis import strategies as st
 from hockey_model.backtest import units
 from hockey_model.backtest.units import (
     Unit,
+    _pool_failure,
     _timed,
     database_path,
     open_read_only,
@@ -103,9 +105,16 @@ def test_a_failed_unit_stops_the_running_workers_at_once() -> None:
     assert time.monotonic() - started < 30
 
 
-def test_a_worker_that_dies_names_the_unfinished_units() -> None:
+def test_a_worker_that_dies_names_the_unit_that_died() -> None:
+    """The unit that killed its worker has no result, so the message names it.
+
+    A second unit runs beside it, so the pool holds a future that is still running. Which of
+    the two is still running when the pool breaks depends on the machine, so this test states
+    only the unit that cannot have a result. The naming rule itself is stated without a pool
+    in ``test_a_dead_worker_names_the_units_whose_results_did_not_come_back``.
+    """
     units = [Unit("first", die, (3,)), Unit("second", slow_value, (30.0, 1))]
-    with pytest.raises(HockeyModelError, match=r"a worker process died.*'first', 'second'"):
+    with pytest.raises(HockeyModelError, match=r"a worker process died.*'first'"):
         run_units(units, 2)
 
 
@@ -114,7 +123,7 @@ def die_later(delay: float, code: int) -> int:
     os._exit(code)
 
 
-def test_a_worker_that_dies_names_only_the_units_that_did_not_finish() -> None:
+def test_a_worker_that_dies_names_no_unit_that_finished() -> None:
     units = [
         Unit("done", square, (2,)),
         Unit("dies", die_later, (1.0, 3)),
@@ -122,7 +131,7 @@ def test_a_worker_that_dies_names_only_the_units_that_did_not_finish() -> None:
     ]
     with pytest.raises(HockeyModelError, match="a worker process died") as caught:
         run_units(units, 3)
-    assert "'dies', 'slow'" in str(caught.value)
+    assert "'dies'" in str(caught.value)
     assert "'done'" not in str(caught.value)
 
 
@@ -314,3 +323,19 @@ def test_the_elapsed_time_of_a_unit_is_the_difference_of_two_clock_readings(
     readings = iter([10.0, 12.5])
     monkeypatch.setattr(units, "time", SimpleNamespace(monotonic=lambda: next(readings)))
     assert _timed(Unit("u", square, (3,))) == (2.5, 9)
+
+
+def test_a_dead_worker_names_the_units_whose_results_did_not_come_back() -> None:
+    """The message names the units outside the finished set, and no other unit.
+
+    A unit whose result came back is finished, so a run must not report it as one that did
+    not finish. The message states that rule here without a real pool, so no timing decides
+    whether this test passes.
+    """
+    names = ["first", "second", "third"]
+    units = [Unit(name, square, (2,)) for name in names]
+    broken = BrokenProcessPool("A process in the process pool was terminated abruptly")
+    message = str(_pool_failure(units, 0, broken, {0, 2}))
+    assert "'second'" in message
+    assert "'first'" not in message
+    assert "'third'" not in message
