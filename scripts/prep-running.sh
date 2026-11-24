@@ -102,33 +102,16 @@ if ! command -v gh >/dev/null; then
   exit 2
 fi
 
-# The standard error of gh goes to a file, so a warning from gh cannot enter the JSON that
-# jq reads, as manual-prepare-pending.sh does.
-err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
+# shellcheck source=scripts/run-list.sh
+source "$(dirname "$0")/run-list.sh"
+run_list_init prep-running
 
 # Five states can hold the group. `in_progress` runs it. `pending` waits for the group, which
 # is the case when a report build job holds it. `queued`, `waiting`, and `requested` wait for a
 # runner or for approval, and each holds the group once it starts (#163).
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-statuses=(in_progress pending queued waiting requested)
-
-# Print the id of each daily-prepare run that the pages hold, one per line. Each page is a
-# separate JSON object, so the caller passes the whole stream through jq with -s. A list that
-# jq cannot read prints nothing and fails, so the caller never reads a bad payload as no
-# prepare.
-prepare_ids() {
-  local answer
-  if ! answer="$(jq -rs '
-    .[].workflow_runs[]
-    | select((.path // "") | endswith("/daily-prepare.yml"))
-    | .id
-  ' 2>&1)"; then
-    echo "prep-running: cannot read the workflow run list: $answer" >&2
-    return 1
-  fi
-  printf '%s' "$answer"
-}
+# The run list is read here, because a run of another workflow holds no store group.
+workflow="daily-prepare.yml"
 
 # Print a header line, then "<JOB> <START>" for each job of run $1 that the --timeout flags
 # name and that holds the group. A job that has not started prints an empty START, because it
@@ -149,8 +132,8 @@ prepare_ids() {
 job_holds() {
   local run_id="$1" answer names
   if ! answer="$(gh api --paginate \
-    "repos/{owner}/{repo}/actions/runs/${run_id}/jobs?per_page=100" 2>"$err")"; then
-    echo "prep-running: cannot read the jobs of run ${run_id}: $(cat "$err")" >&2
+    "repos/{owner}/{repo}/actions/runs/${run_id}/jobs?per_page=100" 2>"$run_list_err")"; then
+    echo "prep-running: cannot read the jobs of run ${run_id}: $(cat "$run_list_err")" >&2
     return 1
   fi
   if ! names="$(printf '%s\n' "${!TIMEOUTS[@]}" | jq -R . | jq -cs . 2>&1)"; then
@@ -238,13 +221,9 @@ run_answer() {
 # A status that holds a prepare run breaks the caller's loop, because an earlier status holds
 # the group first. ISO 8601 UTC strings compare correctly as text while both sides end in `Z`.
 status_answer() {
-  local status="$1" runs ids id answer start end latest_end="" longest=0 name
-  if ! runs="$(gh api --paginate \
-    "repos/{owner}/{repo}/actions/runs?status=${status}&per_page=100" 2>"$err")"; then
-    echo "prep-running: cannot read the ${status} workflow runs: $(cat "$err")" >&2
-    return 1
-  fi
-  if ! ids="$(prepare_ids <<<"$runs")"; then
+  local status="$1" ids id answer start end latest_end="" longest=0 name
+  # The run list holds every event, so this read keeps the runs of any event.
+  if ! ids="$(run_list_ids "$workflow" "" "" "$status")"; then
     return 1
   fi
   if [[ -z "$ids" ]]; then
@@ -282,7 +261,7 @@ status_answer() {
 }
 
 answer=""
-for status in "${statuses[@]}"; do
+for status in "${RUN_LIST_STATUSES[@]}"; do
   if ! found="$(status_answer "$status")"; then
     exit 2
   fi

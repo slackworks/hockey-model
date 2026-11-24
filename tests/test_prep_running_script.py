@@ -310,7 +310,7 @@ def test_a_payload_that_jq_cannot_read_is_not_an_empty_answer(fakes: Path, tmp_p
     result = _lookup(env)
     assert result.returncode == 2
     assert result.stdout == ""
-    assert "cannot read the workflow run list" in result.stderr
+    assert "cannot read the in_progress workflow run list" in result.stderr
 
 
 @pytest.mark.parametrize("started", ["not-a-time", "2026-13-45T99:99:99Z"])

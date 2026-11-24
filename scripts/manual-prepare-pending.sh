@@ -78,27 +78,16 @@ if ! command -v gh >/dev/null; then
   exit 2
 fi
 
-# One status per call, because the run list filters by one status. The standard error of gh
-# goes to a file, so a warning from gh does not enter the JSON that jq reads.
-err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
-for status in in_progress pending queued waiting requested; do
-  if ! runs="$(gh api --paginate \
-    "repos/{owner}/{repo}/actions/runs?status=${status}&event=workflow_dispatch&per_page=100" \
-    2>"$err")"; then
-    echo "manual-prepare-pending: cannot read the ${status} workflow runs: $(cat "$err")" >&2
+# shellcheck source=scripts/run-list.sh
+source "$(dirname "$0")/run-list.sh"
+run_list_init manual-prepare-pending
+# One status per call, because the run list filters by one status. Only a manual run counts,
+# so the read asks for the workflow_dispatch event.
+for status in "${RUN_LIST_STATUSES[@]}"; do
+  if ! found="$(run_list_ids "$workflow" "$branch" workflow_dispatch "$status")"; then
     exit 2
   fi
-  if ! found="$(jq -rs --arg workflow "/${workflow}" --arg branch "$branch" '
-    [.[].workflow_runs[]
-      | select((.path // "") | endswith($workflow))
-      | select($branch == "" or .head_branch == $branch)
-      | select(.event == "workflow_dispatch")] | length
-  ' <<<"$runs" 2>"$err")"; then
-    echo "manual-prepare-pending: cannot read the ${status} workflow run list: $(cat "$err")" >&2
-    exit 2
-  fi
-  if [[ "$found" != "0" ]]; then
+  if [[ -n "$found" ]]; then
     echo "yes"
     exit 0
   fi
