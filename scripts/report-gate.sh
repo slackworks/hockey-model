@@ -178,8 +178,8 @@ if [[ "$blocks" == "true" && "$due" == "true" && "$force" != true ]]; then
   echo "::warning::report-gate: a daily-prepare run holds the hockey-model-store group, and its" \
     "window ends at or after the first puck drop of $day. This run would wait behind it and" \
     "publish after the puck drop, so it builds nothing (#163)." >&2
-  jq -c --arg tag "$tag" --arg date "$day" \
-    '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}' <<<"{}"
+  jq -nc --arg tag "$tag" --arg date "$day" \
+    '{due: false, publish: false, tag: $tag, reason: "prepare-wait", date: $date}'
   exit 0
 fi
 
@@ -250,8 +250,8 @@ if [[ "$reason" == "replace" ]]; then
     echo "::warning::report-gate: a manual daily-prepare run waits or runs, and $day already" \
       "has a release. This run would replace the day, and its build would take the one" \
       "waiting slot of the hockey-model-store group, so it stands aside (#295)." >&2
-    jq -c --arg tag "$tag" --arg date "$day" \
-      '{due: false, publish: false, tag: $tag, reason: "manual-wait", date: $date}' <<<"{}"
+    jq -nc --arg tag "$tag" --arg date "$day" \
+      '{due: false, publish: false, tag: $tag, reason: "manual-wait", date: $date}'
     exit 0
   fi
 fi
