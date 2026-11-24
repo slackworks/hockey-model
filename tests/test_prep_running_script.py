@@ -203,6 +203,24 @@ def test_a_prepare_job_that_stopped_early_holds_no_group(fakes: Path, tmp_path: 
     assert (result.returncode, result.stdout) == (0, "")
 
 
+def test_a_run_with_only_its_gate_job_listed_opens_its_window_now(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """The holder jobs of a run appear one at a time, after its gate job (#311).
+
+    A run that just started lists its gate job and no holder yet. The gate holds no group,
+    so the run would read as no prepare, and the report gate would let a replace build start
+    behind it. The holder can still use its whole window, so the window opens now.
+    """
+    _run_now(
+        fakes,
+        tmp_path,
+        180,
+        FAKE_RUNS_JSON_IN_PROGRESS=_one_run(_STARTED),
+        FAKE_JOBS_JSON=_job_rows(_job_row("gate", "2026-11-04T06:00:00Z")),
+    )
+
+
 def test_the_run_with_the_latest_end_names_the_wait(fakes: Path, tmp_path: Path) -> None:
     """The group frees only after every holder ends, so the latest end is the answer.
 

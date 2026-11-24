@@ -28,6 +28,12 @@
 # creation time, so the script reads that value only from a job that is `in_progress` or
 # `completed`. A job that concluded with `skipped` holds no group.
 #
+# A run lists its jobs one at a time, so a run that just started lists only its gate job. That
+# run has not started its holders, and each holder still holds the group once it appears
+# (#311). The script therefore gives such a run the longest window from now, unless its gate
+# job has completed. Without that rule the run reads as no prepare only seconds after it
+# started, and the report gate lets a replace build run into the puck drop.
+#
 # A run that the group holds has not started. GitHub calls that state `pending`, and `queued`
 # means it waits for a runner. This script uses the current time for both, because that is the
 # earliest instant that the run can start. The run object does carry `run_started_at` in
@@ -124,12 +130,17 @@ prepare_ids() {
   printf '%s' "$answer"
 }
 
-# Print "<JOB> <START>" for each job of run $1 that the --timeout flags name and that holds
-# the group. A job that has not started prints an empty START, because it can still use its
-# whole timeout. The holder is a job that GitHub holds just before it starts or that has
-# started, so a job with any other state prints no line. The set that holds is written out,
-# because each job state that does not hold is a separate state: a skipped job, a cancelled
-# job, one that failed before it touched the store, and one that completed hours ago.
+# Print a header line, then "<JOB> <START>" for each job of run $1 that the --timeout flags
+# name and that holds the group. A job that has not started prints an empty START, because it
+# can still use its whole timeout. The holder is a job that GitHub holds just before it starts
+# or that has started, so a job with any other state prints no line. The set that holds is
+# written out, because each job state that does not hold is a separate state: a skipped job, a
+# cancelled job, one that failed before it touched the store, and one that completed hours ago.
+#
+# The header is `meta <LISTED> <GATE_DONE>`. LISTED says whether the run lists any job that a
+# --timeout flag names, and GATE_DONE says whether its `gate` job has completed. The caller
+# needs both: a run that lists only its gate job has not started its holders yet, and the
+# holders still hold the group once they appear (#311).
 #
 # A --timeout name that the run does not carry prints no line, and that is not an error. The
 # jobs of the split prepare appear one at a time (#311): while the skip job runs, the job list
@@ -149,15 +160,31 @@ job_holds() {
   if ! answer="$(jq -rs --argjson names "$names" '
     def holds: . == "in_progress" or . == "queued" or . == "waiting"
       or . == "pending" or . == "requested";
-    .[].jobs[]
-    | select(.status | holds)
-    | select(.name as $n | $names | index($n))
-    | "\(.name) \(if .status == "in_progress" then (.started_at // "") else "" end)"
+    def named: .name as $n | $names | index($n);
+    [.[].jobs[]] as $jobs
+    | "meta \(if any($jobs[]; named) then 1 else 0 end)"
+      + " \(if any($jobs[]; .name == "gate" and .status == "completed") then 1 else 0 end)",
+      ($jobs[]
+        | select(.status | holds)
+        | select(named)
+        | "\(.name) \(if .status == "in_progress" then (.started_at // "") else "" end)")
   ' <<<"$answer" 2>&1)"; then
     echo "prep-running: cannot read the job list of run ${run_id}: $answer" >&2
     return 1
   fi
   printf '%s' "$answer"
+}
+
+# Print the longest of the --timeout values. A run with no job start can reach the group with
+# whichever job it admits first, so the longest window is the one to plan for (#311).
+longest_timeout() {
+  local name longest=0
+  for name in "${!TIMEOUTS[@]}"; do
+    if ((${TIMEOUTS[$name]} > longest)); then
+      longest="${TIMEOUTS[$name]}"
+    fi
+  done
+  printf '%s' "$longest"
 }
 
 # Print the instant that a window ends. The window opens at $1 and lasts $2 minutes. A jq
@@ -170,11 +197,20 @@ window_end() {
 # Print the latest end of every holder in one run, or nothing when the run has no holder. Both
 # holders of the split prepare can be live in one run, so the answer is the holder that ends
 # last (#311).
+#
+# A run that lists no holder job yet holds the group as soon as one appears, and it can reach
+# whichever job it admits first. Unless its gate job has completed, the run therefore opens the
+# longest window from now. Without this, a run seconds after its start reads as no prepare, and
+# the report gate lets a replace build run into the puck drop (#311).
 run_answer() {
-  local run_id="$1" holds job start end latest_end=""
+  local run_id="$1" holds job start end latest_end="" listed="" gate_done=""
   holds="$(job_holds "$run_id")" || return 1
   while read -r job start; do
     [[ -n "$job" ]] || continue
+    if [[ "$job" == "meta" ]]; then
+      read -r listed gate_done <<<"$start"
+      continue
+    fi
     # A job that has not started can still use its whole window from now.
     if [[ -z "$start" ]]; then
       start="$now"
@@ -188,6 +224,13 @@ run_answer() {
       latest_end="$end"
     fi
   done <<<"$holds"
+  if [[ -z "$latest_end" && "$listed" == 0 && "$gate_done" == 0 ]]; then
+    if ! latest_end="$(window_end "$now" "$(longest_timeout)")"; then
+      echo "prep-running: cannot add $(longest_timeout) minutes to '${now}', which this" \
+        "script read as the current time: $latest_end" >&2
+      return 1
+    fi
+  fi
   printf '%s' "$latest_end"
 }
 
