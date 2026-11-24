@@ -109,3 +109,16 @@ The play-by-play design estimates about 600 MB for its backfill. The payloads of
 - MoneyPuck `all_teams.csv` is archived at the row level only. A full copy each day costs gigabytes in a year for a file that MoneyPuck can serve again. The columns that the wide tables do not keep are an unsupported capture case, and the README says so.
 - Versioned boxscores live beside the first-final tables, so the live model cannot change by accident. A later issue can move a reader to `LATEST` on purpose.
 - The revisit days are the same as the play-by-play revisit days in #35, so one schedule serves both.
+
+## Slices
+
+The first slice ships the storage, the sanitizer, and the capture (Code steps 1 to 4).
+It is schema version 9.
+`store/archive.py` holds `record_observation`, `payload_bytes`, `observations_for`, and the
+`ARCHIVED_SOURCES` list.
+`store/recording.py` holds the capture wrapper and the `Reading` value that names a parser.
+The MoneyPuck team file writes its observation and no bytes, so the one source with no payload
+is named in the code and held by a test.
+
+The second slice holds the versioned boxscores (Code steps 5 and 6), the `store rebuild`
+command (step 7), and the revisit policy. It is its own issue.

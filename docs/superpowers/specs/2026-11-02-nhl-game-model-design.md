@@ -129,6 +129,12 @@ When about a season of injury reads exists, #8 fits the feature on those reads, 
 The NHL boxscore skater rows are stored for the same reason.
 In v1, the injury reads only stop an injured goalie from being the estimated starter.
 
+**Decided (#325):** a status that this code does not name does not fail the read.
+ESPN writes a status that the list does not hold, such as `Suspension`, and a rejected status failed the whole read.
+A status that is not `Day-To-Day` counts as out, so an unnamed status and an unknown future status keep the injured-goalie rule safe.
+The read stores the status as written, and the refresh report gets one note that names the status, the player, and the team.
+A person then adds the status to the list, if it belongs there.
+
 ESPN overwrites the morning status after a game.
 Every past game that was checked (2021, 2024, and 2026) shows "Confirmed".
 No source has a history of morning "likely" reads, except about 500 rows in leaguecheatr's database.
