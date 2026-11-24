@@ -8,7 +8,9 @@ from typing import NamedTuple
 from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of, game_day_window
 from hockey_model.sources.nhl import (
+    BOXSCORE_PARSER,
     FINAL_STATES,
+    SCORE_PARSER,
     BoxscoreRows,
     boxscore_url,
     fetch_boxscore,
@@ -19,6 +21,7 @@ from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store.db import StoreError
 from hockey_model.store.nhl_writes import game_is_missing_boxscore, write_boxscore, write_games
 from hockey_model.store.reads import game_row, unresolved_games
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.source_reads import (
     failed_since,
@@ -245,7 +248,7 @@ def read_days(
         is_due = day in due
         open_before = _unresolved_on(run, day) if is_due else 0
         before = (is_due and _day_complete(run, day), open_before)
-        ok = run.attempt(SCORES, score_day_url(day), unit)
+        ok = run.attempt(SCORES, score_day_url(day), unit, Reading(SCORE_PARSER))
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _read_finished(run, day, *before):
@@ -366,7 +369,7 @@ def read_boxscores(
             write_boxscore(run.conn, game_id, rows, stamp)
             return 1
 
-        ok = run.attempt(BOXSCORES, url, unit)
+        ok = run.attempt(BOXSCORES, url, unit, Reading(BOXSCORE_PARSER))
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _after_read(run, game_id, unresolved):

@@ -12,6 +12,7 @@ from seeding import add_game
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.moneypuck import goalie_games_url
 from hockey_model.store import refresh_other
+from hockey_model.store.archive import observations_for
 from hockey_model.store.db import connect
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.source_reads import abandoned_urls
@@ -60,6 +61,12 @@ def test_an_unpublished_file_never_becomes_a_known_gap(conn: sqlite3.Connection)
         moneypuck_run(conn, URL, missing(URL, 404), days)
     assert failed_reads(conn, URL) == 0
     assert URL not in abandoned_urls(conn, "moneypuck")
+
+
+def test_an_expected_absence_writes_no_observation(conn: sqlite3.Connection) -> None:
+    """An absence is not a fetch that the archive records, so it holds no row for that URL."""
+    moneypuck_run(conn, URL, missing(URL, 404))
+    assert URL not in [o.url for o in observations_for(conn, "moneypuck", None)]
 
 
 def test_the_file_is_read_when_it_appears_after_404_runs(conn: sqlite3.Connection) -> None:

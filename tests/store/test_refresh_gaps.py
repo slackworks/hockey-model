@@ -29,6 +29,7 @@ from hockey_model.sources.nhl import boxscore_url, score_day_url
 from hockey_model.store import refresh_nhl, refresh_other
 from hockey_model.store.db import connect
 from hockey_model.store.moneypuck_writes import write_team_games
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import read_boxscores
@@ -480,6 +481,6 @@ def test_a_hidden_live_feed_failure_keeps_the_errors_of_earlier_reads(
     def failing(stamp: datetime) -> int:
         raise SourceError("daily_faceoff", key, "HTTP 403")
 
-    refresh_other._attempt_live(run, "daily_faceoff", key, failing)
+    refresh_other._attempt_live(run, "daily_faceoff", key, failing, Reading("test:1"))
     assert run.errors == [earlier]
     assert any("still failing" in note for note in run.notes)

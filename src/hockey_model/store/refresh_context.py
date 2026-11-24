@@ -11,7 +11,16 @@ from hockey_model import progress
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
+from hockey_model.store.archive import record_observation
 from hockey_model.store.db import StoreError
+from hockey_model.store.recording import (
+    DEFAULT_READING,
+    Capture,
+    Reading,
+    RecordedFetch,
+    RecordingClient,
+    key_of,
+)
 from hockey_model.store.source_reads import abandoned_urls, record_failed_read, record_read
 from hockey_model.types import HockeyModelError
 
@@ -98,35 +107,58 @@ class RefreshRun:
         source: str,
         url: str,
         unit: Callable[[datetime], int],
-        expected_absence: Callable[[Exception], str | None] | None = None,
+        reading: Reading = DEFAULT_READING,
     ) -> bool:
         """Run one unit of work in one transaction. Return False when it wrote nothing.
 
         A failed unit writes nothing, adds its error to the report, and leaves a
         ``source_reads`` row with ``ok = 0``. The unit returns the rows it wrote.
 
-        ``expected_absence`` takes the failure and returns a note when the failure is a resource
-        that does not exist yet. The note replaces the error, and no failed read is stored, so the
-        absence never becomes a known gap. The next refresh tries the unit again. The
-        return value is False for an expected absence too, so a caller that counts
-        failures counts it, and the callback must name one file only.
+        Each request that the unit makes writes one ``observations`` row with its bytes, in
+        the same transaction as the rows that the unit wrote. ``reading`` names the parser, and
+        says whether the bytes are kept.
+
+        ``reading.expected_absence`` takes the failure and returns a note when the failure is a
+        resource that does not exist yet. The note replaces the error, and no failed read is
+        stored, so the absence never becomes a known gap. The next refresh tries the unit again.
+        The return value is False for an expected absence too, so a caller that counts failures
+        counts it, and the callback must name one file only.
         """
         stamp = self.stamp()
+        capture = Capture(source, key_of(source, url), stamp, reading)
+        inner = self.client
+        recorded = RecordingClient(inner, sanitize=reading.sanitize)
+        self.client = recorded
         try:
             with self.conn:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
+                self._observe(capture, recorded.records, None)
         except SOURCE_FAILURES as exc:
-            absent = expected_absence(exc) if expected_absence else None
+            absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:
                 self.notes.append(absent)
                 return False
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
+                self._observe(capture, recorded.records, exc)
             self.errors.append(exc)
             return False
+        finally:
+            self.client = inner
         self.written[source] += written
         return True
+
+    def _observe(
+        self, capture: Capture, records: list[RecordedFetch], failure: Exception | None
+    ) -> None:
+        """Write one observation for each request that the unit made.
+
+        A failed unit writes them after its rollback, with the failure status and the bytes
+        that did arrive, so a shape failure keeps the payload that caused it (#82).
+        """
+        for fetch in capture.fetches(records, failure):
+            record_observation(self.conn, fetch)
 
     def report(self) -> RefreshReport:
         """Return the final report of this run."""
