@@ -467,6 +467,26 @@ def test_publish_downloads_overwrite_an_earlier_check_file(fakes: Path, tmp_path
 @pytest.mark.parametrize(
     ("env", "message"),
     [
+        ({"FAKE_DOWNLOAD_FAIL": "1"}, f"cannot download index-{DAY}.json from {TAG}"),
+        ({"FAKE_DOWNLOAD_EMPTY": "1"}, f"the download of index-{DAY}.json from {TAG} is empty"),
+    ],
+)
+def test_a_failed_index_download_names_the_index_and_publishes_nothing(
+    fakes: Path, tmp_path: Path, env: dict[str, str], message: str
+) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(
+        fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_ASSETS=f"index-{DAY}.json", **env
+    )
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "Nothing was published" in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", "")
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
         ({"FAKE_DOWNLOAD_FAIL": "1"}, "cannot download"),
         ({"FAKE_DOWNLOAD_EMPTY": "1"}, "is empty"),
     ],
@@ -488,3 +508,83 @@ def test_a_failed_version_download_is_not_called_a_collision(
     assert message in result.stderr
     assert "other bytes" not in result.stderr
     assert not _calls_with(tmp_path, "gh release upload", "")
+
+
+def _release_with_index(tmp_path: Path, generated: str) -> Path:
+    """Put an index with one build of ``generated`` where the fake release download finds it."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    index = add_build(None, valid_report(generated))
+    (remote / f"index-{DAY}.json").write_text(json.dumps(index), encoding="utf-8")
+    return remote
+
+
+def test_a_retry_of_an_older_build_leaves_the_aliases_with_the_newest_build(
+    fakes: Path, tmp_path: Path
+) -> None:
+    # The local build is 20:20:13. A later build at 21:00:00 is already in the index (#318).
+    _write_report(tmp_path / "report")
+    remote = _release_with_index(tmp_path, "2026-11-04T21:00:00.000000+00:00")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"index-{DAY}.json\nreport-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"older than the newest build report-{DAY}-210000Z" in result.stderr
+    assert _calls_with(tmp_path, "gh release upload", f"report-{DAY}-202013Z.json")
+    index_upload = _calls_with(tmp_path, "gh release upload", f"index-{DAY}.json")
+    assert index_upload and "--clobber" in index_upload[0]
+    assert not _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+    assert not _calls_with(tmp_path, "gh release upload", f"backtest-{DAY}.json")
+    assert not _calls_with(tmp_path, "gh release edit", "")
+    published = json.loads((tmp_path / "report" / f"index-{DAY}.json").read_text("utf-8"))
+    assert [build["file"] for build in published["builds"]] == [
+        f"report-{DAY}-202013Z.json",
+        f"report-{DAY}-210000Z.json",
+    ]
+
+
+def test_the_newest_build_moves_the_aliases_and_the_notes(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    remote = _release_with_index(tmp_path, "2026-11-04T10:00:00.000000+00:00")
+    result = _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"index-{DAY}.json\nreport-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+    )
+    assert result.returncode == 0, result.stderr
+    alias = _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+    assert alias and "--clobber" in alias[0]
+    assert _calls_with(tmp_path, "gh release edit", TAG)
+    notes = (tmp_path / "report" / f"release-notes-{DAY}.md").read_text("utf-8")
+    assert f"UTC, report-{DAY}-202013Z." in notes
+
+
+def test_a_release_from_before_the_index_names_the_builds_it_leaves_out(
+    fakes: Path, tmp_path: Path
+) -> None:
+    _write_report(tmp_path / "report")
+    old = f"report-{DAY}-101500Z"
+    assets = "\n".join([f"{old}.md", f"{old}.json", f"report-{DAY}.json", f"report-{DAY}.md"])
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_ASSETS=assets)
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" in result.stderr
+    assert f"The earlier builds {old} stay on the release with no index entry" in result.stderr
+    notes = (tmp_path / "report" / f"release-notes-{DAY}.md").read_text("utf-8")
+    assert f"The builds {old} are from before index-{DAY}.json" in notes
+
+
+def test_a_release_with_an_index_gives_no_warning(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    remote = _release_with_index(tmp_path, "2026-11-04T10:00:00.000000+00:00")
+    assets = "\n".join([f"index-{DAY}.json", f"report-{DAY}-100000Z.json"])
+    result = _publish(
+        fakes, tmp_path, FAKE_RELEASES=f"{TAG}\n", FAKE_ASSETS=assets, FAKE_REMOTE_DIR=str(remote)
+    )
+    assert result.returncode == 0, result.stderr
+    assert "::warning::" not in result.stderr

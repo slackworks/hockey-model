@@ -9,6 +9,20 @@ from enum import StrEnum
 class HockeyModelError(Exception):
     """Base class for caller-actionable hockey-model errors."""
 
+    def __reduce__(self) -> tuple[object, ...]:
+        # A backtest worker sends its error back by pickle. The default pickle calls the class
+        # with ``args``, and a subclass __init__ takes other arguments, so the copy is built here.
+        return _rebuild_error, (type(self), self.args, dict(vars(self)))
+
+
+def _rebuild_error(
+    cls: type[HockeyModelError], args: tuple[object, ...], state: dict[str, object]
+) -> HockeyModelError:
+    error = cls.__new__(cls)
+    error.args = args
+    vars(error).update(state)
+    return error
+
 
 class AmbiguousPlayerError(HockeyModelError):
     """Raised when a player reference matches more than one player."""

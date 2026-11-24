@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 from fnmatch import fnmatch
 from pathlib import Path
 from types import ModuleType
@@ -188,6 +189,29 @@ def test_unrun_by_shard_reports_nothing_when_every_mutant_has_a_result(tmp_path:
 def test_unrun_by_shard_reports_nothing_for_a_module_with_no_file(tmp_path: Path) -> None:
     # A module with no .meta file at all is missing_results' business, not this one's.
     assert shards.unrun_by_shard(tmp_path) == {}
+
+
+@pytest.mark.parametrize("text", ["{not json", '{"hash_by_function_name": {}}', "[]"])
+def test_unrun_by_shard_names_a_merged_file_it_cannot_read(tmp_path: Path, text: str) -> None:
+    # A file that cannot be read is not a module whose mutants all have a result.
+    path = tmp_path / "src/hockey_model/sources/nhl.py.meta"
+    path.parent.mkdir(parents=True)
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(shards.ShardError, match=re.escape(str(path))):
+        shards.unrun_by_shard(tmp_path)
+
+
+def test_merge_command_refuses_a_target_with_results_of_an_earlier_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A file in the target that no shard wrote this time would read as a result of this run.
+    _write_meta(tmp_path / "shards/shard-0/src/hockey_model/sources/nhl.py.meta", {"n.x__1": 0})
+    stale = tmp_path / "into/src/hockey_model/backtest/metrics.py.meta"
+    _write_meta(stale, {"m.x__1": 0})
+    args = ["merge", "--from", str(tmp_path / "shards"), "--into", str(tmp_path / "into")]
+    assert shards.main(args) == 1
+    assert f"{tmp_path / 'into'} already holds .meta files" in capsys.readouterr().err
+    assert not (tmp_path / "into/src/hockey_model/sources/nhl.py.meta").exists()
 
 
 def test_merge_command_fails_when_no_shard_directory_exists(tmp_path: Path) -> None:

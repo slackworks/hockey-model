@@ -11,7 +11,7 @@ A consumer that archives the forecasts as issued must tell a real change in the 
 
 - `report-DATE.json` is the newest build of the day.
 - `report-DATE-HHMMSSZ.json` is one build, named by its `generated_at` time. A published version is never replaced.
-- `index-DATE.json` lists every build of the day, oldest first.
+- `index-DATE.json` lists every build of the day, oldest first. A release from before the index lists only the builds after it, and its notes name the earlier builds.
 
 The schemas are `src/hockey_model/daily_report.schema.json` and `src/hockey_model/report_index.schema.json`.
 They sit in the package, so the wheel carries them and a consumer can read them from the installed package.

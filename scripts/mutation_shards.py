@@ -260,13 +260,9 @@ def _mutants_without_result(root: Path, module: str) -> int:
     path = _meta_path(root, module)
     if not path.exists():
         return 0
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, UnicodeDecodeError, json.JSONDecodeError:
-        return 0
-    exits = data.get("exit_code_by_key") if isinstance(data, dict) else None
+    exits = _read_meta(path).get("exit_code_by_key")
     if not isinstance(exits, dict):
-        return 0
+        raise ShardError(f"{path} holds no exit_code_by_key object; rerun the shard that wrote it")
     return sum(1 for value in exits.values() if value is None)
 
 
@@ -277,6 +273,12 @@ def _run_merge(source_root: Path, dest: Path) -> int:
     if not source_dirs:
         raise ShardError(
             f"no shard results under {source_root}; download the mutation-shard artifacts first"
+        )
+    # A file that no shard wrote this time would read as a result of this run.
+    if dest.is_dir() and next(dest.rglob("*.meta"), None) is not None:
+        raise ShardError(
+            f"{dest} already holds .meta files of an earlier merge; delete them, or pass an "
+            "empty --into directory"
         )
     dest.mkdir(parents=True, exist_ok=True)
     copied = merge_meta(source_dirs, dest)

@@ -115,6 +115,32 @@ def test_a_file_with_other_bytes_stops_the_run_before_any_upload(
     assert not any(c.startswith("gh release upload") for c in _calls(tmp_path))
 
 
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"FAKE_DOWNLOAD_FAIL": "1"}, f"cannot download {WHEEL} from {TAG}"),
+        ({"FAKE_DOWNLOAD_EMPTY": "1"}, f"the download of {WHEEL} from {TAG} is empty"),
+    ],
+)
+def test_a_failed_download_is_not_called_other_bytes(
+    fakes: Path, tmp_path: Path, env: dict[str, str], message: str
+) -> None:
+    build(tmp_path)
+    result = publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"{WHEEL}\n{SDIST}",
+        FAKE_REMOTE_DIR=remote(tmp_path, b"wheel bytes", b"sdist bytes"),
+        **env,
+    )
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "other bytes" not in result.stderr
+    assert "Nothing was uploaded" in result.stderr
+    assert not any(c.startswith("gh release upload") for c in _calls(tmp_path))
+
+
 def test_a_collision_stops_the_run_even_when_another_file_is_new(
     fakes: Path, tmp_path: Path
 ) -> None:

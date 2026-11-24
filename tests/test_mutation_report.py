@@ -590,7 +590,7 @@ def test_the_class_mark_of_a_method_name_passes(tmp_path: Path) -> None:
     assert f"- `{name}`: estimated 1.5 s, limit 9 s" in report.timeouts_section(path)
 
 
-@pytest.mark.parametrize("seconds", ["NaN", "Infinity", "-1", "true", '"3"'])
+@pytest.mark.parametrize("seconds", ["NaN", "Infinity", "-1", "true", '"3"', "1" + "0" * 400])
 def test_an_estimate_that_is_not_a_finite_number_is_refused(tmp_path: Path, seconds: str) -> None:
     path = tmp_path / "t.json"
     text = f'{{"timeouts": [{{"mutant": "m.x", "estimated_s": {seconds}, "limit_s": 9}}]}}'
@@ -598,8 +598,25 @@ def test_an_estimate_that_is_not_a_finite_number_is_refused(tmp_path: Path, seco
     assert "could not be read" in report.timeouts_section(path)
 
 
+# A JSON integer has no size limit, and an integer past the float range must not crash the read.
+_HUGE_INTEGERS = st.integers(min_value=10**309, max_value=10**600) | st.integers(
+    min_value=-(10**600), max_value=-(10**309)
+)
+
+
+@given(seconds=_HUGE_INTEGERS)
+def test_an_estimate_past_the_float_range_is_refused(seconds: int) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "t.json"
+        item = {"mutant": "m.x", "estimated_s": seconds, "limit_s": 9}
+        path.write_text(json.dumps({"timeouts": [item]}), encoding="utf-8")
+        assert "is not a finite number" in report.timeouts_section(path)
+
+
 _JSON = st.recursive(
-    st.one_of(st.none(), st.booleans(), st.integers(), st.floats(), st.text(max_size=8)),
+    st.one_of(
+        st.none(), st.booleans(), st.integers(), _HUGE_INTEGERS, st.floats(), st.text(max_size=8)
+    ),
     lambda children: st.one_of(
         st.lists(children, max_size=3), st.dictionaries(st.text(max_size=8), children, max_size=3)
     ),

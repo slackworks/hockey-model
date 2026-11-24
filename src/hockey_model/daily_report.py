@@ -64,6 +64,11 @@ class DailyReport:
     footer_gaps: tuple[str, ...] = ()
 
 
+def _json_sha256(values: dict[str, Any]) -> str:
+    """Return the SHA-256 of ``values`` as JSON with sorted keys, so key order changes nothing."""
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
     """Return the identity of ``fit``. The hash covers every value that changes a prediction.
 
@@ -75,8 +80,7 @@ def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
         "elo_weight": fit.elo_weight,
         "weights": dict(fit.weights),
     }
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
-    return ModelIdentity(tuple(fit.features), digest, code_sha or None)
+    return ModelIdentity(tuple(fit.features), _json_sha256(values), code_sha or None)
 
 
 def report_tag(day: date) -> str:
@@ -206,7 +210,7 @@ def inputs_sha256(report: DailyReport) -> str:
         "model": _model_json(report.model),
         "training_gaps": list(report.footer_gaps),
     }
-    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+    return _json_sha256(values)
 
 
 def report_json(report: DailyReport) -> dict[str, Any]:
@@ -312,8 +316,8 @@ def write_report(report: DailyReport, out_dir: Path) -> tuple[Path, Path]:
     """Write the Markdown and JSON copies. Return their paths, Markdown first.
 
     Both strings are built before either file is written, and the JSON must pass the report
-    schema, so a build failure or an invalid report writes no file. A failed disk write can
-    leave the Markdown file alone.
+    schema, so a build failure or an invalid report writes no file. Both copies go to temporary
+    names first, so a failed disk write leaves the files of an earlier build as they were.
     """
     markdown = report_markdown(report)
     data = report_json(report)
@@ -322,6 +326,16 @@ def write_report(report: DailyReport, out_dir: Path) -> tuple[Path, Path]:
     stem = f"report-{report.day.isoformat()}"
     md_path = out_dir / f"{stem}.md"
     json_path = out_dir / f"{stem}.json"
-    md_path.write_text(markdown, encoding="utf-8")
-    json_path.write_text(payload, encoding="utf-8")
+    staged = [(md_path, markdown), (json_path, payload)]
+    partials = [path.with_name(f"{path.name}.tmp") for path, _ in staged]
+    try:
+        for partial, (_, text) in zip(partials, staged, strict=True):
+            partial.write_text(text, encoding="utf-8")
+    except OSError:
+        for partial in partials:
+            partial.unlink(missing_ok=True)
+        raise
+    # The JSON is the copy that a program reads, so it moves into place last.
+    for partial, (path, _) in zip(partials, staged, strict=True):
+        partial.replace(path)
     return md_path, json_path

@@ -89,10 +89,10 @@ def source_digest(root: Path) -> str:
     """Return a hash of the Python and SQL files under ``root``, by path and content."""
     digest = hashlib.sha256()
     for path in sorted(p for p in root.rglob("*") if p.suffix in {".py", ".sql"}):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+        # A length before each part keeps two trees apart when a file holds a NUL byte.
+        for part in (path.relative_to(root).as_posix().encode(), path.read_bytes()):
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
     return digest.hexdigest()
 
 

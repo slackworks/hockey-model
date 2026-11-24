@@ -518,9 +518,9 @@ def test_every_report_the_code_can_build_passes_the_schema(report: DailyReport) 
 
 
 def test_the_shell_name_pattern_matches_the_names_the_code_writes(built: dict[str, Any]) -> None:
-    """daily-report.sh finds the newest build by name, so its pattern must follow the code."""
-    script = require_path(SCRIPTS / "daily-report.sh").read_text(encoding="utf-8")
-    found = re.search(r'grep -E "(\^report-\$\{day\}-\[0-9\]\{6\}Z\\\.json\$)"', script)
-    assert found, "daily-report.sh no longer holds the build name pattern; update this test"
+    """The publish script finds the builds of a release from before the index by name."""
+    script = require_path(SCRIPTS / "publish-daily-report.sh").read_text(encoding="utf-8")
+    found = re.search(r'version_pattern="(\^report-\$\{day\}-\[0-9\]\{6\}Z\\\.json\$)"', script)
+    assert found, "publish-daily-report.sh no longer holds the build name pattern; update the test"
     pattern = found.group(1).replace("${day}", built["date"])
     assert re.fullmatch(pattern, version_file(built))

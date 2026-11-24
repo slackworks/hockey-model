@@ -69,6 +69,20 @@ def test_the_newest_run_decides(fakes: Path, tmp_path: Path) -> None:
     assert check(fakes, tmp_path, green_then_red).returncode == 1
 
 
+def test_the_newest_run_on_a_later_page_decides(fakes: Path, tmp_path: Path) -> None:
+    # gh api --paginate prints one JSON object for each page, one after the other.
+    pages = "\n".join(
+        [
+            answer(run_json("success", "2026-11-21T09:00:00Z")),
+            answer(run_json("failure", "2026-11-21T11:00:00Z")),
+        ]
+    )
+    result = check(fakes, tmp_path, pages)
+    assert result.returncode == 1
+    assert "is 'failure', and a release needs 'success'" in result.stderr
+    assert "--paginate" in _calls(tmp_path)[0]
+
+
 def test_a_failed_lookup_fails_and_says_what_the_token_needs(fakes: Path, tmp_path: Path) -> None:
     result = check(fakes, tmp_path, answer(run_json("success")), FAKE_CI_RUNS_FAIL="1")
     assert result.returncode == 1

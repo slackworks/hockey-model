@@ -259,6 +259,22 @@ def test_the_script_names_an_out_directory_it_cannot_write(
     assert "cannot write to" in capsys.readouterr().err
 
 
+def test_an_os_error_of_the_run_is_not_called_a_bad_out_directory(
+    store: sqlite3.Connection,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_files_left(*args: object, **kwargs: object) -> None:
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(runner, "run_backtest", no_files_left)
+    assert _run_script("--db", str(_store_path(store)), "--out", str(tmp_path / "o")) == 1
+    err = capsys.readouterr().err
+    assert "backtest_golden: the backtest failed: [Errno 24] Too many open files" in err
+    assert "cannot write the files" not in err
+
+
 def test_the_script_does_not_change_the_store(
     store: sqlite3.Connection, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

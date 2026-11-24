@@ -2,11 +2,12 @@
 
 import re
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, example, given, settings
 from hypothesis import strategies as st
 from seeding import FETCHED, add_goalie
 from test_runner_store import PLAN, seed
@@ -259,6 +260,29 @@ def test_the_source_digest_follows_a_new_and_a_renamed_file(tmp_path: Path) -> N
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "c.py").write_text("")
     assert source_digest(tmp_path) != renamed
+
+
+def _digest_of(tree: dict[str, bytes]) -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        for name, content in tree.items():
+            (root / name).write_bytes(content)
+        return source_digest(root)
+
+
+_TREES = st.dictionaries(
+    st.sampled_from(["a.py", "b.py", "c.sql", "d.py"]), st.binary(max_size=12), max_size=3
+)
+
+
+# A file that holds a NUL and the name of a second file must not frame like two files.
+@example(first={"a.py": b"X\0b.py\0Y"}, second={"a.py": b"X", "b.py": b"Y"})
+@given(first=_TREES, second=_TREES)
+def test_two_different_trees_give_two_digests(
+    first: dict[str, bytes], second: dict[str, bytes]
+) -> None:
+    assume(first != second)
+    assert _digest_of(first) != _digest_of(second)
 
 
 def test_the_source_digest_of_the_package_is_in_the_key(

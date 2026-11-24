@@ -4,14 +4,15 @@
 # Usage: daily-report.sh --date YYYY-MM-DD --out-dir DIR [--skip-unchanged] [--help]
 #   --date            Eastern game day to predict.
 #   --out-dir         Directory for the report and backtest files. Created when missing.
-#   --skip-unchanged  After the prediction, read the newest published build of the day, which
-#                     is the report-DATE-HHMMSSZ.json asset with the latest time. When its
-#                     inputs_sha256 equals the one of this build, exit 0 and write no
-#                     complete marker, so nothing publishes. A day with no release, or a
-#                     published report with no inputs_sha256, builds as usual. A failed
-#                     release lookup or download stops the run with exit code 1. This script
-#                     reads REPORT_GH_TOKEN once, then unsets it, so only the release calls of
-#                     the compare step carry it. No other command sees it.
+#   --skip-unchanged  After the prediction, read the release of the day. When it is complete
+#                     for its newest build (the index, report-DATE.json, and the notes all
+#                     name that build) and the inputs_sha256 of that build equals the one of
+#                     this build, exit 0 and write no complete marker, so nothing publishes.
+#                     A day with no release, a release that is behind its newest build, and
+#                     a published report with no inputs_sha256 build as usual. A failed
+#                     release call stops the run with exit code 1. This script reads
+#                     REPORT_GH_TOKEN once, then unsets it, so only the release calls of the
+#                     compare step carry it. No other command sees it.
 #
 # Reads the store path from HOCKEY_MODEL_DB. The daily-prepare run does the slow work each
 # hour. When its prepared-DATE marker is missing, this script skips with exit code 0 while the
@@ -151,45 +152,71 @@ done
 source "$(dirname "$0")/run-step.sh"
 RUN_STEP_COMMAND=daily-report
 
-# Print the name of the newest published build of the day. The index of the day names each
-# build with its generated_at, so the build with the latest generated_at is the newest. A build
-# name holds only the UTC time of day, so a sort of the names puts a build after midnight UTC
-# before one of the evening. A release with no index falls back to that sort, and then to the
-# alias report-DATE.json. The alias is uploaded after the versions, so a failed upload can
-# leave it behind the newest build.
-newest_report_asset() {
-  local tag="$1" names newest index_dir
+# The index of the day lists each build with its generated_at, and the build with the latest
+# generated_at is the newest. A build name holds only the UTC time of day, so the names do not
+# give the order across midnight UTC.
+newest_build_filter='.builds | max_by(.generated_at)'
+
+# Print why release $1 is behind its newest build, or print nothing when it is not (#318).
+# A publish uploads the version files, then the report-DATE files and the index, then the
+# notes. A failed step leaves the release behind, and so does a retry of an older build from
+# before the publish script kept the report-DATE files with the newest build. The function
+# downloads the index and report-DATE.json into the directory $2 for the compare. It returns 1
+# when a release call fails or the index names no build.
+release_gap() {
+  local tag="$1" dir="$2" names asset newest_at newest_build alias_at notes
   names="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
     echo "daily-report: cannot list the assets of release $tag; its error is above" >&2
     return 1
   }
-  if grep -qxF "index-$day.json" <<<"$names"; then
-    index_dir="$(mktemp -d)"
-    if ! gh release download "$tag" --pattern "index-$day.json" --dir "$index_dir"; then
-      echo "daily-report: cannot download index-$day.json from release $tag; its error is above" >&2
-      rm -rf "$index_dir"
+  for asset in "index-$day.json" "report-$day.json"; do
+    if ! grep -qxF "$asset" <<<"$names"; then
+      printf 'it has no %s' "$asset"
+      return 0
+    fi
+  done
+  for asset in "index-$day.json" "report-$day.json"; do
+    if ! gh release download "$tag" --pattern "$asset" --dir "$dir" ||
+      [[ ! -s "$dir/$asset" ]]; then
+      echo "daily-report: cannot download $asset from release $tag; check that the release holds it" >&2
       return 1
     fi
-    if ! newest="$(jq -er '.builds | max_by(.generated_at) | .file | select(type == "string")' \
-      "$index_dir/index-$day.json")"; then
-      echo "daily-report: index-$day.json of release $tag names no build; check the index of the release" >&2
-      rm -rf "$index_dir"
-      return 1
-    fi
-    rm -rf "$index_dir"
-    printf '%s' "$newest"
+  done
+  if ! newest_at="$(jq -er "$newest_build_filter | .generated_at | select(type == \"string\")" \
+    "$dir/index-$day.json")" ||
+    ! newest_build="$(jq -er "$newest_build_filter | .file | select(type == \"string\")" \
+      "$dir/index-$day.json")"; then
+    echo "daily-report: index-$day.json of release $tag names no build; check the index of the release" >&2
+    return 1
+  fi
+  newest_build="${newest_build%.json}"
+  # A report-DATE.json that is not a report is a defect of the release, and a publish repairs it.
+  if ! alias_at="$(jq -er '.generated_at | select(type == "string")' "$dir/report-$day.json" \
+    2>/dev/null)"; then
+    printf 'its report-%s.json holds no generated_at' "$day"
     return 0
   fi
-  newest="$(grep -E "^report-${day}-[0-9]{6}Z\.json$" <<<"$names" | sort | tail -n 1 || true)"
-  printf '%s' "${newest:-report-$day.json}"
+  if [[ "$alias_at" != "$newest_at" ]]; then
+    printf 'its report-%s.json is not the newest build %s' "$day" "$newest_build"
+    return 0
+  fi
+  notes="$(gh release view "$tag" --json body --jq '.body')" || {
+    echo "daily-report: cannot read the notes of release $tag; its error is above" >&2
+    return 1
+  }
+  # publish-daily-report.sh ends the build line of the notes with "UTC, BUILD.".
+  if ! grep -qF "UTC, $newest_build." <<<"$notes"; then
+    printf 'its notes do not name the newest build %s' "$newest_build"
+  fi
 }
 
-# Exit 0 with no complete marker when the built report has the inputs of the newest published
-# build of the day, so the publish job skips.
+# Exit 0 with no complete marker when the release of the day is complete for its newest build
+# and the built report has the inputs of that build, so the publish job skips. A release that
+# is behind its newest build is published again, which repairs it.
 skip_if_unchanged() {
   # The token reaches only the release calls of this function.
   local -x GH_TOKEN="$read_token"
-  local tag="reports-$day" status asset compare_dir answer reason
+  local tag="reports-$day" status compare_dir gap answer reason newest_build
   status="$(release_status "$tag")"
   case "$status" in
   published) ;;
@@ -199,16 +226,19 @@ skip_if_unchanged() {
     exit 1
     ;;
   esac
-  asset="$(newest_report_asset "$tag")" || exit 1
   compare_dir="$(mktemp -d)"
-  if ! gh release download "$tag" --pattern "$asset" --dir "$compare_dir" ||
-    [[ ! -s "$compare_dir/$asset" ]]; then
-    echo "daily-report: cannot download $asset from release $tag; check that the release holds it" >&2
+  if ! gap="$(release_gap "$tag" "$compare_dir")"; then
     rm -rf "$compare_dir"
     exit 1
   fi
+  if [[ -n "$gap" ]]; then
+    echo "::notice::daily-report: release $tag is behind its newest build: $gap. This build publishes to repair it." >&2
+    rm -rf "$compare_dir"
+    return 0
+  fi
+  newest_build="$(jq -r "$newest_build_filter | .file" "$compare_dir/index-$day.json")"
   answer="$(env -u GH_TOKEN uv run hockey-model report-compare \
-    --built "$out_dir/report-$day.json" --published "$compare_dir/$asset")" || {
+    --built "$out_dir/report-$day.json" --published "$compare_dir/report-$day.json")" || {
     echo "daily-report: report-compare failed; its error is above" >&2
     rm -rf "$compare_dir"
     exit 1
@@ -220,7 +250,7 @@ skip_if_unchanged() {
   fi
   if [[ "$reason" == "unchanged" ]]; then
     notice="daily-report: the inputs of the $day report are unchanged since the newest"
-    notice+=" published build $asset. Nothing publishes."
+    notice+=" published build $newest_build. Nothing publishes."
     echo "::notice::$notice" >&2
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       echo "$notice" >>"$GITHUB_STEP_SUMMARY"

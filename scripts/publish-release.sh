@@ -108,7 +108,10 @@ for file in "${files[@]}"; do
     new+=("$file")
     continue
   fi
-  gh release download "$tag" --pattern "$name" --dir "$check_dir" --clobber
+  gh release download "$tag" --pattern "$name" --dir "$check_dir" --clobber ||
+    fail "cannot download $name from $tag to compare it with the build; gh's error is above. Nothing was uploaded. Run the release workflow again."
+  [[ -s "$check_dir/$name" ]] ||
+    fail "the download of $name from $tag is empty, so it cannot be compared with the build. Nothing was uploaded. Run the release workflow again."
   if cmp -s "$file" "$check_dir/$name"; then
     echo "publish-release: $name is already on $tag with the same bytes; skipped." >&2
   else

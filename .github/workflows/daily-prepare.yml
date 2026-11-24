@@ -84,7 +84,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}-skip
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}-skip
           restore-keys: |
             hockey-model-store-
       # Exit code 4 means the day needs the rebuild, which is the next job's work. Any other
@@ -123,7 +123,7 @@ jobs:
         if: always()
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}-skip
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}-skip
     outputs:
       rebuild: ${{ steps.check.outputs.rebuild }}
 
@@ -154,7 +154,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}-prepare
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}-prepare
           restore-keys: |
             hockey-model-store-
       - env:
@@ -183,4 +183,4 @@ jobs:
         if: always()
         with:
           path: ${{ runner.temp }}/hockey-model
-          key: hockey-model-store-${{ github.run_id }}-prepare
+          key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}-prepare

@@ -47,12 +47,13 @@ done
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "--sha '$sha' is not a 40-character commit ID" 2
 
 query="head_sha=$sha&event=push&per_page=100"
-runs="$(gh api "repos/{owner}/{repo}/actions/workflows/$WORKFLOW/runs?$query")" ||
+# --paginate prints one JSON object for each page, so jq reads them with --slurp.
+runs="$(gh api --paginate "repos/{owner}/{repo}/actions/workflows/$WORKFLOW/runs?$query")" ||
   fail "cannot read the $WORKFLOW runs of $sha; the token needs actions: read"
-jq -e '.workflow_runs | type == "array"' >/dev/null <<<"$runs" ||
+jq -se 'length > 0 and all(.[]; .workflow_runs | type == "array")' >/dev/null <<<"$runs" ||
   fail "the answer for $sha holds no workflow_runs list"
 
-newest="$(jq -r '.workflow_runs | sort_by(.created_at) | last | if . == null then "none"
+newest="$(jq -rs '[.[].workflow_runs[]] | sort_by(.created_at) | last | if . == null then "none"
   else (.conclusion // .status) end' <<<"$runs")"
 case "$newest" in
 success) ;;
