@@ -767,3 +767,7 @@ def test_the_job_timeouts_that_the_report_workflow_passes_are_the_real_ones() ->
         )
         assert job is not None, f"daily-prepare.yml has no job named {name}"
         assert f"    timeout-minutes: {minutes}\n" in job.group(1)
+        # The jobs API returns the display name of a job when one is set, and the lookup
+        # matches on that name. A `name:` that differs from the key would match nothing.
+        display = re.search(r"^    name: (.+)$", job.group(1), re.MULTILINE)
+        assert display is None or display.group(1).strip() == name, display
