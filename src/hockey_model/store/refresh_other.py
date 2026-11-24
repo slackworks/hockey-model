@@ -267,11 +267,13 @@ def espn_injuries(run: RefreshRun) -> None:
 
 
 def daily_faceoff(run: RefreshRun) -> None:
-    """Read the Daily Faceoff starting goalies."""
-    _attempt_live(
-        run,
-        DAILY_FACEOFF,
-        STARTERS_URL,
-        lambda stamp: _write_starters(run, DAILY_FACEOFF, fetch_starters(run.client), stamp),
-        Reading(DAILY_FACEOFF_PARSER),
-    )
+    """Read the Daily Faceoff starters, and name each status that this code does not know."""
+    notes: list[str] = []
+
+    def unit(stamp: datetime) -> int:
+        reads = fetch_starters(run.client, notes)
+        return _write_starters(run, DAILY_FACEOFF, reads, stamp)
+
+    _attempt_live(run, DAILY_FACEOFF, STARTERS_URL, unit, Reading(DAILY_FACEOFF_PARSER))
+    # A status that this code does not name never fails the read, so it needs its own line.
+    run.notes.extend(notes)
