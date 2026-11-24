@@ -234,6 +234,37 @@ def test_the_note_appears_only_for_an_inconclusive_result_with_an_effect(
     assert f"{abs(expected_effect):.4f}" in notes[0]
 
 
+# The promotion rule stated alone: the upper end decides. These do not call the function to
+# learn the rule, so a change that breaks the rule fails even if the function agrees with itself.
+@given(interval=_ORDERED, expected_effect=_EFFECTS)
+def test_only_an_upper_end_below_zero_promotes(
+    interval: tuple[float, float], expected_effect: float | None
+) -> None:
+    """A promotion means the interval lies below zero, so a high end at zero or above never does."""
+    record = make_record({"expected_effect": expected_effect})
+    status = status_for_interval(record, interval)
+    if status == "promoted":
+        assert interval[1] < 0.0, interval
+
+
+@given(interval=_ORDERED, expected_effect=_EFFECTS, above=st.floats(min_value=0.0, max_value=1.0))
+def test_a_decided_interval_keeps_its_status_when_its_low_end_moves_up(
+    interval: tuple[float, float], expected_effect: float | None, above: float
+) -> None:
+    """Narrowing the interval from the low side cannot widen it, so the decision stands.
+
+    The upper end is unchanged, and a narrower interval is never more than the bar that made
+    it inconclusive, so a decided interval stays decided.
+    """
+    record = make_record({"expected_effect": expected_effect})
+    low, high = interval
+    narrow = (low + (high - low) * above / 2, high)
+    decided = status_for_interval(record, interval)
+    if decided == STATUS_INCONCLUSIVE:
+        return
+    assert status_for_interval(record, narrow) == decided
+
+
 @given(expected_effect=_EFFECTS)
 def test_a_record_with_no_result_gets_no_note(expected_effect: float | None) -> None:
     """A status alone cannot say the interval was wide, because there is no interval."""
