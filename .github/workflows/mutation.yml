@@ -223,9 +223,9 @@ jobs:
     if: always() && needs.gate.outputs.go == 'true' && github.ref == 'refs/heads/main'
     # The script lists the open reports and then creates one, so two file jobs that run
     # together can both find none and both create an issue. The group serializes them. A
-    # newer waiting run replaces an older one, and that run does the same lookup, so a
-    # replaced run loses nothing. Only this job joins the group, so the gate still stands
-    # aside for a waiting manual run (#296).
+    # newer waiting run replaces an older one. The replaced run's report body is dropped, and
+    # the newer run files its own body after the same lookup. Only this job joins the group,
+    # so the gate still stands aside for a waiting manual run (#296).
     concurrency:
       group: mutation-file-${{ github.ref }}
       cancel-in-progress: false
