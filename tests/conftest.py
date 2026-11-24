@@ -132,7 +132,17 @@ def fakes(tmp_path: Path) -> Path:
         '  echo "release not found" >&2\n'
         "  exit 1\n"
         "fi\n"
-        'if [[ "$1 $2" == "release list" ]]; then printf "%s\\n" "${FAKE_DRAFTS:-}"; exit 0; fi\n'
+        # FAKE_DRAFTS lists tag names, one per line, and each one is a draft. The --json form
+        # answers the shape that gh prints: one object per release.
+        'if [[ "$1 $2" == "release list" ]]; then\n'
+        '  if [[ "$*" == *"--json"* ]]; then\n'
+        '    printf "%s\\n" "${FAKE_DRAFTS:-}" | jq -R -s '
+        "'split(\"\\n\") | map(select(length > 0) | {tagName: ., isDraft: true})'\n"
+        "  else\n"
+        '    printf "%s\\n" "${FAKE_DRAFTS:-}"\n'
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
         'if [[ "$1 $2" == "release create" ]]; then\n'
         '  if grep -qxF "$3" <<<"${FAKE_RELEASES:-}"; then\n'
         '    echo "a release with the same tag name already exists" >&2\n'

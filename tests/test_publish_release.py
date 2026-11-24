@@ -312,6 +312,22 @@ def test_a_draft_release_for_the_tag_stops_the_run_before_any_write(
     )
 
 
+def test_a_full_release_list_stops_the_run(fakes: Path, tmp_path: Path) -> None:
+    """A list that holds exactly the limit may hide a draft past it.
+
+    One release a day reaches 1000 in about three years, and a draft that the list cuts off
+    would be missed. A full list is not an answer, so the run stops and names the limit.
+    """
+    build(tmp_path)
+    full = "\n".join(f"v0.0.{index}" for index in range(1000))
+    result = publish(fakes, tmp_path, FAKE_DRAFTS=full)
+    assert result.returncode == 1
+    assert "1000" in result.stderr
+    assert not any(
+        c.startswith(("gh release create", "gh release upload")) for c in _calls(tmp_path)
+    )
+
+
 def test_a_draft_for_another_tag_does_not_stop_the_run(fakes: Path, tmp_path: Path) -> None:
     build(tmp_path)
     result = publish(fakes, tmp_path, FAKE_DRAFTS="v0.0.9\n")

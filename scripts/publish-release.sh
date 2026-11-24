@@ -74,8 +74,17 @@ shopt -s nullglob
 files=("$dist"/*.whl "$dist"/*.tar.gz)
 ((${#files[@]} == 2)) || fail "$dist must hold one wheel and one source archive, and holds ${#files[@]} file(s)"
 
-drafts="$(gh release list --limit 1000 --json tagName,isDraft \
-  --jq '.[] | select(.isDraft) | .tagName')" || fail "cannot list the releases of the repository"
+# gh --limit caps the list at 1000 releases. A full list may cut off a draft past it, and a
+# missed draft would publish over it. A full list is therefore not an answer.
+list_limit=1000
+releases="$(gh release list --limit "$list_limit" --json tagName,isDraft)" ||
+  fail "cannot list the releases of the repository"
+listed="$(jq 'length' <<<"$releases")" || fail "cannot read the release list of the repository"
+if ((listed >= list_limit)); then
+  fail "the release list holds $listed releases, which is the limit of $list_limit; a draft past it is not checked. Delete an old release, then run again"
+fi
+drafts="$(jq -r '.[] | select(.isDraft) | .tagName' <<<"$releases")" ||
+  fail "cannot read the drafts of the release list"
 if grep -qxF "$tag" <<<"$drafts"; then
   fail "a draft release for $tag exists; publish it or delete it, then run again"
 fi
