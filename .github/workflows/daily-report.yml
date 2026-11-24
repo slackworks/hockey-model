@@ -189,8 +189,9 @@ jobs:
     needs: [gate, build]
     # Publishes only a complete report. A build that overran the budget still publishes, and
     # the build job stays failed, so the overrun remains visible. A crash never publishes.
+    # A cancel stops the run, so the condition uses !cancelled() and not always().
     if: >-
-      always() && needs.gate.outputs.publish == 'true'
+      !cancelled() && needs.gate.outputs.publish == 'true'
       && needs.build.outputs.report_complete == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

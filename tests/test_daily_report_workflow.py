@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from mutation_copy import require_path
+from workflow_support import job_condition
 
 from hockey_model.report_trigger import TRIGGER_MINUTE_UTC
 
@@ -94,3 +95,10 @@ def test_the_publish_job_runs_one_at_a_time_for_a_day_and_holds_the_token_for_th
     step = publish[publish.index("      - run: bash scripts/publish-daily-report.sh") :]
     assert "GH_TOKEN: ${{ github.token }}" in step
     assert 'UV_NO_SYNC: "1"' in step
+
+
+def test_a_cancelled_run_does_not_publish() -> None:
+    """A job whose `if` holds always() ignores a cancel, so a cancelled run would still publish."""
+    condition = job_condition(WORKFLOW.read_text(encoding="utf-8"), "publish")
+    assert "always()" not in condition
+    assert "!cancelled()" in condition

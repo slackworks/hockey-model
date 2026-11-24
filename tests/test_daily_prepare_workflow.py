@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from mutation_copy import require_path
+from workflow_support import job_condition
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = require_path(ROOT / ".github" / "workflows" / "daily-prepare.yml")
@@ -88,10 +89,15 @@ def test_the_prepare_job_waits_for_the_gate_and_the_skip_check() -> None:
 
 
 def test_a_forced_run_rebuilds_even_though_the_skip_job_is_skipped() -> None:
-    """A skipped job fails the jobs that need it, so the force test needs always() (#311)."""
-    prepare = _job(PREPARE.read_text(encoding="utf-8"), "prepare")
-    condition = prepare[prepare.index("    if: >-") : prepare.index("    concurrency:")]
-    assert condition.index("always()") < condition.index("inputs.force == true")
+    """A skipped job fails the jobs that need it, so the condition must override that (#311)."""
+    condition = job_condition(PREPARE.read_text(encoding="utf-8"), "prepare")
+    assert condition.index("!cancelled()") < condition.index("inputs.force == true")
+
+
+def test_a_cancelled_run_does_not_start_the_rebuild() -> None:
+    """A job whose `if` holds always() ignores a cancel, so a 180-minute rebuild never stops."""
+    condition = job_condition(PREPARE.read_text(encoding="utf-8"), "prepare")
+    assert "always()" not in condition
 
 
 def test_the_force_flag_comes_from_the_dispatch_input() -> None:
