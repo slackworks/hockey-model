@@ -36,12 +36,15 @@ from hockey_model.store.moneypuck_writes import (
 )
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
-from hockey_model.store.source_reads import ESPN_INJURIES, last_ok_read
+from hockey_model.store.source_reads import (
+    DAILY_FACEOFF,
+    ESPN_INJURIES,
+    ESPN_STARTERS,
+    MONEYPUCK,
+    last_ok_read,
+)
 from hockey_model.store.starter_writes import write_starter_reads
 
-MONEYPUCK = "moneypuck"
-ESPN_STARTERS = "espn_starters"
-DAILY_FACEOFF = "daily_faceoff"
 _UNMATCHED_SHOWN = 5
 
 

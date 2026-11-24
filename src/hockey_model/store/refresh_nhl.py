@@ -24,6 +24,8 @@ from hockey_model.store.reads import game_row, unresolved_games
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.source_reads import (
+    BOXSCORES,
+    SCORES,
     failed_since,
     failed_urls,
     last_ok_read,
@@ -32,8 +34,6 @@ from hockey_model.store.source_reads import (
 from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import parse_iso_utc
 
-SCORES = "nhl_scores"
-BOXSCORES = "nhl_boxscores"
 # A day is complete when a read came this long after the Eastern game day closed. The close is
 # 05:00 UTC in winter and 04:00 UTC in summer, so this margin gives 12:00 UTC and 11:00 UTC. The
 # latest NHL game of a day ends before both.
