@@ -87,12 +87,15 @@ def _failure(unit: Unit, exc: BaseException) -> Exception:
     )
 
 
-def _pool_failure(units: Sequence[Unit], index: int, exc: BaseException) -> Exception:
+def _pool_failure(
+    units: Sequence[Unit], index: int, exc: BaseException, finished: set[int]
+) -> Exception:
     if isinstance(exc, BrokenProcessPool):
-        names = ", ".join(repr(unit.name) for unit in units)
+        names = ", ".join(repr(unit.name) for i, unit in enumerate(units) if i not in finished)
+        cause = f" ({exc.__cause__})" if exc.__cause__ is not None else ""
         return HockeyModelError(
             f"backtest: a worker process died, probably out of memory; the units {names} did "
-            f"not finish: {exc}; run with fewer workers, or with --workers 1"
+            f"not finish: {exc}{cause}; run with fewer workers, or with --workers 1"
         )
     return _failure(units[index], exc)
 
@@ -123,6 +126,7 @@ def _run_all(units: Sequence[Unit], workers: int) -> list[Any]:
     if workers == 1 or len(units) <= 1:
         return [_run_here(unit) for unit in units]
     results: list[Any] = [None] * len(units)
+    finished: set[int] = set()
     with ProcessPoolExecutor(max_workers=min(workers, len(units))) as pool:
         futures = {pool.submit(_timed, unit): index for index, unit in enumerate(units)}
         for future in as_completed(futures):
@@ -132,7 +136,8 @@ def _run_all(units: Sequence[Unit], workers: int) -> list[Any]:
             except Exception as exc:
                 # A running build takes close to an hour, so the pool must not wait for it.
                 pool.terminate_workers()
-                raise _pool_failure(units, index, exc) from exc
+                raise _pool_failure(units, index, exc, finished) from exc
+            finished.add(index)
             _log(units[index], seconds)
             progress.advance()
     return results

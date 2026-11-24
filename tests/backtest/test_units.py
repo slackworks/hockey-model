@@ -21,6 +21,7 @@ from hockey_model.backtest.units import (
     run_units,
 )
 from hockey_model.game_model.imputation import ImputationLimitError
+from hockey_model.sources.shape_errors import SourceShapeError
 from hockey_model.types import HockeyModelError
 
 
@@ -106,6 +107,33 @@ def test_a_worker_that_dies_names_the_unfinished_units() -> None:
     units = [Unit("first", die, (3,)), Unit("second", slow_value, (30.0, 1))]
     with pytest.raises(HockeyModelError, match=r"a worker process died.*'first', 'second'"):
         run_units(units, 2)
+
+
+def die_later(delay: float, code: int) -> int:
+    time.sleep(delay)
+    os._exit(code)
+
+
+def test_a_worker_that_dies_names_only_the_units_that_did_not_finish() -> None:
+    units = [
+        Unit("done", square, (2,)),
+        Unit("dies", die_later, (1.0, 3)),
+        Unit("slow", slow_value, (30.0, 1)),
+    ]
+    with pytest.raises(HockeyModelError, match="a worker process died") as caught:
+        run_units(units, 3)
+    assert "'dies', 'slow'" in str(caught.value)
+    assert "'done'" not in str(caught.value)
+
+
+def unknown_team(code: str) -> int:
+    raise SourceShapeError("espn", code)
+
+
+def test_a_worker_error_with_its_own_arguments_comes_back_with_its_message() -> None:
+    with pytest.raises(SourceShapeError, match="unit 'u'.*team code 'XYZ'") as caught:
+        run_units([Unit("u", unknown_team, ("XYZ",)), Unit("v", square, (1,))], 2)
+    assert "worker process died" not in str(caught.value)
 
 
 def test_no_units_give_no_results() -> None:

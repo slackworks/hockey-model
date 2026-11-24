@@ -1,12 +1,25 @@
 """Tests for public domain value objects."""
 
 import math
+import pickle
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hockey_model.types import Player, Projection, Roster, Slot, Standing, Team
+from hockey_model.sources.errors import SourceError
+from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
+from hockey_model.types import (
+    AmbiguousPlayerError,
+    HockeyModelError,
+    Player,
+    Projection,
+    Roster,
+    Slot,
+    Standing,
+    Team,
+    UnknownPlayerError,
+)
 
 
 def _player(**changes: object) -> Player:
@@ -113,3 +126,26 @@ def valid_projections(draw):
 @given(valid_projections())
 def test_projection_satisfies_low_le_point_le_high(projection: Projection) -> None:
     assert projection.low <= projection.point <= projection.high
+
+
+def _errors() -> list[HockeyModelError]:
+    return [
+        HockeyModelError("plain message"),
+        HockeyModelError("first", "second"),
+        AmbiguousPlayerError("Smith", (_player(), _player(canonical_id="p-2"))),
+        UnknownPlayerError(8471234),
+        SourceShapeError("espn", "XYZ"),
+        SourceParseError("nhl", "the games list is missing"),
+        SourceError("nhl", "https://example.test/x", "HTTP 403", permanent=True, status=403),
+    ]
+
+
+# A worker process sends its error back by pickle, so each error must come back the same.
+@pytest.mark.parametrize("error", _errors(), ids=lambda error: type(error).__name__)
+def test_an_error_comes_back_from_a_pickle_with_its_type_message_and_fields(
+    error: HockeyModelError,
+) -> None:
+    copy = pickle.loads(pickle.dumps(error))
+    assert type(copy) is type(error)
+    assert (str(copy), copy.args) == (str(error), error.args)
+    assert vars(copy) == vars(error)
