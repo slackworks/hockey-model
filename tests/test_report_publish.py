@@ -51,6 +51,26 @@ def test_publish_creates_the_release_at_the_build_commit(fakes: Path, tmp_path: 
     assert create[0].count("backtest") == 2
 
 
+def test_only_the_release_calls_see_the_write_token(fakes: Path, tmp_path: Path) -> None:
+    """The package commands must never hold the write token, and the release calls need it.
+
+    A package command makes HTTP reads of its own, so a token in its environment is a token
+    that any library in the process can read. The script unsets the export once and gives the
+    token back to each gh call alone (#313).
+    """
+    _write_report(tmp_path / "report")
+    log = tmp_path / "env.log"
+    result = _publish(fakes, tmp_path, FAKE_ENV_LOG=str(log), GH_TOKEN="a-token")
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text(encoding="utf-8").splitlines()
+    uv_calls = [line for line in lines if line.startswith("uv ")]
+    assert uv_calls, "the publish made no uv call"
+    assert all(" GH_TOKEN=unset " in line for line in uv_calls), uv_calls
+    gh_calls = [line for line in lines if line.startswith("gh ")]
+    assert gh_calls, lines
+    assert all(" GH_TOKEN=a-token " in line for line in gh_calls), gh_calls
+
+
 def test_publish_accepts_a_leap_day(fakes: Path, tmp_path: Path) -> None:
     day = "2024-02-29"
     report_dir = tmp_path / "report"

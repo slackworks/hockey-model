@@ -19,11 +19,19 @@
 # stderr that the step files no issue.
 # --status with --body takes a decision that another job made, so only one job reads the
 # stats. The body must be the file that decision wrote.
+# Only the issue calls need GH_TOKEN. The script reads it once, unsets it, and gives it to
+# each issue call alone, so the helper runs never see the write token.
 #
 # Stdout: the status word (clean, regression, or execution_failed).
 # Stderr: diagnostics. Exit 0 when the status is judged, and with --file-issue, the report
 # is filed or updated. Exit 1 when a gh call fails. Exit 2 on bad arguments.
 set -euo pipefail
+
+# The issue calls need the write token, and the helper runs need no token at all. read_token
+# holds the value, and the export goes away here, so no uv command sees the token. Each gh
+# call gets it back with a prefix (#313).
+read_token="${GH_TOKEN:-}"
+unset GH_TOKEN
 
 # A flag that takes a value must have one. Without this, `shift 2` fails with no message.
 need_value() {
@@ -169,7 +177,8 @@ if ((FILE_ISSUE == 0)); then
 fi
 title="$(uv run python3 "$HELPER" title)"
 
-if ! issues="$(gh issue list --state open --limit "$LIST_LIMIT" --json number,body,author)"; then
+if ! issues="$(GH_TOKEN="$read_token" gh issue list --state open --limit "$LIST_LIMIT" \
+  --json number,body,author)"; then
   echo "report-mutation: gh issue list failed; run gh auth status, then rerun" >&2
   exit 1
 fi
@@ -179,20 +188,20 @@ fi
 
 if [[ "$status" == "clean" ]]; then
   if [[ -n "$existing" ]]; then
-    gh issue comment "$existing" --body "Recovery: the weekly run $RUN_URL is clean. Survivors are at or below the baseline. Close this report when you accept the result." >&2 ||
+    GH_TOKEN="$read_token" gh issue comment "$existing" --body "Recovery: the weekly run $RUN_URL is clean. Survivors are at or below the baseline. Close this report when you accept the result." >&2 ||
       {
         echo "report-mutation: gh issue comment #$existing failed for $RUN_URL" >&2
         exit 1
       }
   fi
 elif [[ -n "$existing" ]]; then
-  gh issue comment "$existing" --body-file "$BODY" >&2 ||
+  GH_TOKEN="$read_token" gh issue comment "$existing" --body-file "$BODY" >&2 ||
     {
       echo "report-mutation: gh issue comment #$existing failed for $RUN_URL" >&2
       exit 1
     }
 else
-  gh issue create --title "$title" --body-file "$BODY" >&2 ||
+  GH_TOKEN="$read_token" gh issue create --title "$title" --body-file "$BODY" >&2 ||
     {
       echo "report-mutation: gh issue create failed for $RUN_URL" >&2
       exit 1
