@@ -64,6 +64,11 @@ class DailyReport:
     footer_gaps: tuple[str, ...] = ()
 
 
+def _json_sha256(values: dict[str, Any]) -> str:
+    """Return the SHA-256 of ``values`` as JSON with sorted keys, so key order changes nothing."""
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
     """Return the identity of ``fit``. The hash covers every value that changes a prediction.
 
@@ -75,8 +80,7 @@ def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
         "elo_weight": fit.elo_weight,
         "weights": dict(fit.weights),
     }
-    digest = hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
-    return ModelIdentity(tuple(fit.features), digest, code_sha or None)
+    return ModelIdentity(tuple(fit.features), _json_sha256(values), code_sha or None)
 
 
 def report_tag(day: date) -> str:
@@ -206,7 +210,7 @@ def inputs_sha256(report: DailyReport) -> str:
         "model": _model_json(report.model),
         "training_gaps": list(report.footer_gaps),
     }
-    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
+    return _json_sha256(values)
 
 
 def report_json(report: DailyReport) -> dict[str, Any]:
