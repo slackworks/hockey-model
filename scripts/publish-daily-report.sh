@@ -8,11 +8,13 @@
 #
 # The release target is GITHUB_SHA, the commit that built the first report of the day. Each build
 # adds its report as report-DATE-HHMMSSZ files, named by its generated_at time. A published
-# version is never replaced. The report-DATE files and the backtest files move to the newest build.
+# version is never replaced. The report-DATE files, the backtest files, and the notes move to the
+# newest build, the one with the latest generated_at. A retry of an older build leaves them there.
 # The index-DATE.json asset lists every build (file, generated_at, code_sha, fit_sha256,
-# inputs_sha256, schema_version). A rebuild adds its entry and drops none. The report-index
-# command checks the report and the index against their schemas first, so a report that does not
-# match stops the script before any upload.
+# inputs_sha256, schema_version). A rebuild adds its entry and drops none. A release from before
+# the index gets an index of the new build only, and a warning names the builds it leaves out.
+# The report-index command checks the report and the index against their schemas first, so a
+# report that does not match stops the script before any upload.
 # The release notes open with one line for each game: the favorite, its win chance, and the range
 # of that win chance (report-summary). The range is model uncertainty only.
 set -euo pipefail
@@ -140,6 +142,27 @@ if ! version_name="$(jq -er '.file | select(type == "string")' <<<"$built")"; th
   exit 1
 fi
 build="${version_name%.json}"
+# The newest build in the index owns the report-DATE files and the notes. A retry of an older
+# build adds its version files and its index entry, and leaves the rest with the newest build.
+if ! newest="$(jq -er '.builds | max_by(.generated_at) | .file | select(type == "string")' \
+  "$index")"; then
+  echo "publish-daily-report: the index that report-index wrote names no build. Nothing was published." >&2
+  exit 1
+fi
+# A release from before the index has version files that the new index cannot list, because
+# they hold no inputs_sha256.
+unlisted=()
+if [[ -n "$existing_assets" && -z "$existing_index" ]]; then
+  version_pattern="^report-${day}-[0-9]{6}Z\.json$"
+  while IFS= read -r name; do
+    if [[ "$name" =~ $version_pattern && "$name" != "$version_name" ]]; then
+      unlisted+=("${name%.json}")
+    fi
+  done <<<"$existing_assets"
+fi
+if ((${#unlisted[@]} > 0)); then
+  echo "::warning::publish-daily-report: $tag has no index, so index-$day.json lists only $build. The earlier builds ${unlisted[*]} stay on the release with no index entry." >&2
+fi
 version_json="$report_dir/$build.json"
 version_md="$report_dir/$build.md"
 cp "$md" "$version_md"
@@ -155,6 +178,10 @@ notes="$report_dir/release-notes-$day.md"
   printf '%s\n\n' "$summary"
   echo "Every build's report is kept. Each report-$day-HHMMSSZ file set is one build, named by its"
   echo "generated_at time (UTC). The report-$day files and the backtest files are the newest build."
+  if ((${#unlisted[@]} > 0)); then
+    echo "The builds ${unlisted[*]} are from before index-$day.json, so the index does not list them."
+  fi
+  # daily-report.sh --skip-unchanged finds the newest build in this line: "UTC, BUILD.".
   echo "This build: commit $GITHUB_SHA, finished $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC, $build."
   echo
   cat "$md"
@@ -190,8 +217,8 @@ version_status() {
 
 if [[ "$answer" == "published" ]]; then
   # The release exists. Both version names are checked before either upload, so a collision
-  # leaves no half-published build. The alias and the backtest files move to this build with
-  # --clobber.
+  # leaves no half-published build. When this build is the newest, the alias and the backtest
+  # files move to it with --clobber.
   md_state="$(version_status "$version_md")" || exit 1
   json_state="$(version_status "$version_json")" || exit 1
   if [[ "$md_state" == "new" ]]; then
@@ -200,8 +227,13 @@ if [[ "$answer" == "published" ]]; then
   if [[ "$json_state" == "new" ]]; then
     gh release upload "$tag" "$version_json"
   fi
-  gh release upload "$tag" "${latest[@]}" --clobber
-  gh release edit "$tag" --notes-file "$notes"
+  if [[ "$newest" == "$version_name" ]]; then
+    gh release upload "$tag" "${latest[@]}" --clobber
+    gh release edit "$tag" --notes-file "$notes"
+  else
+    echo "publish-daily-report: $build is older than the newest build ${newest%.json} of $tag. Its version files and its index entry are published; the report-$day files and the notes stay with the newest build." >&2
+    gh release upload "$tag" "$index" --clobber
+  fi
 else
   gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
