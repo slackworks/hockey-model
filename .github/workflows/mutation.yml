@@ -97,8 +97,9 @@ jobs:
   merge:
     needs: [gate, shard]
     # A gate that stood aside skips the shard job, and a merge of no shard fails. The run then
-    # reports an execution failure and files an issue for work it never did (#296).
-    if: always() && needs.gate.outputs.go == 'true'
+    # reports an execution failure and files an issue for work it never did (#296). The
+    # condition uses !cancelled() and not always(), so a cancelled run files no issue.
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -156,7 +157,7 @@ jobs:
     # The decision runs on every ref, so a manual run judges its own stats. A branch run
     # files nothing, and the file job below runs only on main. A gate that stood aside ran
     # no shard, so there is nothing to judge and no report to file (#296).
-    if: always() && needs.gate.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -220,7 +221,7 @@ jobs:
     needs: [gate, shard, merge, report]
     # Only the default branch may write an issue. This job is the only holder of that token.
     # A gate that stood aside leaves no status, and the script rejects an empty one (#296).
-    if: always() && needs.gate.outputs.go == 'true' && github.ref == 'refs/heads/main'
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'true' && github.ref == 'refs/heads/main' }}
     # The script lists the open reports and then creates one, so two file jobs that run
     # together can both find none and both create an issue. The group serializes them. A
     # newer waiting run replaces an older one. The replaced run's report body is dropped, and

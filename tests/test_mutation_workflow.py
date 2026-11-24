@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from mutation_copy import require_path
+from workflow_support import job_condition
 
 WORKFLOW = require_path(
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mutation.yml"
@@ -63,7 +64,7 @@ def test_the_report_job_runs_on_every_ref() -> None:
 
 def test_only_the_file_job_runs_on_main() -> None:
     file_job = _job("file")
-    assert "if: always() && needs.gate.outputs.go == 'true'" in file_job
+    assert "needs.gate.outputs.go == 'true'" in job_condition(_text(), "file")
     assert "github.ref == 'refs/heads/main'" in file_job
 
 
@@ -71,12 +72,12 @@ def test_only_the_file_job_runs_on_main() -> None:
 def test_a_gate_that_stood_aside_stops_the_jobs_after_it(name: str) -> None:
     """A stood-aside run did no work, so it must file no report and no issue (#296).
 
-    A skipped job fails the job that needs it, and only an `if` with `always()` runs anyway.
-    Every job after the gate therefore reads the gate output in that same `if`.
+    A skipped job fails the job that needs it, and only an `if` with a status check runs
+    anyway. Every job after the gate therefore reads the gate output in that same `if`.
     """
     job = _job(name)
-    assert "needs.gate.outputs.go == 'true'" in job
-    assert job.index("always()") < job.index("needs.gate.outputs.go == 'true'")
+    condition = job_condition(_text(), name)
+    assert condition.index("!cancelled()") < condition.index("needs.gate.outputs.go == 'true'")
     assert "needs: gate" in job or "[gate," in job
 
 
@@ -148,3 +149,9 @@ def test_the_merge_job_uploads_the_timeout_list_beside_the_stats() -> None:
     upload = upload[upload.index("actions/upload-artifact") :]
     assert "mutants/mutmut-timeouts.json" in upload
     assert "mutants/mutmut-cicd-stats.json" in upload
+
+
+@pytest.mark.parametrize("name", ["merge", "report", "file"])
+def test_a_cancelled_run_files_no_report(name: str) -> None:
+    """A job whose `if` holds always() ignores a cancel, so a cancelled run would file an issue."""
+    assert "always()" not in job_condition(_text(), name)
