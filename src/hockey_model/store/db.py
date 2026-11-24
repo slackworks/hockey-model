@@ -10,7 +10,7 @@ from hockey_model.store.shape import earned_version
 from hockey_model.types import HockeyModelError
 
 DB_ENV = "HOCKEY_MODEL_DB"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 _VIEWS_PATH = Path(__file__).with_name("views.sql")
 

@@ -126,6 +126,28 @@ CREATE TABLE fit_labels (
     set_at TEXT NOT NULL
 );
 
+-- The body of each distinct fetch, once per hash. ``body`` holds the bytes that arrived,
+-- compressed with zlib at level 6, and ``size`` is the uncompressed byte count.
+CREATE TABLE payloads (
+    sha256 TEXT PRIMARY KEY,
+    body BLOB NOT NULL,
+    size INTEGER NOT NULL
+);
+
+-- One row for every fetch, also when the bytes did not change. A row that failed keeps the
+-- bytes that did arrive, and its stage: http_error, shape_error, or parse_error.
+CREATE TABLE observations (
+    obs_id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL,
+    key TEXT,
+    fetched_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'parse_error')),
+    sha256 TEXT REFERENCES payloads (sha256),
+    parser TEXT NOT NULL,
+    error TEXT
+);
+
 -- Indexes for the as-of reads, which filter by time, team, and player.
 CREATE INDEX IF NOT EXISTS games_start ON games (start_utc);
 CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started);
@@ -133,3 +155,4 @@ CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team);
 CREATE INDEX IF NOT EXISTS mp_goalie_games_player ON mp_goalie_games (nhl_id);
 CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team);
 CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at);
+CREATE INDEX IF NOT EXISTS observations_key ON observations (source, key, fetched_at);

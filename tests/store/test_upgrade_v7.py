@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import restore_unblocked_columns
+from seeding import drop_archive_tables, restore_unblocked_columns
 from test_upgrade import make_v1_store, rows, version_of
 
 from hockey_model.store import upgrade
@@ -45,6 +45,7 @@ def _v6(path: Path, starter_ids: list[int | None], injury_ids: list[int | None])
             (*row, nhl_id),
         )
     conn.execute("UPDATE schema_version SET version = 6")
+    drop_archive_tables(conn)
     conn.commit()
     conn.close()
     return path
@@ -215,6 +216,7 @@ def test_any_populated_id_is_archived_and_every_other_value_survives(
             (*row, nhl_id),
         )
     conn.execute("UPDATE schema_version SET version = 6")
+    drop_archive_tables(conn)
     conn.commit()
     conn.close()
     upgrade_store(path)

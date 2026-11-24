@@ -23,6 +23,8 @@ EXPECTED_TABLES = {
     "injury_reads",
     "model_fits",
     "fit_labels",
+    "payloads",
+    "observations",
 }
 
 
