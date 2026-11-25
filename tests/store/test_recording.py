@@ -163,10 +163,8 @@ def test_a_failed_unit_still_archives_the_bytes_that_arrived(conn: sqlite3.Conne
     assert payload_bytes(conn, str(found.sha256)) == body
 
 
-def test_a_parser_failure_marks_the_bytes_that_the_parser_rejected(
-    conn: sqlite3.Connection,
-) -> None:
-    """The parser rejected the good response, so the good response is the shape failure."""
+def test_a_parser_failure_marks_only_the_body_that_it_read(conn: sqlite3.Connection) -> None:
+    """A parser reads the body that it fetched, so only that body takes the shape failure."""
     good = "https://example.test/a"
     other = "https://example.test/b"
     run = RefreshRun(conn, FakeClient({good: b'{"n": 1}', other: b'{"n": 2}'}), NOW)
@@ -178,10 +176,33 @@ def test_a_parser_failure_marks_the_bytes_that_the_parser_rejected(
 
     assert run.attempt("espn_starters", good, unit, Reading("espn_starters:2")) is False
     first, second = observations_for(conn, "espn_starters", None)
-    for row in (first, second):
-        assert row.status == "shape_error"
-        assert "a field is missing" in (row.error or "")
-        assert row.sha256 is not None
+    assert (first.status, first.error) == (OK, None)
+    assert first.sha256 is not None
+    assert second.status == "shape_error"
+    assert "a field is missing" in (second.error or "")
+    assert second.sha256 is not None
+
+
+def test_an_unexpected_failure_is_recorded_and_named(conn: sqlite3.Connection) -> None:
+    """A client failure that is not a source failure still reaches the archive (#82)."""
+
+    class _Broken(HttpClient):
+        def get(self, source: str, url: str) -> bytes:
+            raise ValueError("no host policy for 'example.test'")
+
+    run = RefreshRun(conn, _Broken(), NOW)
+
+    def unit(stamp: datetime) -> int:
+        run.client.get("nhl_scores", SCORE_URL)
+        return 0
+
+    assert run.attempt("nhl_scores", SCORE_URL, unit, Reading("nhl_score:1")) is False
+    (found,) = observations_for(conn, "nhl_scores", "2026-01-10")
+    assert found.status == "http_error"
+    assert "ValueError" in (found.error or "")
+    assert "no host policy" in (found.error or "")
+    assert len(run.errors) == 1
+    assert "no host policy" in str(run.errors[0])
 
 
 def test_the_client_is_the_inner_one_again_after_a_unit(conn: sqlite3.Connection) -> None:

@@ -16,6 +16,7 @@ from hockey_model.sources.espn import (
     fetch_injuries,
     fetch_scoreboard_starters,
 )
+from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import (
     FIRST_SEASON,
     GOALIE_PARSER,
@@ -212,8 +213,8 @@ def _attempt_live(
     url: str,
     unit: Callable[[datetime], int],
     reading: Reading,
-) -> None:
-    """Read a live feed, and hide a failure that repeats a known gap.
+) -> bool:
+    """Read a live feed, and hide a failure that repeats a known gap. Return True when it wrote.
 
     A live feed is one URL with no dated alternative, so a blocked host would stop every run
     (#276). The read still happens while the URL is a gap, because the skip records no read and
@@ -225,11 +226,35 @@ def _attempt_live(
     """
     was_gap = url in run.skipped(source)
     errors_before = len(run.errors)
-    if run.attempt(source, url, unit, reading) or not was_gap:
-        return
+    if run.attempt(source, url, unit, reading):
+        return True
+    if not was_gap:
+        return False
     # Drop the errors that this read added, and keep every earlier one.
     del run.errors[errors_before:]
     run.notes.append(f"{source}: still failing after repeated failed reads; not an error")
+    return False
+
+
+def _read_statuses(
+    run: RefreshRun,
+    source: str,
+    url: str,
+    reading: Reading,
+    read: Callable[[HttpClient, list[str], datetime], int],
+) -> None:
+    """Read one live feed, and report each status that this code does not name.
+
+    A note describes a read that the store accepted. A read that rolled back reports its error
+    instead, so the report never states the status of rows that were not stored.
+    """
+    notes: list[str] = []
+
+    def unit(stamp: datetime) -> int:
+        return read(run.client, notes, stamp)
+
+    if _attempt_live(run, source, url, unit, reading):
+        run.notes.extend(notes)
 
 
 # The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
@@ -240,38 +265,29 @@ def espn_starters(run: RefreshRun) -> None:
     days: list[date] = [today, today + timedelta(days=1)]
     # The record keeps this URL with no query, so both days share one gap key.
     url = f"{ESPN_BASE}/scoreboard"
-    notes: list[str] = []
 
-    def unit(stamp: datetime) -> int:
-        reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day, notes)]
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = [found for day in days for found in fetch_scoreboard_starters(client, day, notes)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
-    _attempt_live(run, ESPN_STARTERS, url, unit, Reading(SCOREBOARD_PARSER))
-    # A status that this code does not name never fails the read, so it needs its own line.
-    run.notes.extend(notes)
+    _read_statuses(run, ESPN_STARTERS, url, Reading(SCOREBOARD_PARSER), read)
 
 
 def espn_injuries(run: RefreshRun) -> None:
     """Read the current ESPN injury list, and report any status that this code does not name."""
-    notes: list[str] = []
 
-    def unit(stamp: datetime) -> int:
-        reads = fetch_injuries(run.client, notes)
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = fetch_injuries(client, notes)
         return write_injury_reads(run.conn, reads, stamp)
 
-    _attempt_live(run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", unit, Reading(INJURIES_PARSER))
-    # A status that this code does not name never fails the read, so it needs its own line.
-    run.notes.extend(notes)
+    _read_statuses(run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", Reading(INJURIES_PARSER), read)
 
 
 def daily_faceoff(run: RefreshRun) -> None:
     """Read the Daily Faceoff starters, and name each status that this code does not know."""
-    notes: list[str] = []
 
-    def unit(stamp: datetime) -> int:
-        reads = fetch_starters(run.client, notes)
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = fetch_starters(client, notes)
         return _write_starters(run, DAILY_FACEOFF, reads, stamp)
 
-    _attempt_live(run, DAILY_FACEOFF, STARTERS_URL, unit, Reading(DAILY_FACEOFF_PARSER))
-    # A status that this code does not name never fails the read, so it needs its own line.
-    run.notes.extend(notes)
+    _read_statuses(run, DAILY_FACEOFF, STARTERS_URL, Reading(DAILY_FACEOFF_PARSER), read)

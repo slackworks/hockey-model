@@ -130,18 +130,43 @@ def record_observation(conn: sqlite3.Connection, fetch: Fetch) -> int:
             fetch.error,
         ),
     )
-    return int(cursor.lastrowid or 0)
+    if cursor.lastrowid is None:
+        raise StoreError(
+            f"record observation {fetch.source} {fetch.url}: the store returned no row id, so "
+            "the observation cannot be named; run `hockey-model store upgrade` on this store"
+        )
+    return cursor.lastrowid
 
 
 def payload_bytes(conn: sqlite3.Connection, sha256: str) -> bytes:
-    """Return the uncompressed bytes of ``sha256``, or raise naming the hash."""
-    row = conn.execute("SELECT body FROM payloads WHERE sha256 = ?", (sha256,)).fetchone()
+    """Return the uncompressed bytes of ``sha256``, or raise naming the hash.
+
+    The stored size bounds the output, so a corrupt or tampered row cannot expand without a
+    limit.
+    """
+    row = conn.execute("SELECT body, size FROM payloads WHERE sha256 = ?", (sha256,)).fetchone()
     if row is None:
         raise StoreError(
             f"read payload {sha256}: the store holds no payload with that hash; "
             "the store may be from before the archive, or the hash is wrong"
         )
-    return zlib.decompress(row[0])
+    body, size = row
+    # One byte past the recorded size is enough to prove the row is corrupt, so a crafted body
+    # cannot expand into a larger buffer than the row claims.
+    limit = int(size) + 1
+    try:
+        found = zlib.decompressobj().decompress(body, limit)
+    except zlib.error as exc:
+        raise StoreError(
+            f"read payload {sha256}: the stored body is not valid zlib data ({exc}); "
+            "the payload is corrupt and the source must be read again"
+        ) from exc
+    if len(found) != size:
+        raise StoreError(
+            f"read payload {sha256}: the stored body decompressed to more than the {size} bytes "
+            "that the row records; the payload is corrupt and the source must be read again"
+        )
+    return found
 
 
 def observations_for(

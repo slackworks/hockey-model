@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import zlib
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -129,6 +130,23 @@ def test_the_stored_body_is_compressed_and_records_its_size(conn: sqlite3.Connec
 def test_a_missing_hash_is_named(conn: sqlite3.Connection) -> None:
     with pytest.raises(StoreError, match="0" * 64):
         payload_bytes(conn, "0" * 64)
+
+
+def test_a_corrupt_body_is_refused_and_named(conn: sqlite3.Connection) -> None:
+    """A body that is not zlib data must name its hash, not raise a bare ``zlib.error``."""
+    sha = "a" * 64
+    conn.execute("INSERT INTO payloads (sha256, body, size) VALUES (?, ?, ?)", (sha, b"junk", 4))
+    with pytest.raises(StoreError, match=sha):
+        payload_bytes(conn, sha)
+
+
+def test_a_body_that_expands_past_its_size_is_refused(conn: sqlite3.Connection) -> None:
+    """The recorded size bounds the output, so a row cannot expand without a limit."""
+    sha = "b" * 64
+    body = zlib.compress(b"x" * 1000, 6)
+    conn.execute("INSERT INTO payloads (sha256, body, size) VALUES (?, ?, ?)", (sha, body, 10))
+    with pytest.raises(StoreError, match="more than the 10 bytes"):
+        payload_bytes(conn, sha)
 
 
 def test_an_unknown_status_is_refused(conn: sqlite3.Connection) -> None:

@@ -56,12 +56,23 @@ class RecordingClient(HttpClient):
         self.records: list[RecordedFetch] = []
 
     def get(self, source: str, url: str) -> bytes:
-        """Fetch ``url`` through the inner client, and keep the outcome."""
+        """Fetch ``url`` through the inner client, and keep the outcome.
+
+        Every failure reaches the archive, including one that the client does not name as a
+        source failure, so the record of a request is never missing.
+        """
         try:
             body = self._inner.get(source, url)
         except SourceError as exc:
             self.records.append(RecordedFetch(url, HTTP_ERROR, None, str(exc)))
             raise
+        except Exception as exc:
+            # No body arrived, so the record takes the status of a failed fetch, and its error
+            # text keeps the class name of the failure that the client did not name.
+            self.records.append(
+                RecordedFetch(url, HTTP_ERROR, None, f"{type(exc).__name__}: {exc}")
+            )
+            raise SourceError(source, url, f"fetch failed unexpectedly: {exc}") from exc
         body = self._cleaned(body)
         self.records.append(RecordedFetch(url, OK, body, None))
         return body
@@ -115,11 +126,14 @@ class Capture:
         failed one stays ``ok``. ``failure`` names a unit that raised after its requests, and
         ``_outcome`` says which record it belongs to.
         """
-        return [self._fetch(record, failure) for record in records]
+        last = len(records) - 1
+        return [self._fetch(index, record, failure, last) for index, record in enumerate(records)]
 
-    def _fetch(self, record: RecordedFetch, failure: Exception | None) -> Fetch:
+    def _fetch(
+        self, index: int, record: RecordedFetch, failure: Exception | None, last: int
+    ) -> Fetch:
         """Return the ``Fetch`` to store for ``record``, with the failure that belongs to it."""
-        status, error = self._outcome(record, failure)
+        status, error = self._outcome(record, failure, index == last)
         return Fetch(
             self.source,
             record.url,
@@ -131,17 +145,21 @@ class Capture:
             error=error,
         )
 
-    def _outcome(self, record: RecordedFetch, failure: Exception | None) -> tuple[str, str | None]:
+    def _outcome(
+        self, record: RecordedFetch, failure: Exception | None, is_last: bool
+    ) -> tuple[str, str | None]:
         """Return the status and error to store for ``record``.
 
-        A parser failure rejected the bytes that arrived, so it marks each kept body. A source
-        failure came from one request, and ``SourceError`` names it, so only that request takes
-        the failure. A request that already failed keeps its own outcome.
+        A parser reads the body that it fetched, so a parse failure rejected the last body that
+        the unit took, and only that body takes the failure. A source failure came from one
+        request, and ``SourceError`` names it. A store failure rejected the rows, not the
+        bytes, so it leaves the status of every body alone. A request that already failed keeps
+        its own outcome.
         """
         if record.status != OK or failure is None:
             return record.status, record.error
         status = status_of(failure)
-        if status in (SHAPE_ERROR, STORE_ERROR):
+        if status == SHAPE_ERROR and is_last:
             return status, str(failure)
         if isinstance(failure, SourceError) and failure.url == record.url:
             return status, str(failure)
