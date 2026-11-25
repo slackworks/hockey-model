@@ -7,6 +7,17 @@ This note is the full build plan.
 An implementer follows "Build order", copies the reference spec and the two configs from the appendix byte for byte, adds the files in "Files to add or change", and runs the checks in "Verification".
 TLC 1.7.4 already checked the reference spec and both configs with no violation, liveness included, and every break test in this note gives the listed result.
 
+## Status
+
+As of 2026-11-25 this note is a design only.
+It is on the local branch `docs/241-264-tla-designs`.
+The branch is not pushed, and it has no pull request.
+The two bugs that the model finds are open issues #334 and #335.
+On 2026-11-25 TLC 1.7.4 checked `specs/publish_schedule.tla` with `publish_schedule.cfg`: 566,044 distinct states, no error, in 14 s.
+On that day `publish_schedule_half.cfg` also checked clean: 564,696 distinct states.
+The reference spec and all three configs match the appendix byte for byte.
+On that day the spot checks of "What the code does" matched the workflows and scripts: the cron minutes, the job groups and timeouts, the exit code 4, and the report reasons.
+
 ## Problem
 
 `daily-prepare.yml` and `daily-report.yml` both run every hour (#282).
@@ -77,7 +88,7 @@ Each rule names the code that owns it.
 
 ### The report gate: `daily-report.yml`, `scripts/report-gate.sh`, `report_gate.decide`
 
-The cron fires at minute `TRIGGER_MINUTE_UTC` of every hour.
+The cron fires at minute 44 of every hour, the value of `TRIGGER_MINUTE_UTC` in `report_trigger.py`.
 The `gate` job has no group, so it starts at the trigger and can read the prepare jobs that hold the group (#163).
 
 1. `scripts/prep-running.sh` prints the end of the window of each prepare job that runs or waits: its start plus its own timeout. A job that waits has not started, so its window starts now.
@@ -598,11 +609,13 @@ Follow `tests/test_tla_store_upgrade.py`, import `parse_constants` from `test_tl
 The mapping from the spec to the code stays manual.
 A change to a rule in "What the code does" MUST update the spec, its break tests, and this note in the same pull request.
 The two shards start TLC on such a change, and a new file that owns one of these rules goes into their `covers` lists in the same pull request.
+Issue #336 plans a fingerprint lock that flags a changed rule before CI.
+Until #336 lands, this section is the only guard against drift.
 
 ## Not modeled
 
 - A dry run, and a report dispatch with `force`.
-- The external clock (#222), which does not exist yet. With it, a dispatch and a late scheduled run are two close report runs, which is the case of finding 2.
+- An external clock for the report publish. No workflow has one today, so the report runs only on its hourly cron. #222 asked for it and is closed. With one, a dispatch and a late scheduled run are two close report runs, which is the case of finding 2.
 - More than one game day, and the choice of the day by the gate.
 - The time between the read of a gate and the join of its job. The model makes them one step, so the race of a scheduled gate and a manual dispatch in the same few seconds, which `daily-report-triggers.md` accepts, is not in the model.
 - The fallback of `prep-running.sh` for a run whose gate job has not ended (the longest window from now). The model has no such state, because a gate is one step.

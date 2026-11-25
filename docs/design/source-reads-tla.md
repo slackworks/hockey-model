@@ -7,6 +7,18 @@ This note is the full build plan.
 An implementer follows "Build order", copies the reference spec and the two configs from the appendix byte for byte, adds the files in "Files to add or change", and runs the checks in "Verification".
 TLC 1.7.4 already checked the reference spec and both configs with no violation, and every break test in this note fails as listed.
 
+## Status
+
+As of 2026-11-25 this note is a design only.
+It is on the local branch `docs/241-264-tla-designs`.
+The branch is not pushed, and it has no pull request.
+The two bugs that the model finds are open issues #329 and #330.
+On 2026-11-25 TLC 1.7.4 checked `specs/source_reads.tla` with `source_reads.cfg`: 147,515 distinct states, no violation.
+On that day `source_reads_moneypuck.cfg` also checked clean: 2,604 distinct states.
+The reference spec and both configs match the appendix byte for byte.
+The 2026-11-20 implementation-spec comment on #264 is superseded by this note.
+That comment is not updated yet.
+
 ## Problem
 
 Four modules decide which stored observations a reader may use, and their rules interact.
@@ -80,7 +92,8 @@ These past bugs are in these modules, and each one is a break test below.
 
 ## What the code does
 
-The spec states these rules.
+The rules below describe the code as it is on 2026-11-25.
+Where a fix is pending, the item gives the code today and then the target rule, which the spec states.
 Each rule names the code that owns it.
 The prose names the constants and does not repeat their values, because the values live in the code.
 
@@ -94,9 +107,10 @@ The prose names the constants and does not repeat their values, because the valu
    The production clock has microseconds, so two rows rarely share a stamp, but a refresh with no clock gives every row of the run one stamp.
    The code orders the rows of one URL by `(fetched_at, rowid)`: `failed_since()`, `failed_urls()`, and `_latest_reads()` do so (a49199c).
 4. `known_gaps()` holds the gap rule, and `abandoned_urls()` returns its keys.
-   After #329, the streak of a URL is its failed rows that have no good row after them in `(fetched_at, rowid)` order.
-   The URL is a gap when the streak has at least `ABANDON_AFTER_FAILED_READS` rows that span at least `ABANDON_MIN_SPAN_DAYS`.
-   It is also a gap when at least `ABANDON_AFTER_FAILED_READS` rows of the streak are permanent, whatever the other rows are.
+   Today, the streak of a URL is its failed rows with a `fetched_at` after its newest good read.
+   The URL is a gap when the streak has at least `ABANDON_AFTER_FAILED_READS` rows, and either they span at least `ABANDON_MIN_SPAN_DAYS` or every row is permanent.
+   Target (#329): the streak is its failed rows that have no good row after them in `(fetched_at, rowid)` order.
+   A URL is also a gap when at least `ABANDON_AFTER_FAILED_READS` rows of the streak are permanent, whatever the other rows are.
 5. A refresh skips a dated URL that is a gap (`RefreshRun.skipped()`), unless `--retry-skipped` is set.
    A live feed (`LIVE_FEEDS`) is read on every run.
    A failed read of a live URL that was a gap before the read is not an error (`_attempt_live()` in `store/refresh_other.py`, #276).
@@ -109,7 +123,8 @@ The prose names the constants and does not repeat their values, because the valu
 
 1. `_latest_reads()` takes the rows with `fetched_at < as_of`.
    For each URL it keeps the newest row and the newest good row, in `(fetched_at, rowid)` order.
-2. After #330, the gap set is `known_gaps(conn, source, before=as_of)`: the gaps of the rows before the cutoff.
+2. Today, the gap set is `abandoned_urls(conn, source)`, which reads the whole log and has no cutoff, so a gap that formed after `as_of` can count (finding 3).
+   Target (#330): the gap set is `known_gaps(conn, source, before=as_of)`, the gaps of the rows before the cutoff.
 3. A source with no good read before the cutoff, in any of its URLs, has one reason, "no read of it has worked yet", and no reason for each URL.
 4. Each URL with a row before the cutoff gets at most one reason from `_url_problem()`:
    - When the newest row failed, a URL with an age limit counts. `_age_limit()` gives a limit to the single feeds (`espn_injuries`, `daily_faceoff`) and to the current MoneyPuck files.
@@ -121,7 +136,8 @@ The prose names the constants and does not repeat their values, because the valu
    The model has one MoneyPuck file, so there this case is item 3.
 
 `training_gaps(conn, as_of)` lists each gap of a training season once, for the report footer.
-After #330 it reads the gaps of the rows before `as_of`.
+Today it reads the whole log, as item 2 of `stale_sources()` does (finding 3).
+Target (#330): it reads the gaps of the rows before `as_of`.
 
 ### The injury snapshot: `store/reads.py`
 
@@ -780,6 +796,8 @@ Follow `tests/test_tla_store_upgrade.py`, and import `parse_constants` from `tes
 The mapping from the spec to the code stays manual.
 A change to a rule in "What the code does" MUST update the spec, its break tests, and this note in the same pull request.
 The two shards start TLC on such a change, and a new module that owns one of these rules goes into their `covers` lists in the same pull request.
+Issue #336 plans a fingerprint lock that flags a changed rule before CI.
+Until #336 lands, this section is the only guard against drift.
 
 ## Not modeled
 
