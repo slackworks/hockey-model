@@ -2,6 +2,9 @@
 
 from dataclasses import replace
 
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
+
 from hockey_model.daily_report import model_identity
 from hockey_model.game_model.features import FEATURES
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
@@ -52,3 +55,25 @@ def test_the_version_is_sixteen_lowercase_hex_digits() -> None:
     assert version is not None
     assert len(version) == 16
     assert set(version) <= set("0123456789abcdef")
+
+
+_POOL = ["xg_form", "goalie_gsax", "rest", "elo", "shots", "pdo"]
+_FEATURE_SETS = st.lists(st.sampled_from(_POOL), min_size=1, unique=True)
+
+
+@settings(max_examples=100, deadline=None)
+@given(features=_FEATURE_SETS, data=st.data())
+def test_any_order_of_one_feature_set_gives_one_version(
+    features: list[str], data: st.DataObject
+) -> None:
+    shuffled = data.draw(st.permutations(features))
+    assert model_version(features) == model_version(shuffled)
+
+
+@settings(max_examples=100, deadline=None)
+@given(first=_FEATURE_SETS, second=_FEATURE_SETS)
+def test_different_feature_sets_give_different_versions(
+    first: list[str], second: list[str]
+) -> None:
+    assume(set(first) != set(second))
+    assert model_version(first) != model_version(second)
