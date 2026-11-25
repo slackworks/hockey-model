@@ -65,7 +65,7 @@ _LATEST_READS_SQL = (
 
 
 def _latest_reads(conn: sqlite3.Connection, as_of: datetime) -> dict[tuple[str, str], _Latest]:
-    """Return the newest attempt of each (source, URL) at or before ``as_of``.
+    """Return the newest attempt of each (source, URL) before ``as_of``.
 
     Two reads at one instant are ordered by row order, so the one written last wins.
     """
@@ -194,7 +194,7 @@ def stale_sources(conn: sqlite3.Connection, as_of: datetime) -> list[tuple[str, 
     recent good read has one more. The result is in source then URL order.
     """
     latest = _latest_reads(conn, as_of)
-    abandoned = {source: abandoned_urls(conn, source) for source in KNOWN_SOURCES}
+    abandoned = {source: abandoned_urls(conn, source, as_of) for source in KNOWN_SOURCES}
     stale: list[tuple[str, str]] = []
     for source in sorted(KNOWN_SOURCES):
         urls = {url: last for (name, url), last in latest.items() if name == source}
@@ -223,7 +223,7 @@ def training_gaps(conn: sqlite3.Connection, as_of: datetime) -> list[str]:
     """
     gaps: list[str] = []
     for source in sorted(KNOWN_SOURCES):
-        for url in sorted(abandoned_urls(conn, source)):
+        for url in sorted(abandoned_urls(conn, source, as_of)):
             if not _changes_prediction(url, as_of):
                 gaps.append(
                     f"{source}: {url} failed in every read; "

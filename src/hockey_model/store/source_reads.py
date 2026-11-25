@@ -137,26 +137,49 @@ def failed_urls(conn: sqlite3.Connection, source: str) -> list[str]:
     return [url for (url,) in cursor]
 
 
-def known_gaps(conn: sqlite3.Connection, source: str) -> dict[str, datetime]:
+def known_gaps(
+    conn: sqlite3.Connection, source: str, before: datetime | None = None
+) -> dict[str, datetime]:
     """Return each known gap of ``source`` with the time of the first failure of its streak.
 
-    A gap is a URL whose reads failed ``ABANDON_AFTER_FAILED_READS`` times in a row, with no
-    good read between them. The failures must span ``ABANDON_MIN_SPAN_DAYS``, unless every one
-    of them is permanent. A row with no stored cause counts as transient.
+    A gap is a streak of failed reads of one URL with no good read after them. The streak is
+    a gap when it has ``ABANDON_AFTER_FAILED_READS`` failures that span
+    ``ABANDON_MIN_SPAN_DAYS``, or when it has that many permanent failures. A row with no
+    stored cause counts as transient.
+
+    With ``before``, only the reads fetched before that instant count, so the answer is the
+    one that held at that cutoff. ``None`` reads the whole log.
     """
+    # A permanent count, not "every failure is permanent": one transient read must not end a gap.
+    # The good-read test uses (fetched_at, rowid) order, as failed_since does.
+    cutoff = None if before is None else iso_utc(before)
     cursor = conn.execute(
         "SELECT r.url, MIN(r.fetched_at) FROM source_reads r WHERE r.source = ? AND r.ok = 0"
-        " AND r.fetched_at >"
-        " COALESCE((SELECT MAX(o.fetched_at) FROM source_reads o"
-        "           WHERE o.source = r.source AND o.url = r.url AND o.ok = 1), '')"
-        " GROUP BY r.url HAVING COUNT(*) >= ?"
-        " AND (julianday(MAX(r.fetched_at)) - julianday(MIN(r.fetched_at)) >= ?"
-        "      OR MIN(COALESCE(r.permanent, 0)) = 1)",
-        (source, ABANDON_AFTER_FAILED_READS, ABANDON_MIN_SPAN_DAYS),
+        " AND (? IS NULL OR r.fetched_at < ?)"
+        " AND NOT EXISTS ("
+        "   SELECT 1 FROM source_reads o WHERE o.source = r.source AND o.url = r.url"
+        "   AND o.ok = 1 AND (? IS NULL OR o.fetched_at < ?)"
+        "   AND (o.fetched_at > r.fetched_at"
+        "        OR (o.fetched_at = r.fetched_at AND o.rowid > r.rowid)))"
+        " GROUP BY r.url HAVING"
+        " (COUNT(*) >= ? AND julianday(MAX(r.fetched_at)) - julianday(MIN(r.fetched_at)) >= ?)"
+        " OR SUM(COALESCE(r.permanent, 0)) >= ?",
+        (
+            source,
+            cutoff,
+            cutoff,
+            cutoff,
+            cutoff,
+            ABANDON_AFTER_FAILED_READS,
+            ABANDON_MIN_SPAN_DAYS,
+            ABANDON_AFTER_FAILED_READS,
+        ),
     )
     return {url: parse_iso_utc(first) for url, first in cursor}
 
 
-def abandoned_urls(conn: sqlite3.Connection, source: str) -> frozenset[str]:
+def abandoned_urls(
+    conn: sqlite3.Connection, source: str, before: datetime | None = None
+) -> frozenset[str]:
     """Return the URLs of ``source`` that are known gaps. ``known_gaps`` holds the rule."""
-    return frozenset(known_gaps(conn, source))
+    return frozenset(known_gaps(conn, source, before))

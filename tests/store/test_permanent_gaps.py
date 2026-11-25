@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from hockey_model.sources.errors import SourceError
@@ -179,10 +179,55 @@ def test_a_gap_needs_two_failures_in_a_row_and_a_span_or_only_permanent_ones(
             first -= 1
         streak = causes[first:]
         spans = (len(streak) - 1) * step >= timedelta(days=ABANDON_MIN_SPAN_DAYS)
-        expected = len(streak) >= 2 and (spans or set(streak) == {"permanent"})
+        permanent_count = streak.count("permanent")
+        expected = len(streak) >= 2 and (spans or permanent_count >= 2)
         gaps = known_gaps(connection, SOURCE)
         assert (URL in gaps) is expected
         if expected:
             assert gaps[URL] == START + first * step
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("causes", "is_gap"),
+    [
+        (["permanent", "permanent", "transient"], True),
+        (["transient", "permanent", "permanent"], True),
+        (["permanent", "transient", "permanent", "permanent"], True),
+        (["permanent", "transient", "transient"], False),
+    ],
+)
+def test_one_transient_read_does_not_end_a_permanent_streak(
+    tmp_path: Path, causes: list[str], is_gap: bool
+) -> None:
+    connection = connect(tmp_path / "store.db")
+    try:
+        for number, cause in enumerate(causes):
+            moment = START + number * MINUTES
+            failure = _blocked() if cause == "permanent" else _outage()
+            record_failed_read(connection, SOURCE, URL, moment, failure)
+        assert (URL in known_gaps(connection, SOURCE)) is is_gap
+    finally:
+        connection.close()
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    causes=st.lists(st.sampled_from(["permanent", "transient"]), min_size=1, max_size=6),
+    extra=st.sampled_from(["permanent", "transient"]),
+)
+def test_one_more_failed_read_keeps_a_gap(
+    tmp_path_factory: pytest.TempPathFactory, causes: list[str], extra: str
+) -> None:
+    connection = connect(tmp_path_factory.mktemp("store") / "store.db")
+    try:
+        for number, cause in enumerate(causes):
+            failure = _blocked() if cause == "permanent" else _outage()
+            record_failed_read(connection, SOURCE, URL, START + number * MINUTES, failure)
+        assume(URL in known_gaps(connection, SOURCE))
+        failure = _blocked() if extra == "permanent" else _outage()
+        record_failed_read(connection, SOURCE, URL, START + len(causes) * MINUTES, failure)
+        assert URL in known_gaps(connection, SOURCE)
     finally:
         connection.close()
