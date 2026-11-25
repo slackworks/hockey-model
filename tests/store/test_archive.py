@@ -4,10 +4,12 @@ import json
 import sqlite3
 import zlib
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from refresh_support import FakeClient, fixture
 from seeding import with_market_fields
 
@@ -75,6 +77,26 @@ def test_before_keeps_the_observations_that_came_first(conn: sqlite3.Connection)
     record_observation(conn, _fetch(b"b", SECOND))
     found = observations_for(conn, "nhl_scores", "2026-01-10", before=SECOND)
     assert [o.fetched_at for o in found] == [FIRST]
+
+
+@settings(
+    max_examples=25,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(offset=st.integers(min_value=-120, max_value=120))
+def test_before_keeps_exactly_the_observations_below_the_instant(
+    conn: sqlite3.Connection, offset: int
+) -> None:
+    """The filter follows the stored time, not the order of the rows."""
+    first = record_observation(conn, _fetch(b"a", FIRST))
+    second = record_observation(conn, _fetch(b"b", SECOND))
+    instant = FIRST + timedelta(minutes=offset)
+    found = observations_for(conn, "nhl_scores", "2026-01-10", before=instant)
+    # The fixture is not reset between examples, so compare the rows this example wrote.
+    assert {o.obs_id for o in found} & {first, second} == {
+        obs_id for obs_id, when in ((first, FIRST), (second, SECOND)) if when < instant
+    }
 
 
 def test_observations_for_reads_one_key_only(conn: sqlite3.Connection) -> None:
@@ -156,6 +178,47 @@ def test_an_unknown_status_is_refused(conn: sqlite3.Connection) -> None:
 
 def test_canonical_bytes_ignores_the_key_order() -> None:
     assert canonical_bytes({"a": 1, "b": 2}) == canonical_bytes({"b": 2, "a": 1})
+
+
+_SCALARS = st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text()
+
+
+def _json_value(depth: int = 3) -> st.SearchStrategy[object]:
+    """Build a JSON value, nested to ``depth``, with keys that differ only in order."""
+    if depth == 0:
+        return _SCALARS
+    branch: st.SearchStrategy[object] = st.lists(_json_value(depth - 1), max_size=3)
+    mapping = st.dictionaries(st.text(), _json_value(depth - 1), max_size=3)
+    return _SCALARS | branch | mapping
+
+
+@settings(max_examples=100, deadline=None)
+@given(value=_json_value())
+def test_canonical_bytes_ignores_key_order_at_every_depth(value: object) -> None:
+    """Two payloads that differ only in key order share one hash, at any nesting depth."""
+
+    def reorder(node: object) -> object:
+        if isinstance(node, dict):
+            return {key: reorder(node[key]) for key in sorted(node, reverse=True)}
+        if isinstance(node, list):
+            return [reorder(item) for item in node]
+        return node
+
+    assert canonical_bytes(value) == canonical_bytes(reorder(value))
+
+
+@settings(
+    max_examples=50,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(body=st.binary(max_size=4096))
+def test_a_stored_body_round_trips_exactly(conn: sqlite3.Connection, body: bytes) -> None:
+    """Every body that the archive accepts reads back as the same bytes (#82)."""
+    record_observation(conn, _fetch(body, FIRST))
+    # The fixture is not reset between examples, so the newest row is the one this example wrote.
+    last = observations_for(conn, "nhl_scores", "2026-01-10")[-1]
+    assert payload_bytes(conn, str(last.sha256)) == body
 
 
 def test_an_espn_payload_stores_no_market_field(conn: sqlite3.Connection) -> None:

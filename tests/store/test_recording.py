@@ -3,15 +3,18 @@
 import json
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from refresh_support import FakeClient, fixture
 from seeding import with_market_fields
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
+from hockey_model.sources.nhl import boxscore_url, score_day_url
 from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import refresh_other
 from hockey_model.store.archive import OK, observations_for, payload_bytes
@@ -69,6 +72,19 @@ def test_a_url_that_names_no_day_gets_no_key() -> None:
 
 def test_a_url_with_no_date_suffix_gets_no_key() -> None:
     assert key_of("nhl_scores", "https://api-web.nhle.com/v1/score/now") is None
+
+
+@settings(max_examples=50, deadline=None)
+@given(day=st.dates())
+def test_the_key_of_a_score_url_is_its_day(day: date) -> None:
+    """``key_of`` inverts the URL builder, so the key is the resource that the URL reads."""
+    assert key_of("nhl_scores", score_day_url(day)) == day.isoformat()
+
+
+@settings(max_examples=50, deadline=None)
+@given(game_id=st.integers(min_value=0, max_value=9_999_999_999))
+def test_the_key_of_a_boxscore_url_is_its_game(game_id: int) -> None:
+    assert key_of("nhl_boxscores", boxscore_url(game_id)) == str(game_id)
 
 
 def test_a_market_source_loses_its_market_fields() -> None:
