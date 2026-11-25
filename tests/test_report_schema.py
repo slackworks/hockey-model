@@ -80,6 +80,8 @@ GAME_FIELDS = [
     "degraded_inputs",
     "training",
 ]
+# The required fields of an index entry. ``model_version`` is optional in the schema, so an
+# index written before it existed still reads.
 BUILD_FIELDS = ["file", "generated_at", "code_sha", "fit_sha256", "inputs_sha256", "schema_version"]
 
 
@@ -241,6 +243,7 @@ def test_the_first_build_makes_an_index_of_one(built: dict[str, Any]) -> None:
             "generated_at": built["generated_at"],
             "code_sha": "abc123",
             "fit_sha256": built["model"]["fit_sha256"],
+            "model_version": built["model"]["version"],
             "inputs_sha256": built["inputs_sha256"],
             "schema_version": 1,
         }
@@ -266,11 +269,17 @@ def test_the_same_build_twice_makes_one_entry(built: dict[str, Any]) -> None:
     assert add_build(once, built) == once
 
 
-def test_a_report_with_no_model_has_null_identity_in_the_index(built: dict[str, Any]) -> None:
-    built["model"] = None
-    entry = index_entry(built)
-    assert entry["code_sha"] is None and entry["fit_sha256"] is None
-    check_index(add_build(None, built))
+_UNNAMED_MODELS = [
+    None,
+    {"features": [], "fit_sha256": "a" * 64, "code_sha": None},
+]
+
+
+@pytest.mark.parametrize("model", _UNNAMED_MODELS)
+def test_a_build_without_a_model_version_is_refused(built: dict[str, Any], model: Any) -> None:
+    built["model"] = model
+    with pytest.raises(HockeyModelError, match="has no model.version"):
+        add_build(None, built)
 
 
 def test_an_invalid_report_makes_no_index(built: dict[str, Any]) -> None:
@@ -367,13 +376,14 @@ _MOMENTS = st.datetimes(
     min_value=datetime(2000, 1, 1), max_value=datetime(2099, 12, 31), timezones=st.just(UTC)
 )
 _HEX = st.text(alphabet="0123456789abcdef", min_size=64, max_size=64)
+_VERSION = st.text(alphabet="0123456789abcdef", min_size=16, max_size=16)
 _MODELS = st.one_of(
-    st.none(),
     st.fixed_dictionaries(
         {
             "features": st.lists(st.text(max_size=6), max_size=3),
             "fit_sha256": _HEX,
             "code_sha": st.one_of(st.none(), st.text(max_size=12)),
+            "version": _VERSION,
         }
     ),
 )
@@ -397,8 +407,9 @@ def test_an_index_entry_copies_the_identity_of_its_report(report: dict[str, Any]
     assert entry["generated_at"] == report["generated_at"]
     assert entry["inputs_sha256"] == report["inputs_sha256"]
     assert entry["schema_version"] == report["schema_version"]
-    assert entry["fit_sha256"] == (model["fit_sha256"] if model else None)
-    assert entry["code_sha"] == (model["code_sha"] if model else None)
+    assert entry["fit_sha256"] == model["fit_sha256"]
+    assert entry["code_sha"] == model["code_sha"]
+    assert entry["model_version"] == model["version"]
 
 
 def _fold(batch: list[dict[str, Any]]) -> dict[str, Any]:

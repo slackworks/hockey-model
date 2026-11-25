@@ -29,6 +29,9 @@ The version rises by one in a change that does one of these:
 A new field does not raise the version when the schema marks it optional, which means it is not in `required`.
 The game field `win_interval` is the first such field (#212). The report always writes it, and a consumer reads a missing field as null.
 A consumer that reads a version it does not know MUST stop and name the version.
+`model.version` (#331) is optional in the schema, so it does not raise the version.
+The publish step still refuses a build without it: `report-index` fails on a build with no `model.version`, before any upload.
+A required field would raise the version, and then the index of a day in progress would fail on its next publish.
 A change that raises the version MUST say so in `CHANGELOG.md`.
 
 The schema holds `schema_version` as a constant.
@@ -43,6 +46,7 @@ A report with another version fails the check, so a raise needs a new schema fil
 ## The index
 
 An entry holds `file`, `generated_at`, `code_sha`, `fit_sha256`, `inputs_sha256`, and `schema_version`.
+An entry also holds `model_version`, copied from `model.version`, so an approval can name the model of each build (#331).
 `report_schema.version_file` names a build from its `generated_at` time, and it is the one place that does so.
 The publish script reads the name from the output of `report-index`.
 The script downloads the index that is already on the release, and adds the new build.

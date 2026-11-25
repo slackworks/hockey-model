@@ -16,6 +16,7 @@ TAG = f"reports-{DAY}"
 STARTED = "2026-11-04T18:24:31Z"
 GENERATED = "2026-11-04T20:20:13.000000+00:00"
 SHA = "0123456789abcdef0123456789abcdef01234567"
+MODEL_VERSION = "0123456789abcdef"
 REAL_UV = shutil.which("uv") or ""
 
 
@@ -29,7 +30,12 @@ def valid_report(generated: str = GENERATED, **fields: object) -> dict[str, obje
         "level": 0.8,
         "games": [],
         "credits": [],
-        "model": {"features": LIVE, "fit_sha256": "b" * 64, "code_sha": SHA},
+        "model": {
+            "features": LIVE,
+            "fit_sha256": "b" * 64,
+            "code_sha": SHA,
+            "version": MODEL_VERSION,
+        },
         "training_gaps": [],
     }
     report.update(fields)

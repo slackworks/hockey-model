@@ -23,6 +23,7 @@ from hockey_model.game import (
 )
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
+from hockey_model.model_version import model_version
 from hockey_model.models import GameModel
 from hockey_model.report_interval import away_interval, interval_json, interval_notes, win_cell
 from hockey_model.report_schema import SCHEMA_VERSION, check_report
@@ -49,6 +50,8 @@ class ModelIdentity:
     features: tuple[str, ...]
     fit_sha256: str
     code_sha: str | None
+    # Set by ``model_identity``. Left ``None`` only by a caller that builds an identity by hand.
+    version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +83,9 @@ def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
         "elo_weight": fit.elo_weight,
         "weights": dict(fit.weights),
     }
-    return ModelIdentity(tuple(fit.features), _json_sha256(values), code_sha or None)
+    return ModelIdentity(
+        tuple(fit.features), _json_sha256(values), code_sha or None, model_version(fit.features)
+    )
 
 
 def report_tag(day: date) -> str:
@@ -231,11 +236,14 @@ def report_json(report: DailyReport) -> dict[str, Any]:
 def _model_json(model: ModelIdentity | None) -> dict[str, Any] | None:
     if model is None:
         return None
-    return {
+    body: dict[str, Any] = {
         "features": list(model.features),
         "fit_sha256": model.fit_sha256,
         "code_sha": model.code_sha,
     }
+    if model.version is not None:
+        body["version"] = model.version
+    return body
 
 
 def _cell(text: str) -> str:

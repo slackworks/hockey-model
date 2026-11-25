@@ -54,13 +54,23 @@ def version_file(report: Mapping[str, Any]) -> str:
 
 
 def index_entry(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the index entry of one build."""
+    """Return the index entry of one build. A build with no ``model.version`` is refused.
+
+    The publish step indexes every build, so the refusal stops an unnamed model from publishing.
+    """
     model = report["model"]
+    version = model.get("version") if model else None
+    if version is None:
+        raise HockeyModelError(
+            f"report-index: the build {version_file(report)} has no model.version, so it "
+            "cannot be published; build the report from a fitted model"
+        )
     return {
         "file": version_file(report),
         "generated_at": report["generated_at"],
         "code_sha": model["code_sha"] if model else None,
         "fit_sha256": model["fit_sha256"] if model else None,
+        "model_version": version,
         "inputs_sha256": report["inputs_sha256"],
         "schema_version": report["schema_version"],
     }

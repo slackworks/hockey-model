@@ -31,7 +31,8 @@
           "code_sha": {"type": ["string", "null"]},
           "fit_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
           "inputs_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "schema_version": {"type": "integer", "minimum": 1}
+          "schema_version": {"type": "integer", "minimum": 1},
+          "model_version": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
         }
       }
     }

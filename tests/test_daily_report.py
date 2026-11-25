@@ -271,6 +271,7 @@ def test_report_names_the_model_in_both_copies(store: sqlite3.Connection) -> Non
         "features": ["xg_form", "rest"],
         "fit_sha256": model_identity(_fit(), None).fit_sha256,
         "code_sha": "c0ffee",
+        "version": model_identity(_fit(), None).version,
     }
     assert "Model: xg_form, rest; fit " in report_markdown(report)
 

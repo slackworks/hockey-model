@@ -30,7 +30,8 @@
       "properties": {
         "features": {"type": "array", "items": {"type": "string"}},
         "fit_sha256": {"$ref": "#/$defs/sha256"},
-        "code_sha": {"type": ["string", "null"]}
+        "code_sha": {"type": ["string", "null"]},
+        "version": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
       }
     },
     "training_gaps": {"type": "array", "items": {"type": "string"}}
