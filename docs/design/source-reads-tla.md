@@ -251,7 +251,8 @@ So a break of `Newest` or `Before` cannot also change the property that checks i
 
 ### 1. A transient failure in a permanent streak ends the gap (#329)
 
-`known_gaps()` asks that every failure of the streak is permanent (`MIN(COALESCE(permanent, 0)) = 1`).
+Before #329, `known_gaps()` asked that every failure of the streak is permanent (`MIN(COALESCE(permanent, 0)) = 1`).
+It now counts the permanent failures (`SUM(COALESCE(permanent, 0)) >= N`).
 The break `today-mixed-streak` puts that rule into the spec, and TLC stops at `LastReadsMakeGap` with this log of `live`, all at tick 0: transient, permanent, permanent.
 The last two reads failed with a permanent status, and the URL is not a gap.
 `GapSticky` finds the same rule from the other side: permanent, permanent is a gap, and one more transient failure ends it.
@@ -272,7 +273,8 @@ The production clock makes the tie rare, so #329 fixes this in the same query as
 
 ### 3. The gap set ignores the cutoff (#330)
 
-`stale_sources()` and `training_gaps()` call `abandoned_urls()`, which reads the whole log.
+Before #330, `stale_sources()` and `training_gaps()` called `abandoned_urls()`, which read the whole log.
+They now pass their cutoff, so the gap set reads only the reads before it.
 The break `today-stale-gaps-whole-log` puts that rule into the spec, and TLC stops at `NoRowAfterCutoff`:
 
 1. Tick 0: a read of `day` works, and a read of `old` fails.
