@@ -552,7 +552,7 @@ _NOTES_NAME_BUILD = f"UTC, report-{DAY}-202013Z."
 
 
 def _publish_over(
-    fakes: Path, tmp_path: Path, inputs: str, *, drop_passed: bool, notes: str
+    fakes: Path, tmp_path: Path, inputs: str, *, drop_passed: bool | str, notes: str
 ) -> subprocess.CompletedProcess[str]:
     """Publish over a release whose newest build has ``inputs``, with the puck drop as given."""
     _write_report(tmp_path / "report")
@@ -602,6 +602,21 @@ def test_a_release_behind_its_newest_build_is_repaired_after_the_puck_drop(
     result = _publish_over(fakes, tmp_path, "a" * 64, drop_passed=True, notes="")
     assert result.returncode == 0, result.stderr
     assert _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+
+
+def test_an_empty_token_stops_the_publish_before_any_gh_call(fakes: Path, tmp_path: Path) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path, GH_TOKEN="")
+    assert result.returncode == 2
+    assert "GH_TOKEN is empty" in result.stderr
+    assert not _calls_with(tmp_path, "gh ", "")
+
+
+def test_a_non_boolean_puck_drop_stops_the_publish(fakes: Path, tmp_path: Path) -> None:
+    result = _publish_over(fakes, tmp_path, "b" * 64, drop_passed="yes", notes=_NOTES_NAME_BUILD)
+    assert result.returncode == 1
+    assert "lacks a boolean puck_drop_passed" in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", TAG)
 
 
 def test_a_retry_of_an_older_build_leaves_the_aliases_with_the_newest_build(

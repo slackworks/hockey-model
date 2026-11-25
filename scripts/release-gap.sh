@@ -44,8 +44,8 @@ release_gap() {
   fi
   newest_build="${newest_build%.json}"
   # A report-DATE.json that is not a report is a defect of the release, and a publish repairs it.
-  if ! alias_at="$(jq -er '.generated_at | select(type == "string")' "$dir/report-$day.json" \
-    2>/dev/null)"; then
+  if ! alias_at="$(jq -er '.generated_at | select(type == "string")' \
+    "$dir/report-$day.json")"; then
     printf 'its report-%s.json holds no generated_at' "$day"
     return 0
   fi

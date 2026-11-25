@@ -26,6 +26,11 @@ set -euo pipefail
 # call gets it back with a prefix (#313).
 read_token="${GH_TOKEN:-}"
 unset GH_TOKEN
+# An empty token makes gh fall back to the stored login, so a local run would publish as a person.
+if [[ -z "$read_token" ]]; then
+  echo "publish-daily-report: GH_TOKEN is empty. Set it to the release token; without it gh uses the local login." >&2
+  exit 2
+fi
 
 day=""
 report_dir=""
@@ -169,8 +174,16 @@ skip_if_complete() {
     echo "publish-daily-report: report-due failed while checking the puck drop; its error is above. Nothing was published." >&2
     exit 1
   fi
+  if [[ "$(jq -r '.puck_drop_passed | type' <<<"$due")" != "boolean" ]]; then
+    echo "publish-daily-report: report-due lacks a boolean puck_drop_passed; it printed: $due. Nothing was published." >&2
+    exit 1
+  fi
   if [[ "$(jq -r '.puck_drop_passed' <<<"$due")" == "true" ]]; then
-    echo "::notice::publish-daily-report: $tag is complete and the first puck drop has passed. Nothing was published." >&2
+    skipped="$tag is complete, the first puck drop has passed, and this build changes its inputs."
+    echo "::warning::publish-daily-report: $skipped Nothing was published; the release keeps its newest build." >&2
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      echo "publish-daily-report: $skipped Nothing was published; the release keeps its newest build." >>"$GITHUB_STEP_SUMMARY"
+    fi
     exit 0
   fi
   return 0

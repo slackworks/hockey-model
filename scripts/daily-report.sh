@@ -35,6 +35,11 @@ skip_unchanged=0
 # function that re-exports it, and the export goes away here, so no other command sees it.
 read_token="${REPORT_GH_TOKEN:-}"
 unset REPORT_GH_TOKEN
+# An empty token makes gh fall back to the stored login, so a local run would read as a person.
+if [[ -z "$read_token" ]]; then
+  echo "daily-report: REPORT_GH_TOKEN is empty. Set it to the release read token; without it gh uses the local login." >&2
+  exit 2
+fi
 
 # shellcheck source=scripts/usage.sh
 source "$(dirname "$0")/usage.sh"

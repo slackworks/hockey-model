@@ -70,6 +70,9 @@ def _env(fakes: Path, tmp_path: Path, **extra: str) -> dict[str, str]:
         "FAKE_DUE_JSON": due_json(),
         "FAKE_BACKTEST_JSON": json.dumps({"live_features": LIVE}),
         "GITHUB_SHA": SHA,
+        # The scripts stop without a token, as CI always sets one. A test that needs none passes "".
+        "GH_TOKEN": "a-token",
+        "REPORT_GH_TOKEN": "a-token",
         # report-decide is the real command: it holds the decision the gate script prints.
         "FAKE_REAL_UV": REAL_UV,
     }
