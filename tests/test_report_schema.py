@@ -412,6 +412,13 @@ def test_an_index_entry_copies_the_identity_of_its_report(report: dict[str, Any]
     assert entry["model_version"] == model["version"]
 
 
+@given(_reports())
+def test_an_index_entry_refuses_any_report_without_a_version(report: dict[str, Any]) -> None:
+    del report["model"]["version"]
+    with pytest.raises(HockeyModelError, match="has no model.version"):
+        index_entry(report)
+
+
 def _fold(batch: list[dict[str, Any]]) -> dict[str, Any]:
     index = None
     for report in batch:
@@ -507,6 +514,7 @@ _IDENTITIES = st.one_of(
         st.lists(_TEXT, max_size=3).map(tuple),
         _HEX,
         st.one_of(st.none(), _TEXT),
+        _VERSION,
     ),
 )
 _DAILY_REPORTS = st.builds(

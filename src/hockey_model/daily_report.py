@@ -50,8 +50,9 @@ class ModelIdentity:
     features: tuple[str, ...]
     fit_sha256: str
     code_sha: str | None
-    # Set by ``model_identity``. Left ``None`` only by a caller that builds an identity by hand.
-    version: str | None = None
+    # The model version of ``model_version``. Every report names it, so a report with no version
+    # cannot be built.
+    version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,14 +237,12 @@ def report_json(report: DailyReport) -> dict[str, Any]:
 def _model_json(model: ModelIdentity | None) -> dict[str, Any] | None:
     if model is None:
         return None
-    body: dict[str, Any] = {
+    return {
         "features": list(model.features),
         "fit_sha256": model.fit_sha256,
         "code_sha": model.code_sha,
+        "version": model.version,
     }
-    if model.version is not None:
-        body["version"] = model.version
-    return body
 
 
 def _cell(text: str) -> str:

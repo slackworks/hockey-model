@@ -56,7 +56,7 @@ def _report(line: DailyLine | None = None, **fields: object) -> DailyReport:
         NOW,
         0.8,
         (line,),
-        ModelIdentity(("xg_form",), "f" * 64, "c0ffee"),
+        ModelIdentity(("xg_form",), "f" * 64, "c0ffee", VERSION),
         ("espn: gap",),
     )
     return replace(base, **fields)
@@ -65,6 +65,8 @@ def _report(line: DailyLine | None = None, **fields: object) -> DailyReport:
 def _with(**fields: object) -> Callable[[], DailyReport]:
     return lambda: _report(DailyLine(_row(), _prediction(**fields), ""))
 
+
+VERSION = "0123456789abcdef"
 
 CHANGES: dict[str, Callable[[], DailyReport]] = {
     "home_win": _with(home_win=0.56, away_win=0.44),
@@ -76,9 +78,10 @@ CHANGES: dict[str, Callable[[], DailyReport]] = {
     "start": lambda: _report(DailyLine(_row(start=utc("2026-01-20T23:30")), _prediction(), "")),
     "state": lambda: _report(DailyLine(_row(state="LIVE"), _prediction(), "")),
     "skipped": lambda: _report(DailyLine(_row(), None, "game is postponed")),
-    "fit": lambda: _report(model=ModelIdentity(("xg_form",), "e" * 64, "c0ffee")),
-    "code_sha": lambda: _report(model=ModelIdentity(("xg_form",), "f" * 64, "decaf")),
-    "features": lambda: _report(model=ModelIdentity(("rest",), "f" * 64, "c0ffee")),
+    "fit": lambda: _report(model=ModelIdentity(("xg_form",), "e" * 64, "c0ffee", VERSION)),
+    "code_sha": lambda: _report(model=ModelIdentity(("xg_form",), "f" * 64, "decaf", VERSION)),
+    "features": lambda: _report(model=ModelIdentity(("rest",), "f" * 64, "c0ffee", VERSION)),
+    "version": lambda: _report(model=ModelIdentity(("xg_form",), "f" * 64, "c0ffee", "1" * 16)),
     "training_gaps": lambda: _report(footer_gaps=()),
     "level": lambda: _report(level=0.9),
     "day": lambda: _report(day=date(2026, 1, 21)),
