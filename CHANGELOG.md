@@ -70,6 +70,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add the release workflow `release.yml`, which runs for a tag that starts with `v`. `scripts/check_release.py` fails unless the tag is `v` and `project.version`, the version is a normal PEP 440 version with no local part and no `.dev` part, and `CHANGELOG.md` has a `## [VERSION]` section with text. The build job runs the wheel smoke test and checks that the wheel and the source archive name the version. The publish job, the only job that can write, attaches both files to the GitHub release through `scripts/publish-release.sh`, which skips a file with the same bytes and stops on a file with other bytes. [feat:ci]
 - Make the release workflow fail unless the newest push run of `ci.yml` for the tagged commit succeeded, through `scripts/check-commit-ci.sh`. A tag on a commit with a red or a missing push run publishes nothing, and a pull request run does not count. [feat:ci]
 - Add `renovate.json` for Renovate, with a `minimumReleaseAge` hold, strict internal checks, digest pins for actions, and no automerge until #104 shows the required checks. Dependabot stays on for alerts only. See `docs/design/dependency-updates.md`. [feat:ci]
+- Add `model.version` to the daily report, and `model_version` to each index entry. It is a 16-digit hex digest of the fit features and the specification constants. A refit keeps the version, and a feature change gives a new one. The field is optional in the schema, so `schema_version` stays 1, and `report-index` refuses a build without it (#331). [feat:report]
 
 ### Changed
 
@@ -103,6 +104,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Run `pytest` with `-n auto` (pytest-xdist) in the CI test job and in the pre-push coverage hook. [feat:ci]
 - Remove the attempt-form research path of the leak test (#77, #93): the `--candidates` option of `hockey-model backtest`, the `attempt_form` feature and the `attempt_form` missing kind, `mp_attempt_form_before`, and the `next_step` field of `hockey-model store upgrade`, which only asked for a reread before an attempt-form backtest. A fit or a candidate list that names `attempt_form` now fails with the list of features. The stored attempt columns stay. The report `docs/backtest/2026-11-attempt-form-leak-test.md` names the commit that reproduces it. [refactor:model]
 - Drop `mp_team_games.unblocked_for` and `mp_team_games.unblocked_against` from the store, which is now schema version 8, and stop reading the two `unblockedShotAttempts` columns of the MoneyPuck file. No feature used them. `hockey-model store upgrade` copies every stored value, with the game, the team, and the read time of its row, to the new table `retired_mp_unblocked` before it rebuilds `mp_team_games`. Every other value of a row stays, so the next read of the file writes no row again. [refactor:store]
+- Skip the publish of a complete release when its newest build has the same inputs, or when the first puck drop has passed. A release that is behind its newest build is still repaired (#334). [fix:publish]
 
 ### Fixed
 
@@ -204,5 +206,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add a `form_games_left_out` note that counts the games that a form share leaves out because their total is zero, and give a team whose every game has a zero total its own gap note. A measured zero share stays valid. [fix:model]
 - Make a 404 for the MoneyPuck goalie file of the new season a note and not an error, while the store holds no final game of that season. Before, each refresh from July to September exited 1. The 404 stores no failed read, so the file never becomes a known gap. [fix:refresh]
 - Make the backtest raise `HockeyModelError` when the actual run and the guess run scored different games. The error counts the games and names the first ones. A bare `KeyError` was raised before. [fix:backtest]
+- Stop one transient read from ending a streak of permanent failures. A source gap now needs enough permanent failures, or enough failures over the span (#329). [fix:store]
+- Read `stale_sources` and `training_gaps` only from reads before their cutoff, so a later read no longer changes an earlier answer (#330). [fix:store]
 
 [Unreleased]: https://github.com/slackworks/hockey-model/commits/main
