@@ -208,5 +208,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Make the backtest raise `HockeyModelError` when the actual run and the guess run scored different games. The error counts the games and names the first ones. A bare `KeyError` was raised before. [fix:backtest]
 - Stop one transient read from ending a streak of permanent failures. A source gap now needs enough permanent failures, or enough failures over the span (#329). [fix:store]
 - Read `stale_sources` and `training_gaps` only from reads before their cutoff, so a later read no longer changes an earlier answer (#330). [fix:store]
+- Stop a publish with a message that names the failed release call, and treat a release that lacks the version files of its newest build as behind, so the next run repairs it (#339, #341). [fix:publish]
 
 [Unreleased]: https://github.com/slackworks/hockey-model/commits/main
