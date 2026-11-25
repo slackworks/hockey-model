@@ -21,19 +21,22 @@ from hockey_model.game_model.seasons import (
 from hockey_model.sources.moneypuck import TEAM_GAMES_URL, goalie_games_url
 from hockey_model.store.source_reads import (
     ACTIVE_FAILURE_WINDOW,
+    DAILY_FACEOFF,
     ESPN_INJURIES,
+    ESPN_STARTERS,
     KNOWN_SOURCES,
     LIVE_FEED_MAX_AGE,
+    MONEYPUCK,
     MONEYPUCK_MAX_AGE,
+    SCORES,
     abandoned_urls,
 )
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
-_MONEYPUCK = "moneypuck"
 # Sources with one current URL: it must be read recently, and a failure counts at any age.
-_SINGLE_FEEDS = {ESPN_INJURIES: LIVE_FEED_MAX_AGE, "daily_faceoff": LIVE_FEED_MAX_AGE}
+_SINGLE_FEEDS = {ESPN_INJURIES: LIVE_FEED_MAX_AGE, DAILY_FACEOFF: LIVE_FEED_MAX_AGE}
 # Sources read once per day or game. At least one URL of each must have been read recently.
-_DAILY_FEEDS = {"nhl_scores": LIVE_FEED_MAX_AGE, "espn_starters": LIVE_FEED_MAX_AGE}
+_DAILY_FEEDS = {SCORES: LIVE_FEED_MAX_AGE, ESPN_STARTERS: LIVE_FEED_MAX_AGE}
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +88,7 @@ def _age_limit(source: str, url: str, as_of: datetime) -> timedelta | None:
     """Return how old the newest good read of a current URL may be, or ``None`` if no limit."""
     if source in _SINGLE_FEEDS:
         return _SINGLE_FEEDS[source]
-    if source == _MONEYPUCK and url in _current_moneypuck_urls(as_of):
+    if source == MONEYPUCK and url in _current_moneypuck_urls(as_of):
         return MONEYPUCK_MAX_AGE
     return None
 
@@ -198,7 +201,7 @@ def stale_sources(conn: sqlite3.Connection, as_of: datetime) -> list[tuple[str, 
         if not any(last.good_at is not None for last in urls.values()):
             stale.append((source, "no read of it has worked yet"))
             continue
-        if source == _MONEYPUCK:
+        if source == MONEYPUCK:
             stale.extend(
                 (source, f"no read of {url} has worked yet")
                 for url in sorted(_current_moneypuck_urls(as_of) - urls.keys())

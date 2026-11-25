@@ -13,7 +13,6 @@ from hockey_model.sources.espn import (
     fetch_injuries,
     fetch_scoreboard_starters,
     parse_injuries,
-    parse_injuries_with_notes,
     parse_scoreboard_starters,
 )
 from hockey_model.sources.http import HttpClient
@@ -163,14 +162,16 @@ def test_an_unknown_status_is_named_in_the_notes() -> None:
     payload = load("injuries.json")
     payload["injuries"][0]["injuries"][0]["status"] = "Personal Reasons"
     payload["injuries"][0]["injuries"][0]["athlete"]["displayName"] = "Some Player"
-    _, notes = parse_injuries_with_notes(payload)
+    notes: list[str] = []
+    parse_injuries(payload, notes)
     assert len(notes) == 1
     assert "'Personal Reasons'" in notes[0]
     assert "Some Player" in notes[0]
 
 
 def test_a_known_status_adds_no_note() -> None:
-    _, notes = parse_injuries_with_notes(load("injuries.json"))
+    notes: list[str] = []
+    parse_injuries(load("injuries.json"), notes)
     assert notes == []
 
 

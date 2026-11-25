@@ -23,7 +23,7 @@ SOURCE = "nhl"
 NHL_BASE = "https://api-web.nhle.com/v1"
 # The parser name that an archived payload records. Change the version when a parser change can
 # change a parsed row.
-SCORE_PARSER = "nhl_score:1"
+SCORE_PARSER = "nhl_score:2"
 BOXSCORE_PARSER = "nhl_boxscore:1"
 # Regular season and playoffs. Preseason (1), All-Star (4), and national teams (9, 19) are out.
 GAME_TYPES_KEPT = frozenset({2, 3})
@@ -108,7 +108,7 @@ def _final_score(team: Mapping[str, object], where: str) -> int:
     return int_field(SOURCE, team, "score", where)
 
 
-def _parse_game(raw: object) -> GameRow | None:
+def _parse_game(raw: object, notes: list[str] | None = None) -> GameRow | None:
     game = as_mapping(SOURCE, raw, "a score day game")
     game_id = int_field(SOURCE, game, "id", "a score day game")
     where = f"game {game_id}"
@@ -132,17 +132,23 @@ def _parse_game(raw: object) -> GameRow | None:
     )
     if not row.is_final:
         return row
-    return _with_result(row, game, home, away)
+    return _with_result(row, game, home, away, notes)
 
 
 def _with_result(
-    row: GameRow, game: Mapping[str, object], home: Mapping[str, object], away: Mapping[str, object]
+    row: GameRow,
+    game: Mapping[str, object],
+    home: Mapping[str, object],
+    away: Mapping[str, object],
+    notes: list[str] | None,
 ) -> GameRow:
     where = f"final game {row.game_id}"
     outcome = as_mapping(SOURCE, field(SOURCE, game, "gameOutcome", where), f"{where} gameOutcome")
     last = str_field(SOURCE, outcome, "lastPeriodType", f"{where} gameOutcome")
-    if last not in LAST_PERIODS:
-        raise SourceParseError(SOURCE, f"{where} has unknown lastPeriodType {last!r}")
+    if last not in LAST_PERIODS and notes is not None:
+        # The value is stored as text and no reader branches on it, so a new period type still
+        # reads, stores, and reaches a person, and one label never fails the whole score day.
+        notes.append(f"{SOURCE} score day: {where} has lastPeriodType {last!r}, which is not named")
     return GameRow(
         game_id=row.game_id,
         season=row.season,
@@ -157,14 +163,16 @@ def _with_result(
     )
 
 
-def parse_score_day(payload: object) -> list[GameRow]:
+def parse_score_day(payload: object, notes: list[str] | None = None) -> list[GameRow]:
     """Return the regular-season and playoff games of one score day.
 
-    A game that is not final carries no scores, so it is never read as a result.
+    A game that is not final carries no scores, so it is never read as a result. ``notes``
+    collects one line for each period type that this code does not name, so the caller can
+    report it. A period type never stops the read.
     """
     top = as_mapping(SOURCE, payload, "the score day")
     games = as_list(SOURCE, field(SOURCE, top, "games", "the score day"), "score day games")
-    rows = (_parse_game(raw) for raw in games)
+    rows = [_parse_game(raw, notes) for raw in games]
     return [row for row in rows if row is not None]
 
 
@@ -276,9 +284,13 @@ def score_day_url(day: date) -> str:
     return f"{NHL_BASE}/score/{day.isoformat()}"
 
 
-def fetch_score_day(client: HttpClient, day: date) -> list[GameRow]:
-    """Fetch and parse the NHL score feed for one calendar day."""
-    return parse_score_day(get_json(client, SOURCE, score_day_url(day)))
+def fetch_score_day(client: HttpClient, day: date, notes: list[str] | None = None) -> list[GameRow]:
+    """Fetch and parse the NHL score feed for one calendar day.
+
+    ``notes`` collects one line for each period type that this code does not name, so the
+    caller can report it. A period type never stops the read.
+    """
+    return parse_score_day(get_json(client, SOURCE, score_day_url(day)), notes)
 
 
 def boxscore_url(game_id: int) -> str:

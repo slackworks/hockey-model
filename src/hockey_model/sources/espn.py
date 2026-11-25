@@ -181,17 +181,16 @@ def _injury_with_note(raw: object) -> tuple[InjuryRead, str | None]:
     return read, f"{SOURCE} injuries: {name} ({code}) has status {status!r}, which is not named"
 
 
-def parse_injuries(payload: object) -> list[InjuryRead]:
-    """Return every player on the injury list."""
-    return parse_injuries_with_notes(payload)[0]
+def parse_injuries(payload: object, notes: list[str] | None = None) -> list[InjuryRead]:
+    """Return every player on the injury list.
 
-
-def parse_injuries_with_notes(payload: object) -> tuple[list[InjuryRead], list[str]]:
-    """Return every player on the injury list, and one note for each status this code lacks."""
+    ``notes`` collects one line for each status that this code does not name, so the caller
+    can report it. A status never stops the read (#325).
+    """
     top = as_mapping(SOURCE, payload, "the injury list")
     clubs = as_list(SOURCE, field(SOURCE, top, "injuries", "the injury list"), "injury clubs")
     reads: list[InjuryRead] = []
-    notes: list[str] = []
+    found: list[str] = []
     for raw in clubs:
         club = as_mapping(SOURCE, raw, "an injury club")
         entries = as_list(SOURCE, field(SOURCE, club, "injuries", "an injury club"), "club entries")
@@ -199,8 +198,11 @@ def parse_injuries_with_notes(payload: object) -> tuple[list[InjuryRead], list[s
             read, note = _injury_with_note(entry)
             reads.append(read)
             if note is not None:
-                notes.append(note)
-    return reads, notes
+                found.append(note)
+    if notes is not None:
+        # The read succeeded, so a note never hides a failure. It only names an unknown status.
+        notes.extend(found)
+    return reads
 
 
 def fetch_scoreboard_starters(
@@ -221,8 +223,4 @@ def fetch_injuries(client: HttpClient, notes: list[str] | None = None) -> list[I
     ``notes`` collects one line for each status that this code does not name, so the caller
     can report it. A status never stops the read (#325).
     """
-    reads, found = parse_injuries_with_notes(get_json(client, SOURCE, f"{ESPN_BASE}/injuries"))
-    if notes is not None:
-        # The read succeeded, so a note never hides a failure. It only names an unknown status.
-        notes.extend(found)
-    return reads
+    return parse_injuries(get_json(client, SOURCE, f"{ESPN_BASE}/injuries"), notes)

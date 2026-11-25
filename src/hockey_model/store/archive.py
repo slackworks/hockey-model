@@ -15,12 +15,9 @@ from typing import Final
 
 from hockey_model.store.db import StoreError
 from hockey_model.store.source_reads import (
-    BOXSCORES,
-    DAILY_FACEOFF,
     ESPN_INJURIES,
     ESPN_STARTERS,
-    MONEYPUCK,
-    SCORES,
+    KNOWN_SOURCES,
 )
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
@@ -34,12 +31,6 @@ STATUSES = frozenset({OK, HTTP_ERROR, SHAPE_ERROR, STORE_ERROR})
 # Level 6 is the zlib default. A body of a few hundred kilobytes costs little time at that
 # level, and the store keeps every byte that the source sent.
 COMPRESS_LEVEL: Final = 6
-# The sources that a refresh records an observation for. Every one keeps its bytes, except the
-# MoneyPuck team file: it changes daily and it is large, so its tables keep each changed row
-# instead. Design: docs/design/payload-archive.md
-ARCHIVED_SOURCES = frozenset(
-    {SCORES, BOXSCORES, ESPN_STARTERS, ESPN_INJURIES, DAILY_FACEOFF, MONEYPUCK}
-)
 # The sources whose payload holds a betting market. The capture removes those fields before the
 # bytes reach the parser or the archive, so the source name decides that, not the caller (#82).
 MARKET_SOURCES = frozenset({ESPN_STARTERS, ESPN_INJURIES})
@@ -48,14 +39,16 @@ MARKET_SOURCES = frozenset({ESPN_STARTERS, ESPN_INJURIES})
 def is_market_source(source: str) -> bool:
     """Return True when the payload of ``source`` holds betting-market fields.
 
-    Raises ``StoreError`` for a source that the archive does not list, so a new source cannot
-    reach the store without a decision on its market fields.
+    Every source that a refresh records keeps a body, except the MoneyPuck team file: it changes
+    daily and it is large, so its tables keep each changed row instead. Raises ``StoreError`` for
+    a source that a refresh does not record, so a new source cannot reach the store without a
+    decision on its market fields. Design: docs/design/payload-archive.md
     """
-    if source not in ARCHIVED_SOURCES:
+    if source not in KNOWN_SOURCES:
         raise StoreError(
-            f"read {source}: this source is not in ARCHIVED_SOURCES, so its bytes would never "
-            "reach the archive; add the source to store/archive.py with its archive rule from "
-            "docs/design/payload-archive.md"
+            f"read {source}: this source is not in KNOWN_SOURCES, so its bytes would never "
+            "reach the archive; add the source to store/source_reads.py with its archive rule "
+            "from docs/design/payload-archive.md"
         )
     return source in MARKET_SOURCES
 

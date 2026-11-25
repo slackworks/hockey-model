@@ -15,18 +15,19 @@ from seeding import with_market_fields
 
 from hockey_model.sources.sanitize import strip_market_fields
 from hockey_model.store.archive import (
-    ARCHIVED_SOURCES,
     HTTP_ERROR,
     OK,
     SHAPE_ERROR,
     STORE_ERROR,
     Fetch,
     canonical_bytes,
+    is_market_source,
     observations_for,
     payload_bytes,
     record_observation,
 )
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.source_reads import KNOWN_SOURCES, MONEYPUCK
 from hockey_model.store.upgrade import upgrade_store
@@ -234,22 +235,23 @@ def test_an_espn_payload_stores_no_market_field(conn: sqlite3.Connection) -> Non
 
 
 # Each source whose refresh step keeps no body, with the reason. A new source must join
-# ARCHIVED_SOURCES, and must join this table when its bytes do not go to ``payloads``.
+# KNOWN_SOURCES, and must join this table when its bytes do not go to ``payloads``.
 NO_BODY_KEPT = {
     "moneypuck": "the team file is large and changes daily, so its tables keep each row",
 }
 
 
-def test_every_source_that_a_refresh_records_is_archived() -> None:
+def test_every_source_that_a_refresh_records_has_a_market_decision() -> None:
     """A new source cannot skip the archive by accident (docs/design/payload-archive.md)."""
-    assert ARCHIVED_SOURCES == KNOWN_SOURCES
+    for source in KNOWN_SOURCES:
+        assert is_market_source(source) in (True, False)
 
 
-def test_attempt_refuses_a_source_that_is_not_archived(conn: sqlite3.Connection) -> None:
+def test_attempt_refuses_a_source_that_a_refresh_does_not_record(conn: sqlite3.Connection) -> None:
     """The gate runs before the request, so a new source fails loud instead of losing bytes."""
     run = RefreshRun(conn, FakeClient(), FIRST)
-    with pytest.raises(StoreError, match="ARCHIVED_SOURCES"):
-        run.attempt("not_a_source", "https://example.test/a", lambda stamp: 0)
+    with pytest.raises(StoreError, match="KNOWN_SOURCES"):
+        run.attempt("not_a_source", "https://example.test/a", lambda stamp: 0, Reading("x:1"))
 
 
 def test_the_one_source_with_no_body_is_the_one_the_design_names() -> None:

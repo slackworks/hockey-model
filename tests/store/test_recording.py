@@ -82,9 +82,15 @@ def test_the_key_of_a_score_url_is_its_day(day: date) -> None:
 
 
 @settings(max_examples=50, deadline=None)
-@given(game_id=st.integers(min_value=0, max_value=9_999_999_999))
+@given(game_id=st.integers(min_value=1_000_000_000, max_value=9_999_999_999))
 def test_the_key_of_a_boxscore_url_is_its_game(game_id: int) -> None:
+    """An NHL game id is ten digits, so the key is the whole id and nothing shorter."""
     assert key_of("nhl_boxscores", boxscore_url(game_id)) == str(game_id)
+
+
+def test_a_game_id_that_is_not_ten_digits_gets_no_key() -> None:
+    """A truncated id in a URL is not a game, so it never becomes a key."""
+    assert key_of("nhl_boxscores", boxscore_url(0)) is None
 
 
 def test_a_market_source_loses_its_market_fields() -> None:
@@ -110,7 +116,7 @@ def test_a_body_that_is_not_json_passes_through_sanitized() -> None:
 
 def test_a_source_outside_the_archive_is_refused() -> None:
     """A new source cannot reach the store without a decision on its market fields."""
-    with pytest.raises(StoreError, match="not in ARCHIVED_SOURCES"):
+    with pytest.raises(StoreError, match="not in KNOWN_SOURCES"):
         RecordingClient(_OneBody(b"{}"), "a_new_source")
 
 

@@ -242,13 +242,18 @@ def read_days(
             run.stop(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
             return _timed_out(run, progress, finished)
 
-        def unit(stamp: datetime, current: date = day) -> int:
-            return write_games(run.conn, fetch_score_day(run.client, current), stamp)
+        notes: list[str] = []
+
+        def unit(stamp: datetime, current: date = day, found: list[str] = notes) -> int:
+            return write_games(run.conn, fetch_score_day(run.client, current, found), stamp)
 
         is_due = day in due
         open_before = _unresolved_on(run, day) if is_due else 0
         before = (is_due and _day_complete(run, day), open_before)
         ok = run.attempt(SCORES, score_day_url(day), unit, Reading(SCORE_PARSER))
+        if ok:
+            # The note describes a read that the store accepted, so a rolled-back day adds none.
+            run.notes.extend(notes)
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _read_finished(run, day, *before):

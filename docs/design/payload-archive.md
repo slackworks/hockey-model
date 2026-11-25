@@ -25,9 +25,9 @@ Build this one first.
 | MoneyPuck `all_teams.csv` | CSV, large, changes daily | row level only: the tables of [moneypuck-situations.md](moneypuck-situations.md) keep each changed row. The full file is not kept. |
 | MoneyPuck goalie ZIP | ZIP | full payload, because one season file is small and changes only while the season runs |
 
-The builder MUST read `store/refresh_nhl.py`, `store/refresh_other.py`, and `sources/*.py` and list the exact source names in a constant `ARCHIVED_SOURCES` in the new module.
+The builder MUST read `store/refresh_nhl.py`, `store/refresh_other.py`, and `sources/*.py` and list the exact source names in the `KNOWN_SOURCES` constant of `store/source_reads.py`, which already holds every source that a refresh records.
 `RefreshRun.attempt` MUST raise `StoreError` for a source that the list does not hold, before it makes any request.
-A source that is not in the list MUST be named in a test as "not archived", with the reason, so a new source cannot skip the archive by accident.
+A source that is not in the list MUST be named in a test as "not recorded", with the reason, so a new source cannot skip the archive by accident.
 
 ## Storage
 
@@ -116,7 +116,7 @@ The play-by-play design estimates about 600 MB for its backfill. The payloads of
 The first slice ships the storage, the sanitizer, and the capture (Code steps 1 to 4).
 It is schema version 9.
 `store/archive.py` holds `record_observation`, `payload_bytes`, `observations_for`, and the
-`ARCHIVED_SOURCES` list.
+market-source list.
 `store/recording.py` holds the capture wrapper and the `Reading` value that names a parser.
 The MoneyPuck team file writes its observation and no bytes, so the one source with no payload
 is named in the code and held by a test.

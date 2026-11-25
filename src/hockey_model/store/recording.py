@@ -24,8 +24,9 @@ from hockey_model.store.source_reads import BOXSCORES, SCORES
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_SCORE_DAY = re.compile(r"/([0-9]{4}-[0-9]{2}-[0-9]{2})$")
-_BOXSCORE = re.compile(r"/gamecenter/([0-9]{1,10})/boxscore$")
+_SCORE_DAY = re.compile(r"/([0-9]{4}-[0-9]{2}-[0-9]{2})\Z")
+# A game id is always ten digits, and the bounds say so, so a short id never becomes a key.
+_BOXSCORE = re.compile(r"/gamecenter/([0-9]{10})/boxscore\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,11 +104,6 @@ class Reading:
     parser: str
     expected_absence: Callable[[Exception], str | None] | None = None
     keep_body: bool = True
-
-
-# The reading of a unit that names no parser. ``attempt`` uses it so an existing caller keeps
-# its behavior, and the observation says that no parser read the payload.
-DEFAULT_READING = Reading(parser="unnamed:0")
 
 
 @dataclass(frozen=True, slots=True)
