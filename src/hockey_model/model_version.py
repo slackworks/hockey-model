@@ -6,6 +6,7 @@ ratings. It leaves out the fit weights, so a routine refit keeps the version.
 
 ``SPEC_REVISION`` is for changes that the feature list cannot name: a change to a feature formula
 or to the model form. Bump it in the same change.
+``tests/game_model/test_feature_pin.py`` fails when a feature value changes with no bump.
 """
 
 import hashlib
