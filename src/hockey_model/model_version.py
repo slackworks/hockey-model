@@ -9,12 +9,11 @@ or to the model form. Bump it in the same change.
 ``tests/game_model/test_feature_pin.py`` fails when a feature value changes with no bump.
 """
 
-import hashlib
-import json
 from collections.abc import Sequence
 
 from hockey_model.game_model.elo import ELO_HOME_ADV, ELO_INITIAL, ELO_K
 from hockey_model.game_model.features import FORM_WINDOW, GOALIE_WINDOW, REST_CAP_DAYS
+from hockey_model.json_hash import json_sha256
 
 SPEC_REVISION = 1
 # Hex digits of the SHA-256 that names a version. Sixteen digits make a collision unlikely.
@@ -34,5 +33,4 @@ def model_version(features: Sequence[str]) -> str:
         "goalie_window": GOALIE_WINDOW,
         "rest_cap_days": REST_CAP_DAYS,
     }
-    digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode("utf-8")).hexdigest()
-    return digest[:_DIGEST_LENGTH]
+    return json_sha256(spec)[:_DIGEST_LENGTH]

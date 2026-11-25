@@ -5,7 +5,6 @@ start, and the report marks it as a late run. A game that is over is predicted t
 way. A postponed game gets no prediction.
 """
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -23,6 +22,7 @@ from hockey_model.game import (
 )
 from hockey_model.game_model.logistic import LogisticFit
 from hockey_model.game_model.training import game_input
+from hockey_model.json_hash import json_sha256
 from hockey_model.model_version import model_version
 from hockey_model.models import GameModel
 from hockey_model.report_interval import away_interval, interval_json, interval_notes, win_cell
@@ -68,11 +68,6 @@ class DailyReport:
     footer_gaps: tuple[str, ...] = ()
 
 
-def _json_sha256(values: dict[str, Any]) -> str:
-    """Return the SHA-256 of ``values`` as JSON with sorted keys, so key order changes nothing."""
-    return hashlib.sha256(json.dumps(values, sort_keys=True).encode("utf-8")).hexdigest()
-
-
 def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
     """Return the identity of ``fit``. The hash covers every value that changes a prediction.
 
@@ -85,7 +80,7 @@ def model_identity(fit: LogisticFit, code_sha: str | None) -> ModelIdentity:
         "weights": dict(fit.weights),
     }
     return ModelIdentity(
-        tuple(fit.features), _json_sha256(values), code_sha or None, model_version(fit.features)
+        tuple(fit.features), json_sha256(values), code_sha or None, model_version(fit.features)
     )
 
 
@@ -216,7 +211,7 @@ def inputs_sha256(report: DailyReport) -> str:
         "model": _model_json(report.model),
         "training_gaps": list(report.footer_gaps),
     }
-    return _json_sha256(values)
+    return json_sha256(values)
 
 
 def report_json(report: DailyReport) -> dict[str, Any]:
