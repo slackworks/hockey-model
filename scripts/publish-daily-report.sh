@@ -281,6 +281,17 @@ version_status() {
   return 1
 }
 
+# Run one release write with the token. A failure stops the script with a message that names the
+# step, because an earlier step may already have changed the release (#339).
+release_write() {
+  local what="$1"
+  shift
+  if ! GH_TOKEN="$read_token" gh "$@"; then
+    echo "publish-daily-report: $what failed on $tag; gh's error is above. The release may be partly updated. Run the report workflow again: a release that is behind its newest build is repaired." >&2
+    exit 1
+  fi
+}
+
 if [[ "$answer" == "published" ]]; then
   # The release exists. Both version names are checked before either upload, so a collision
   # leaves no half-published build. When this build is the newest, the alias and the backtest
@@ -288,20 +299,21 @@ if [[ "$answer" == "published" ]]; then
   md_state="$(version_status "$version_md")" || exit 1
   json_state="$(version_status "$version_json")" || exit 1
   if [[ "$md_state" == "new" ]]; then
-    GH_TOKEN="$read_token" gh release upload "$tag" "$version_md"
+    release_write "the upload of ${version_md##*/}" release upload "$tag" "$version_md"
   fi
   if [[ "$json_state" == "new" ]]; then
-    GH_TOKEN="$read_token" gh release upload "$tag" "$version_json"
+    release_write "the upload of ${version_json##*/}" release upload "$tag" "$version_json"
   fi
   if [[ "$newest" == "$version_name" ]]; then
-    GH_TOKEN="$read_token" gh release upload "$tag" "${latest[@]}" --clobber
-    GH_TOKEN="$read_token" gh release edit "$tag" --notes-file "$notes"
+    release_write "the upload of the report-$day files" release upload "$tag" "${latest[@]}" --clobber
+    release_write "the edit of the notes" release edit "$tag" --notes-file "$notes"
   else
     echo "publish-daily-report: $build is older than the newest build ${newest%.json} of $tag. Its version files and its index entry are published; the report-$day files and the notes stay with the newest build." >&2
-    GH_TOKEN="$read_token" gh release upload "$tag" "$index" --clobber
+    release_write "the upload of the index" release upload "$tag" "$index" --clobber
   fi
 else
-  GH_TOKEN="$read_token" gh release create "$tag" "$version_md" "$version_json" "${latest[@]}" \
+  release_write "the creation of the release" release create "$tag" \
+    "$version_md" "$version_json" "${latest[@]}" \
     --target "$GITHUB_SHA" \
     --title "NHL predictions $day" \
     --notes-file "$notes"

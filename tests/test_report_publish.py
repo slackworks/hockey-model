@@ -11,7 +11,6 @@ from hypothesis import strategies as st
 from mutation_copy import require_path
 from report_script_support import (
     DAY,
-    GENERATED,
     SHA,
     TAG,
     _calls,
@@ -548,24 +547,37 @@ def _release_with_index(tmp_path: Path, generated: str) -> Path:
 
 
 # The release notes of a complete release name its newest build (#334).
-_NOTES_NAME_BUILD = f"UTC, report-{DAY}-202013Z."
+_OLDER_BUILD = f"report-{DAY}-100000Z"
+_NOTES_NAME_BUILD = f"UTC, {_OLDER_BUILD}."
 
 
 def _publish_over(
-    fakes: Path, tmp_path: Path, inputs: str, *, drop_passed: bool | str, notes: str
+    fakes: Path,
+    tmp_path: Path,
+    inputs: str,
+    *,
+    drop_passed: bool | str,
+    notes: str,
+    version_files: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Publish over a release whose newest build has ``inputs``, with the puck drop as given."""
+    """Publish a build of 20:20:13 over a release whose newest build is of 10:00:00.
+
+    The release build has ``inputs``, and the puck drop is as given.
+    """
     _write_report(tmp_path / "report")
     remote = tmp_path / "remote"
     remote.mkdir()
-    report = valid_report(GENERATED, inputs_sha256=inputs)
+    report = valid_report("2026-11-04T10:00:00.000000+00:00", inputs_sha256=inputs)
     (remote / f"index-{DAY}.json").write_text(json.dumps(add_build(None, report)), encoding="utf-8")
     (remote / f"report-{DAY}.json").write_text(json.dumps(report), encoding="utf-8")
+    assets = [f"index-{DAY}.json", f"report-{DAY}.json"]
+    if version_files:
+        assets += [f"{_OLDER_BUILD}.json", f"{_OLDER_BUILD}.md"]
     return _publish(
         fakes,
         tmp_path,
         FAKE_RELEASES=f"{TAG}\n",
-        FAKE_ASSETS=f"index-{DAY}.json\nreport-{DAY}.json",
+        FAKE_ASSETS="\n".join(assets),
         FAKE_REMOTE_DIR=str(remote),
         FAKE_NOTES=notes,
         FAKE_DUE_JSON=due_json(puck_drop_passed=drop_passed),
@@ -617,6 +629,34 @@ def test_a_non_boolean_puck_drop_stops_the_publish(fakes: Path, tmp_path: Path) 
     assert result.returncode == 1
     assert "lacks a boolean puck_drop_passed" in result.stderr
     assert not _calls_with(tmp_path, "gh release upload", TAG)
+
+
+def test_a_release_without_the_version_files_of_its_newest_build_is_repaired(
+    fakes: Path, tmp_path: Path
+) -> None:
+    result = _publish_over(
+        fakes, tmp_path, "a" * 64, drop_passed=False, notes=_NOTES_NAME_BUILD, version_files=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+
+
+@pytest.mark.parametrize(
+    ("command", "releases", "message"),
+    [
+        ("upload", f"{TAG}\n", "the upload of"),
+        ("edit", f"{TAG}\n", "the edit of the notes"),
+        ("create", "", "the creation of the release"),
+    ],
+)
+def test_a_failed_release_write_names_the_step(
+    fakes: Path, tmp_path: Path, command: str, releases: str, message: str
+) -> None:
+    _write_report(tmp_path / "report")
+    result = _publish(fakes, tmp_path, FAKE_RELEASES=releases, FAKE_WRITE_FAIL=command)
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "may be partly updated" in result.stderr
 
 
 def test_a_retry_of_an_older_build_leaves_the_aliases_with_the_newest_build(

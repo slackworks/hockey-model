@@ -119,6 +119,10 @@ def fakes(tmp_path: Path) -> Path:
         '  echo "HTTP/2.0 404 Not Found"\n'
         "  exit 1\n"
         "fi\n"
+        # FAKE_WRITE_FAIL names one release subcommand (upload, edit, or create) that fails.
+        'if [[ -n "${FAKE_WRITE_FAIL:-}" && "$1 $2" == "release $FAKE_WRITE_FAIL" ]]; then\n'
+        '  echo "write boom" >&2; exit 1\n'
+        "fi\n"
         'tag="${3:-}"\n'
         'if [[ "$1 $2" == "release view" ]]; then\n'
         '  if grep -qxF "$tag" <<<"${FAKE_RELEASES:-}"; then\n'

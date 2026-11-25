@@ -43,7 +43,8 @@ def _release(
     (remote / f"report-{DAY}.json").write_text(json.dumps(alias), encoding="utf-8")
     entries = [{"file": f"{name}.json", "generated_at": at} for name, at in builds]
     (remote / f"index-{DAY}.json").write_text(json.dumps({"builds": entries}), encoding="utf-8")
-    names = [f"{name}.json" for name, _ in builds] + [f"index-{DAY}.json", f"report-{DAY}.json"]
+    names = [f"{name}.{ext}" for name, _ in builds for ext in ("json", "md")]
+    names += [f"index-{DAY}.json", f"report-{DAY}.json"]
     newest = max(builds, key=lambda build: build[1])[0] if builds else NEWEST
     return {
         "FAKE_RELEASES": TAG,

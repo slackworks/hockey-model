@@ -43,6 +43,13 @@ release_gap() {
     return 1
   fi
   newest_build="${newest_build%.json}"
+  # The index names the newest build, so its version files must be assets (#341).
+  for asset in "$newest_build.json" "$newest_build.md"; do
+    if ! grep -qxF "$asset" <<<"$names"; then
+      printf 'it has no %s, the version file of its newest build' "$asset"
+      return 0
+    fi
+  done
   # A report-DATE.json that is not a report is a defect of the release, and a publish repairs it.
   if ! alias_at="$(jq -er '.generated_at | select(type == "string")' \
     "$dir/report-$day.json")"; then
