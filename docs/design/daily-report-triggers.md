@@ -29,7 +29,7 @@ A late or failed run is retried at the next hour.
 ## Which run publishes
 
 Every trigger that starts while the first puck drop of the game day is still ahead is due.
-The gate compares the time of the run, plus the report budget, with the first puck drop. A run that cannot finish before the puck drop does not publish.
+The gate compares the time of the run, plus the report budget, with the first puck drop. A run that cannot finish before the puck drop still publishes when the day has no release yet, because a late first report is full.
 The first due run that starts publishes the report.
 A later run before the puck drop builds the report again, and it publishes only when its inputs differ from the newest published report (#282).
 Each build keeps its own files, named `report-DATE-HHMMSSZ`, where the time is its `generated_at`, and nothing published is replaced (#196).
@@ -189,7 +189,7 @@ GitHub's `schedule` trigger ran the 23:44 UTC slot about 50 to 60 minutes late o
 The late run then fell after the puck drops, so most of the day's games were made after their start.
 The design is an external clock that calls `workflow_dispatch` on `daily-report.yml` at each trigger minute, so the slot does not depend on GitHub's queue.
 The `schedule` trigger stays as a fallback.
-The gate already skips a duplicate trigger once the release exists, so a dispatch and a late schedule run do no harm.
+The publish job skips a duplicate trigger once the release exists and is complete, unless the inputs changed before the first puck drop (#334).
 The owner provisions the clock. Use a fine-grained token limited to this repository with only the Actions write permission, plus Metadata read, with a set expiry, stored in the clock host's secret store.
 Until the owner provisions the clock, only the `schedule` trigger runs.
 The clock runs `gh workflow run daily-report.yml --repo slackworks/hockey-model` at each slot. The dispatch omits `--ref`, so it always runs the default branch.

@@ -70,6 +70,8 @@ fi
 source "$(dirname "$0")/valid-day.sh"
 # shellcheck source=scripts/release-exists.sh
 source "$(dirname "$0")/release-exists.sh"
+# shellcheck source=scripts/release-gap.sh
+source "$(dirname "$0")/release-gap.sh"
 if ! is_valid_day "$day"; then
   echo "publish-daily-report: --date '$day' is not a real date YYYY-MM-DD" >&2
   exit 2
@@ -135,6 +137,46 @@ if [[ "$answer" == "published" ]]; then
       exit 1
     fi
   fi
+fi
+
+# Exit 0 with no upload when the release is complete and this build adds nothing (#334). A
+# complete release is left alone when its newest build has the same inputs, or when the first
+# puck drop has passed. A release that is behind its newest build is repaired, as before.
+skip_if_complete() {
+  local dir="$1" gap answer reason due
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  if ! gap="$(GH_TOKEN="$read_token" release_gap "$tag" "$dir" "$day")"; then
+    exit 1
+  fi
+  if [[ -n "$gap" ]]; then
+    return 0
+  fi
+  if ! answer="$(uv run hockey-model report-compare --built "$json" \
+    --published "$dir/report-$day.json")"; then
+    echo "publish-daily-report: report-compare failed; its error is above. Nothing was published." >&2
+    exit 1
+  fi
+  if ! reason="$(jq -er '.reason | select(type == "string")' <<<"$answer")"; then
+    echo "publish-daily-report: report-compare payload lacks a reason string: $answer. Nothing was published." >&2
+    exit 1
+  fi
+  if [[ "$reason" == "unchanged" ]]; then
+    echo "::notice::publish-daily-report: the inputs of $tag are unchanged since its newest build. Nothing was published." >&2
+    exit 0
+  fi
+  if ! due="$(uv run hockey-model report-due --date "$day")"; then
+    echo "publish-daily-report: report-due failed while checking the puck drop; its error is above. Nothing was published." >&2
+    exit 1
+  fi
+  if [[ "$(jq -r '.puck_drop_passed' <<<"$due")" == "true" ]]; then
+    echo "::notice::publish-daily-report: $tag is complete and the first puck drop has passed. Nothing was published." >&2
+    exit 0
+  fi
+  return 0
+}
+if [[ "$answer" == "published" ]]; then
+  skip_if_complete "$check_dir/complete"
 fi
 
 # The command checks the report against its schema and the index against its own. It names the

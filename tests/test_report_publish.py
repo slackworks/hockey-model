@@ -11,11 +11,13 @@ from hypothesis import strategies as st
 from mutation_copy import require_path
 from report_script_support import (
     DAY,
+    GENERATED,
     SHA,
     TAG,
     _calls,
     _env,
     _run,
+    due_json,
     report_game,
     valid_report,
 )
@@ -531,12 +533,75 @@ def test_a_failed_version_download_is_not_called_a_collision(
 
 
 def _release_with_index(tmp_path: Path, generated: str) -> Path:
-    """Put an index with one build of ``generated`` where the fake release download finds it."""
+    """Put an index with one build of ``generated``, and its alias, where the download finds them.
+
+    The alias is the same build. Its release has no notes that name the build, so the release is
+    behind and a publish repairs it.
+    """
     remote = tmp_path / "remote"
     remote.mkdir()
-    index = add_build(None, valid_report(generated))
+    report = valid_report(generated)
+    index = add_build(None, report)
     (remote / f"index-{DAY}.json").write_text(json.dumps(index), encoding="utf-8")
+    (remote / f"report-{DAY}.json").write_text(json.dumps(report), encoding="utf-8")
     return remote
+
+
+# The release notes of a complete release name its newest build (#334).
+_NOTES_NAME_BUILD = f"UTC, report-{DAY}-202013Z."
+
+
+def _publish_over(
+    fakes: Path, tmp_path: Path, inputs: str, *, drop_passed: bool, notes: str
+) -> subprocess.CompletedProcess[str]:
+    """Publish over a release whose newest build has ``inputs``, with the puck drop as given."""
+    _write_report(tmp_path / "report")
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    report = valid_report(GENERATED, inputs_sha256=inputs)
+    (remote / f"index-{DAY}.json").write_text(json.dumps(add_build(None, report)), encoding="utf-8")
+    (remote / f"report-{DAY}.json").write_text(json.dumps(report), encoding="utf-8")
+    return _publish(
+        fakes,
+        tmp_path,
+        FAKE_RELEASES=f"{TAG}\n",
+        FAKE_ASSETS=f"index-{DAY}.json\nreport-{DAY}.json",
+        FAKE_REMOTE_DIR=str(remote),
+        FAKE_NOTES=notes,
+        FAKE_DUE_JSON=due_json(puck_drop_passed=drop_passed),
+    )
+
+
+def test_a_complete_release_with_the_same_inputs_is_not_published_again(
+    fakes: Path, tmp_path: Path
+) -> None:
+    result = _publish_over(fakes, tmp_path, "a" * 64, drop_passed=False, notes=_NOTES_NAME_BUILD)
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", TAG)
+
+
+def test_a_complete_release_is_left_alone_after_the_puck_drop(fakes: Path, tmp_path: Path) -> None:
+    result = _publish_over(fakes, tmp_path, "b" * 64, drop_passed=True, notes=_NOTES_NAME_BUILD)
+    assert result.returncode == 0, result.stderr
+    assert "first puck drop has passed" in result.stderr
+    assert not _calls_with(tmp_path, "gh release upload", TAG)
+
+
+def test_a_complete_release_with_new_inputs_publishes_before_the_puck_drop(
+    fakes: Path, tmp_path: Path
+) -> None:
+    result = _publish_over(fakes, tmp_path, "b" * 64, drop_passed=False, notes=_NOTES_NAME_BUILD)
+    assert result.returncode == 0, result.stderr
+    assert _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
+
+
+def test_a_release_behind_its_newest_build_is_repaired_after_the_puck_drop(
+    fakes: Path, tmp_path: Path
+) -> None:
+    result = _publish_over(fakes, tmp_path, "a" * 64, drop_passed=True, notes="")
+    assert result.returncode == 0, result.stderr
+    assert _calls_with(tmp_path, "gh release upload", f"/report-{DAY}.json")
 
 
 def test_a_retry_of_an_older_build_leaves_the_aliases_with_the_newest_build(
