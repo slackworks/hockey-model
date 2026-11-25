@@ -12,6 +12,7 @@ from seeding import add_game
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.moneypuck import goalie_games_url
 from hockey_model.store import refresh_other
+from hockey_model.store.archive import observations_for
 from hockey_model.store.db import connect
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.source_reads import abandoned_urls
@@ -60,6 +61,17 @@ def test_an_unpublished_file_never_becomes_a_known_gap(conn: sqlite3.Connection)
         moneypuck_run(conn, URL, missing(URL, 404), days)
     assert failed_reads(conn, URL) == 0
     assert URL not in abandoned_urls(conn, "moneypuck")
+
+
+def test_an_expected_absence_writes_its_observation_and_no_failed_read(
+    conn: sqlite3.Connection,
+) -> None:
+    """The request ran, so the archive says what it returned. The absence is not a gap."""
+    moneypuck_run(conn, URL, missing(URL, 404))
+    (found,) = [o for o in observations_for(conn, "moneypuck", None) if o.url == URL]
+    assert found.status == "http_error"
+    assert found.error is not None and "HTTP 404" in found.error
+    assert failed_reads(conn, URL) == 0
 
 
 def test_the_file_is_read_when_it_appears_after_404_runs(conn: sqlite3.Connection) -> None:

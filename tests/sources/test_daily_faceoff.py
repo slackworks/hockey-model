@@ -54,12 +54,20 @@ def test_parse_starters_confirmed_in_fixture() -> None:
     assert sum(r.status is StarterStatus.CONFIRMED for r in reads) == 2
 
 
-def test_parse_starters_rejects_unknown_status() -> None:
+def test_parse_starters_reads_unknown_status_with_a_note() -> None:
     def edit(data: list[dict]) -> None:
+        data[0]["homeGoalieName"] = "Home Goalie"
         data[0]["homeNewsStrengthName"] = "Rumoured"
 
-    with pytest.raises(SourceParseError, match="Rumoured"):
-        parse_starters(page_with(edit))
+    notes: list[str] = []
+    reads = parse_starters(page_with(edit), notes)
+    # One unnamed status must not drop the other 21 starters on the page (#325).
+    assert len(reads) == 22
+    home = next(read for read in reads if read.goalie_name == "Home Goalie")
+    assert home.status is StarterStatus.UNKNOWN
+    assert len(notes) == 1
+    assert "Rumoured" in notes[0]
+    assert "Home Goalie" in notes[0]
 
 
 def test_parse_starters_skips_a_side_with_no_goalie() -> None:

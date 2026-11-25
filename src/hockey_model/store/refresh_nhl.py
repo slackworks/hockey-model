@@ -8,7 +8,9 @@ from typing import NamedTuple
 from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of, game_day_window
 from hockey_model.sources.nhl import (
+    BOXSCORE_PARSER,
     FINAL_STATES,
+    SCORE_PARSER,
     BoxscoreRows,
     boxscore_url,
     fetch_boxscore,
@@ -19,8 +21,11 @@ from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store.db import StoreError
 from hockey_model.store.nhl_writes import game_is_missing_boxscore, write_boxscore, write_games
 from hockey_model.store.reads import game_row, unresolved_games
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.source_reads import (
+    BOXSCORES,
+    SCORES,
     failed_since,
     failed_urls,
     last_ok_read,
@@ -29,8 +34,6 @@ from hockey_model.store.source_reads import (
 from hockey_model.store.sql_text import placeholders
 from hockey_model.store.timestamps import parse_iso_utc
 
-SCORES = "nhl_scores"
-BOXSCORES = "nhl_boxscores"
 # A day is complete when a read came this long after the Eastern game day closed. The close is
 # 05:00 UTC in winter and 04:00 UTC in summer, so this margin gives 12:00 UTC and 11:00 UTC. The
 # latest NHL game of a day ends before both.
@@ -239,13 +242,18 @@ def read_days(
             run.stop(f"{SCORES}: stopped at {day.isoformat()}, because the time ran out")
             return _timed_out(run, progress, finished)
 
-        def unit(stamp: datetime, current: date = day) -> int:
-            return write_games(run.conn, fetch_score_day(run.client, current), stamp)
+        notes: list[str] = []
+
+        def unit(stamp: datetime, current: date = day, found: list[str] = notes) -> int:
+            return write_games(run.conn, fetch_score_day(run.client, current, found), stamp)
 
         is_due = day in due
         open_before = _unresolved_on(run, day) if is_due else 0
         before = (is_due and _day_complete(run, day), open_before)
-        ok = run.attempt(SCORES, score_day_url(day), unit)
+        ok = run.attempt(SCORES, score_day_url(day), unit, Reading(SCORE_PARSER))
+        if ok:
+            # The note describes a read that the store accepted, so a rolled-back day adds none.
+            run.notes.extend(notes)
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _read_finished(run, day, *before):
@@ -366,7 +374,7 @@ def read_boxscores(
             write_boxscore(run.conn, game_id, rows, stamp)
             return 1
 
-        ok = run.attempt(BOXSCORES, url, unit)
+        ok = run.attempt(BOXSCORES, url, unit, Reading(BOXSCORE_PARSER))
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _after_read(run, game_id, unresolved):

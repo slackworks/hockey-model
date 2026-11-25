@@ -12,7 +12,12 @@ from typing import Any, cast
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import add_nhl_id_columns, restore_unblocked_columns, stamp_old_version
+from seeding import (
+    add_nhl_id_columns,
+    drop_archive_tables,
+    restore_unblocked_columns,
+    stamp_old_version,
+)
 
 from hockey_model.store import migrations, sql_text, upgrade
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
@@ -736,6 +741,7 @@ def test_a_step_that_cannot_repair_the_table_shape_stops_the_upgrade(tmp_path: P
     conn = sqlite3.connect(path)
     add_nhl_id_columns(conn)
     restore_unblocked_columns(conn)
+    drop_archive_tables(conn)
     conn.execute("DROP TABLE fit_labels")
     conn.execute("CREATE TABLE fit_labels (fit_id INTEGER NOT NULL, set_at TEXT NOT NULL)")
     conn.commit()
@@ -804,6 +810,7 @@ def test_a_stamp_ahead_by_one_reruns_only_the_change_it_lost(tmp_path: Path) -> 
     conn = sqlite3.connect(path)
     add_nhl_id_columns(conn)
     restore_unblocked_columns(conn)
+    drop_archive_tables(conn)
     conn.execute("DROP TABLE source_reads")
     conn.execute(
         "CREATE TABLE source_reads (source TEXT, url TEXT, fetched_at TEXT, ok INTEGER, error TEXT)"

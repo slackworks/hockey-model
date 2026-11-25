@@ -6,9 +6,17 @@ from datetime import datetime, timedelta
 from hockey_model.sources.errors import SourceError
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
+# The source name of each feed that a refresh records. ``store/archive.py`` and the refresh
+# steps read these names, so this module is the one definition of each.
+SCORES = "nhl_scores"
+BOXSCORES = "nhl_boxscores"
+MONEYPUCK = "moneypuck"
+ESPN_STARTERS = "espn_starters"
+ESPN_INJURIES = "espn_injuries"
+DAILY_FACEOFF = "daily_faceoff"
 # Every source name that a refresh records in ``source_reads``.
 KNOWN_SOURCES = frozenset(
-    {"nhl_scores", "nhl_boxscores", "moneypuck", "espn_starters", "espn_injuries", "daily_faceoff"}
+    {SCORES, BOXSCORES, MONEYPUCK, ESPN_STARTERS, ESPN_INJURIES, DAILY_FACEOFF}
 )
 # A URL whose last this-many reads all failed is a known gap. A refresh skips it and says so.
 ABANDON_AFTER_FAILED_READS = 2
@@ -16,9 +24,7 @@ ABANDON_AFTER_FAILED_READS = 2
 # A streak of permanent failures, such as HTTP 403, needs no span: a retry cannot end it.
 ABANDON_MIN_SPAN_DAYS = 0.5
 # The feeds that a refresh reads on every run, because each has no dated alternative.
-LIVE_FEEDS = ("espn_starters", "espn_injuries", "daily_faceoff")
-# The source name of the ESPN injury list. Each good read of the list is one snapshot.
-ESPN_INJURIES = "espn_injuries"
+LIVE_FEEDS = (ESPN_STARTERS, ESPN_INJURIES, DAILY_FACEOFF)
 # How old the newest good read of a live feed may be at a prediction cutoff. The hourly prepare
 # and report runs read the feeds, so a read older than a day means a long outage.
 LIVE_FEED_MAX_AGE = timedelta(days=1)

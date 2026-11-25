@@ -82,6 +82,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "backtest.runner",
         "backtest.shards",
         "sources.espn",
+        "sources.sanitize",
         "sources.daily_faceoff",
         "sources.moneypuck",
         "game_model.elo",

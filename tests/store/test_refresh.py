@@ -45,6 +45,28 @@ def count(conn: sqlite3.Connection, table: str) -> int:
     return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
 
 
+def test_a_refresh_names_the_parser_of_every_source_it_reads(conn: sqlite3.Connection) -> None:
+    """A stored row must name its parser, or `store rebuild --parser` finds nothing (#82)."""
+    refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
+    recorded = {
+        source: {
+            parser
+            for (parser,) in conn.execute(
+                "SELECT DISTINCT parser FROM observations WHERE source = ?", (source,)
+            )
+        }
+        for (source,) in conn.execute("SELECT DISTINCT source FROM observations")
+    }
+    assert recorded == {
+        "daily_faceoff": {"daily_faceoff:2"},
+        "espn_injuries": {"espn_injuries:2"},
+        "espn_starters": {"espn_scoreboard:2"},
+        "moneypuck": {"moneypuck_team:1", "moneypuck_goalie:1"},
+        "nhl_boxscores": {"nhl_boxscore:1"},
+        "nhl_scores": {"nhl_score:2"},
+    }
+
+
 def test_refresh_writes_every_source(conn: sqlite3.Connection) -> None:
     report = refresh(conn, FakeClient(), now=NOW, backfill_from=date(2026, 1, 10))
     assert report.errors == ()
@@ -56,6 +78,28 @@ def test_refresh_writes_every_source(conn: sqlite3.Connection) -> None:
     assert count(conn, "games") == 14
     assert count(conn, "goalie_games") == 56
     assert count(conn, "starter_reads") == 2
+
+
+def test_refresh_notes_an_injury_status_that_the_code_does_not_name(
+    conn: sqlite3.Connection,
+) -> None:
+    """A new ESPN status is a note, and the other 19 injuries still store (#325)."""
+    payload = json.loads(fixture("espn/injuries.json"))
+    payload["injuries"][0]["injuries"][0]["status"] = "Suspension"
+    injuries = f"{ESPN}/injuries"
+    client = FakeClient({injuries: json.dumps(payload).encode()})
+    report = refresh_starters(conn, client, now=NOW)
+    assert report.errors == ()
+    assert report.written["espn_injuries"] == 20
+    assert any("Suspension" in note for note in report.notes)
+    statuses = {row[0] for row in conn.execute("SELECT status FROM injury_reads")}
+    assert "Suspension" in statuses
+
+
+def test_a_named_injury_status_adds_no_note(conn: sqlite3.Connection) -> None:
+    report = refresh_starters(conn, FakeClient(), now=NOW)
+    assert report.errors == ()
+    assert not any("is not named" in note for note in report.notes)
 
 
 def test_refresh_starters_reads_only_the_schedule_goalies_and_injuries(

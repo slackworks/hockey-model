@@ -190,7 +190,29 @@ def restore_unblocked_columns(conn: sqlite3.Connection) -> None:
     )
 
 
+def drop_archive_tables(conn: sqlite3.Connection) -> None:
+    """Remove the tables that the 8->9 step adds, so a store can pass for an older version."""
+    conn.execute("DROP TABLE IF EXISTS observations")
+    conn.execute("DROP TABLE IF EXISTS payloads")
+
+
+def with_market_fields(payload: object) -> object:
+    """Return an ESPN payload with the three market keys that a real response carries.
+
+    A saved fixture holds ``odds`` only, so this adds ``pickcenter`` and ``againstTheSpread``
+    at two depths: the payload, and each competition (#82).
+    """
+    if not isinstance(payload, dict):
+        return payload
+    payload["pickcenter"] = [{"provider": {"name": "DraftKings"}, "spread": 1.5}]
+    for event in payload.get("events", []):
+        for competition in event.get("competitions", []):
+            competition["againstTheSpread"] = [{"team": "TOR", "value": -1.5}]
+    return payload
+
+
 def stamp_old_version(conn: sqlite3.Connection, version: int) -> None:
     """Make a fresh store look like ``version``, which is below 7."""
     add_nhl_id_columns(conn)
+    drop_archive_tables(conn)
     conn.execute("UPDATE schema_version SET version = ?", (version,))

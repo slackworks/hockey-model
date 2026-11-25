@@ -6,14 +6,24 @@ from datetime import UTC, date, datetime, timedelta
 from hockey_model import progress as progress_log
 from hockey_model.game_day import game_day_of
 from hockey_model.game_model.seasons import SEASON_START_MONTH, season_code, season_start_year
+from hockey_model.sources.daily_faceoff import PARSER as DAILY_FACEOFF_PARSER
 from hockey_model.sources.daily_faceoff import STARTERS_URL, fetch_starters
 from hockey_model.sources.errors import SourceError
-from hockey_model.sources.espn import ESPN_BASE, fetch_injuries, fetch_scoreboard_starters
+from hockey_model.sources.espn import (
+    ESPN_BASE,
+    INJURIES_PARSER,
+    SCOREBOARD_PARSER,
+    fetch_injuries,
+    fetch_scoreboard_starters,
+)
+from hockey_model.sources.http import HttpClient
 from hockey_model.sources.moneypuck import (
     FIRST_SEASON,
+    GOALIE_PARSER,
     MONEYPUCK_CREDIT,
     REFRESH_AFTER,
     TEAM_GAMES_URL,
+    TEAM_PARSER,
     fetch_goalie_games,
     fetch_team_games,
     goalie_games_url,
@@ -25,13 +35,17 @@ from hockey_model.store.moneypuck_writes import (
     write_goalie_games,
     write_team_games,
 )
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
-from hockey_model.store.source_reads import ESPN_INJURIES, last_ok_read
+from hockey_model.store.source_reads import (
+    DAILY_FACEOFF,
+    ESPN_INJURIES,
+    ESPN_STARTERS,
+    MONEYPUCK,
+    last_ok_read,
+)
 from hockey_model.store.starter_writes import write_starter_reads
 
-MONEYPUCK = "moneypuck"
-ESPN_STARTERS = "espn_starters"
-DAILY_FACEOFF = "daily_faceoff"
 _UNMATCHED_SHOWN = 5
 
 
@@ -130,12 +144,14 @@ def moneypuck(run: RefreshRun) -> None:
     gaps = _note_gaps(run)
     if _stale(run, TEAM_GAMES_URL) and TEAM_GAMES_URL not in gaps:
         # Only a file that was read counts, so a failing team file does not hold back the rest.
+        # The team file changes daily and is large, so its rows are kept and its bytes are not.
         tried += run.attempt(
             MONEYPUCK,
             TEAM_GAMES_URL,
             lambda stamp: _note_credit(
                 run, write_team_games(run.conn, fetch_team_games(run.client), stamp)
             ),
+            Reading(TEAM_PARSER, keep_body=False),
         )
     seasons = current - FIRST_SEASON + 1
     with run.step("moneypuck", "goalie-files", seasons):
@@ -162,7 +178,10 @@ def moneypuck(run: RefreshRun) -> None:
                 MONEYPUCK,
                 url,
                 unit,
-                lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
+                Reading(
+                    GOALIE_PARSER,
+                    lambda exc, season=season: _unpublished_goalie_file(run, season, current, exc),
+                ),
             )
             tried += ok
             failures = 0 if ok else failures + 1
@@ -188,8 +207,14 @@ def _write_starters(run: RefreshRun, source: str, reads: list[StarterRead], stam
     return result.written
 
 
-def _attempt_live(run: RefreshRun, source: str, url: str, unit: Callable[[datetime], int]) -> None:
-    """Read a live feed, and hide a failure that repeats a known gap.
+def _attempt_live(
+    run: RefreshRun,
+    source: str,
+    url: str,
+    unit: Callable[[datetime], int],
+    reading: Reading,
+) -> bool:
+    """Read a live feed, and hide a failure that repeats a known gap. Return True when it wrote.
 
     A live feed is one URL with no dated alternative, so a blocked host would stop every run
     (#276). The read still happens while the URL is a gap, because the skip records no read and
@@ -201,11 +226,35 @@ def _attempt_live(run: RefreshRun, source: str, url: str, unit: Callable[[dateti
     """
     was_gap = url in run.skipped(source)
     errors_before = len(run.errors)
-    if run.attempt(source, url, unit) or not was_gap:
-        return
+    if run.attempt(source, url, unit, reading):
+        return True
+    if not was_gap:
+        return False
     # Drop the errors that this read added, and keep every earlier one.
     del run.errors[errors_before:]
     run.notes.append(f"{source}: still failing after repeated failed reads; not an error")
+    return False
+
+
+def _read_statuses(
+    run: RefreshRun,
+    source: str,
+    url: str,
+    reading: Reading,
+    read: Callable[[HttpClient, list[str], datetime], int],
+) -> None:
+    """Read one live feed, and report each status that this code does not name.
+
+    A note describes a read that the store accepted. A read that rolled back reports its error
+    instead, so the report never states the status of rows that were not stored.
+    """
+    notes: list[str] = []
+
+    def unit(stamp: datetime) -> int:
+        return read(run.client, notes, stamp)
+
+    if _attempt_live(run, source, url, unit, reading):
+        run.notes.extend(notes)
 
 
 # The ESPN and Daily Faceoff reads ignore the time budget on purpose. Each is one small request,
@@ -217,28 +266,28 @@ def espn_starters(run: RefreshRun) -> None:
     # The record keeps this URL with no query, so both days share one gap key.
     url = f"{ESPN_BASE}/scoreboard"
 
-    def unit(stamp: datetime) -> int:
-        reads = [read for day in days for read in fetch_scoreboard_starters(run.client, day)]
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = [found for day in days for found in fetch_scoreboard_starters(client, day, notes)]
         return _write_starters(run, ESPN_STARTERS, reads, stamp)
 
-    _attempt_live(run, ESPN_STARTERS, url, unit)
+    _read_statuses(run, ESPN_STARTERS, url, Reading(SCOREBOARD_PARSER), read)
 
 
 def espn_injuries(run: RefreshRun) -> None:
-    """Read the current ESPN injury list."""
-    _attempt_live(
-        run,
-        ESPN_INJURIES,
-        f"{ESPN_BASE}/injuries",
-        lambda stamp: write_injury_reads(run.conn, fetch_injuries(run.client), stamp),
-    )
+    """Read the current ESPN injury list, and report any status that this code does not name."""
+
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = fetch_injuries(client, notes)
+        return write_injury_reads(run.conn, reads, stamp)
+
+    _read_statuses(run, ESPN_INJURIES, f"{ESPN_BASE}/injuries", Reading(INJURIES_PARSER), read)
 
 
 def daily_faceoff(run: RefreshRun) -> None:
-    """Read the Daily Faceoff starting goalies."""
-    _attempt_live(
-        run,
-        DAILY_FACEOFF,
-        STARTERS_URL,
-        lambda stamp: _write_starters(run, DAILY_FACEOFF, fetch_starters(run.client), stamp),
-    )
+    """Read the Daily Faceoff starters, and name each status that this code does not know."""
+
+    def read(client: HttpClient, notes: list[str], stamp: datetime) -> int:
+        reads = fetch_starters(client, notes)
+        return _write_starters(run, DAILY_FACEOFF, reads, stamp)
+
+    _read_statuses(run, DAILY_FACEOFF, STARTERS_URL, Reading(DAILY_FACEOFF_PARSER), read)

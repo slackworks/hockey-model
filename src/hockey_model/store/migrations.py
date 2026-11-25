@@ -117,6 +117,18 @@ V4_COUNT = (
     " THEN 1 ELSE 0 END"
 )
 
+# The archive of the bytes that each fetch gave, and the record of every fetch (#82). A store
+# from an earlier version holds no bytes, so the two tables start empty.
+_ARCHIVE_V9 = (
+    "CREATE TABLE payloads (sha256 TEXT PRIMARY KEY, body BLOB NOT NULL, size INTEGER NOT NULL)",
+    "CREATE TABLE observations ("
+    " obs_id INTEGER PRIMARY KEY, source TEXT NOT NULL, url TEXT NOT NULL, key TEXT,"
+    " fetched_at TEXT NOT NULL,"
+    " status TEXT NOT NULL CHECK (status IN ('ok','http_error','shape_error','store_error')),"
+    " sha256 TEXT REFERENCES payloads (sha256), parser TEXT NOT NULL, error TEXT)",
+    "CREATE INDEX IF NOT EXISTS observations_key ON observations (source, key, fetched_at)",
+)
+
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -210,6 +222,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE mp_team_games_v8 RENAME TO mp_team_games",
         "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
     ),
+    8: _ARCHIVE_V9,
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.

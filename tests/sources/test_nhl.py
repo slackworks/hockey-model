@@ -102,11 +102,21 @@ def test_parse_score_day_rejects_final_game_without_score() -> None:
         parse_score_day(payload)
 
 
-def test_parse_score_day_rejects_unknown_last_period() -> None:
+def test_parse_score_day_reads_unknown_last_period_with_a_note() -> None:
+    """A new period type is stored as written and named, so it never fails the whole day."""
     payload = load(FINAL_DAY)
     payload["games"][0]["gameOutcome"]["lastPeriodType"] = "XO"
-    with pytest.raises(SourceParseError, match="XO"):
-        parse_score_day(payload)
+    notes: list[str] = []
+    rows = parse_score_day(payload, notes)
+    assert len(notes) == 1
+    assert "XO" in notes[0]
+    assert all(isinstance(row.last_period, str | None) for row in rows)
+
+
+def test_a_known_last_period_adds_no_note() -> None:
+    notes: list[str] = []
+    parse_score_day(load(FINAL_DAY), notes)
+    assert notes == []
 
 
 def test_parse_score_day_rejects_bool_as_id() -> None:

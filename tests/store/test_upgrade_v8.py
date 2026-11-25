@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from seeding import FETCHED, restore_unblocked_columns
+from seeding import FETCHED, drop_archive_tables, restore_unblocked_columns
 from test_upgrade import make_v1_store, rows, version_of
 
 from hockey_model.sources.moneypuck import TeamGameRow
@@ -42,6 +42,7 @@ def _v7(path: Path, data: list[tuple]) -> Path:
         data,
     )
     conn.execute("UPDATE schema_version SET version = 7")
+    drop_archive_tables(conn)
     conn.commit()
     conn.close()
     return path
@@ -258,6 +259,7 @@ def test_the_flag_follows_the_two_counts_that_remain(tmp_path: Path) -> None:
         " VALUES (7, 'TOR', '2026-01-01', 1, 1, 50, 40, 0, '2026-01-02T00:00:00Z')"
     )
     conn.execute("UPDATE schema_version SET version = 7")
+    drop_archive_tables(conn)
     conn.commit()
     conn.close()
     upgrade_store(path)

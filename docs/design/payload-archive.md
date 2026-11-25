@@ -25,8 +25,9 @@ Build this one first.
 | MoneyPuck `all_teams.csv` | CSV, large, changes daily | row level only: the tables of [moneypuck-situations.md](moneypuck-situations.md) keep each changed row. The full file is not kept. |
 | MoneyPuck goalie ZIP | ZIP | full payload, because one season file is small and changes only while the season runs |
 
-The builder MUST read `store/refresh_nhl.py`, `store/refresh_other.py`, and `sources/*.py` and list the exact source names in a constant `ARCHIVED_SOURCES` in the new module.
-A source that is not in the list MUST be named in a test as "not archived", with the reason, so a new source cannot skip the archive by accident.
+The builder MUST read `store/refresh_nhl.py`, `store/refresh_other.py`, and `sources/*.py` and list the exact source names in the `KNOWN_SOURCES` constant of `store/source_reads.py`, which already holds every source that a refresh records.
+`RefreshRun.attempt` MUST raise `StoreError` for a source that the list does not hold, before it makes any request.
+A source that is not in the list MUST be named in a test as "not recorded", with the reason, so a new source cannot skip the archive by accident.
 
 ## Storage
 
@@ -44,7 +45,7 @@ CREATE TABLE observations (
     url TEXT NOT NULL,
     key TEXT,                         -- the game id or day, when the source has one
     fetched_at TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'parse_error')),
+    status TEXT NOT NULL CHECK (status IN ('ok', 'http_error', 'shape_error', 'store_error')),
     sha256 TEXT REFERENCES payloads (sha256),   -- NULL when no body arrived
     parser TEXT NOT NULL,             -- parser name and version, such as 'nhl_boxscore:1'
     error TEXT
@@ -71,7 +72,7 @@ CREATE TABLE goalie_game_revisions (    -- same columns as goalie_games, plus re
 
 Rules:
 
-1. Every fetch writes one `observations` row, also when the bytes did not change. A, then B, then A gives three rows and two `payloads` rows.
+1. Every fetch writes one `observations` row, also when the bytes did not change. A, then B, then A gives three rows and two `payloads` rows. A fetch that a `Reading.expected_absence` excuses still writes its row, with the status of the failure, because the request ran.
 2. A `payloads` row is written only when its hash is new (`INSERT OR IGNORE`).
 3. The upgrade writes revision 1 for each stored final boxscore from `skater_games` and `goalie_games`, with an `observations` row of status `ok`, `sha256` NULL, and `parser` `'legacy:unavailable'`. It never invents bytes or a fetch time: `fetched_at` is the `fetched_at` of the existing rows.
 4. A new boxscore revision is written only when its parsed rows differ from the newest revision of that game. An unchanged revisit adds an observation and no revision.
@@ -79,11 +80,11 @@ Rules:
 ## Code
 
 1. New module `store/archive.py`:
-   - `record_observation(conn, *, source, url, key, fetched_at, status, body, parser, error) -> int` returns `obs_id`.
+   - `record_observation(conn, fetch: Fetch) -> int` writes one row and returns `obs_id`. `Fetch` holds the source, URL, key, fetch time, status, parser, body, and error of one request.
    - `payload_bytes(conn, sha256) -> bytes` returns the uncompressed bytes. A missing hash raises `StoreError` that names the hash.
    - `observations_for(conn, source, key, *, before: datetime | None) -> list[Observation]`.
-2. New module `sources/sanitize.py` with `strip_market_fields(payload: object) -> object`. It removes every key in `MARKET_KEYS = ("pickcenter", "odds", "againstTheSpread")` at any depth, and returns a new object. The ESPN parsers call it, and the archive hashes its `json.dumps(..., sort_keys=True, separators=(",", ":"))` bytes.
-3. `HttpClient` stays as it is. `RefreshRun.attempt` passes a recording wrapper to the unit: the wrapper calls the client and keeps `(source, url, bytes, fetched_at)` for each request of the unit. After the unit ends, `attempt` writes the observations in the same transaction as the parsed rows. A failed unit writes its observations in the `except` branch, after the rollback, with the failure status and the bytes that did arrive.
+2. New module `sources/sanitize.py` with `strip_market_fields(payload: object) -> object`. It removes every key in `MARKET_KEYS = ("pickcenter", "odds", "againstTheSpread")` at any depth, and returns a new object. The capture wrapper calls it for a source in `MARKET_SOURCES`, so the parser and the archive both read the sanitized body, and the archive hashes its `canonical_bytes` (`json.dumps(..., sort_keys=True, separators=(",", ":"))`). The source name decides that, not the caller, so a new source cannot keep its odds by accident.
+3. `HttpClient` stays as it is. `RefreshRun.attempt` passes a `RecordingClient` wrapper to the unit: the wrapper calls the client and keeps the URL, status, body, and error of each request of the unit. After the unit ends, `attempt` writes the observations in the same transaction as the parsed rows. A failed unit writes its observations in the `except` branch, after the rollback. A request that failed keeps its own status, and a parser failure marks the bytes that the parser rejected.
 4. Each parser module gets a `PARSER = "<name>:<version>"` constant. Change the version when a parser change can change a parsed row.
 5. Boxscore revisit: `REVISIT_AFTER_DAYS = (2, 14)` in `store/refresh_nhl.py`. A final game is read again when the newest observation is older than the next revisit day and the game started at least that many days ago. A revisit uses the same unit, failure, and abandon rules as the first read. The `boxscores_read` set of `RefreshRun` still limits one game to one request in one refresh.
 6. New reader `boxscore_rows(conn, game_id, *, policy)` in `store/reads.py`. `policy` is `FIRST`, `LATEST`, or `AsOf(instant)`. It never mixes rows of two revisions. No current caller changes: they keep the first-final tables.
@@ -109,3 +110,16 @@ The play-by-play design estimates about 600 MB for its backfill. The payloads of
 - MoneyPuck `all_teams.csv` is archived at the row level only. A full copy each day costs gigabytes in a year for a file that MoneyPuck can serve again. The columns that the wide tables do not keep are an unsupported capture case, and the README says so.
 - Versioned boxscores live beside the first-final tables, so the live model cannot change by accident. A later issue can move a reader to `LATEST` on purpose.
 - The revisit days are the same as the play-by-play revisit days in #35, so one schedule serves both.
+
+## Slices
+
+The first slice ships the storage, the sanitizer, and the capture (Code steps 1 to 4).
+It is schema version 9.
+`store/archive.py` holds `record_observation`, `payload_bytes`, `observations_for`, and the
+market-source list.
+`store/recording.py` holds the capture wrapper and the `Reading` value that names a parser.
+The MoneyPuck team file writes its observation and no bytes, so the one source with no payload
+is named in the code and held by a test.
+
+The second slice holds the versioned boxscores (Code steps 5 and 6), the `store rebuild`
+command (step 7), and the revisit policy. It is its own issue.

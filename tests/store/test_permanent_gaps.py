@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.store.db import connect
+from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.source_reads import (
     ABANDON_MIN_SPAN_DAYS,
@@ -137,7 +138,7 @@ def _fails_with(error: SourceError):
 
 def _run_at(conn: sqlite3.Connection, moment: datetime, error: SourceError) -> RefreshRun:
     run = RefreshRun(conn, HttpClient(), moment)
-    assert run.attempt(SOURCE, URL, _fails_with(error)) is False
+    assert run.attempt(SOURCE, URL, _fails_with(error), Reading("x:1")) is False
     return run
 
 
