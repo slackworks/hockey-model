@@ -96,7 +96,10 @@ def test_publish_replaces_the_files_of_an_existing_release(fakes: Path, tmp_path
     upload = [line for line in calls if line.startswith("gh release upload")]
     # The alias and the backtest files move to this build with --clobber. The version does not.
     alias = [line for line in upload if "--clobber" in line]
-    assert alias and f" {TAG} " in alias[0] and f"/report-{DAY}.json" in alias[0]
+    assert len(alias) == 5 and all(f" {TAG} " in line for line in alias)
+    assert any(f"/report-{DAY}.json" in line for line in alias)
+    # The index is the last file that moves, so it never names a build that is not complete.
+    assert f"/index-{DAY}.json" in alias[-1]
     assert any(line.startswith("gh release edit") for line in calls)
     assert not any(line.startswith("gh release create") for line in calls)
 
@@ -376,7 +379,7 @@ def test_publish_adds_a_rebuild_to_the_index_on_the_release(fakes: Path, tmp_pat
     files = [b["file"] for b in _index(tmp_path / "report")["builds"]]
     assert files == [f"report-{DAY}-100000Z.json", f"report-{DAY}-202013Z.json"]
     alias = _calls_with(tmp_path, "gh release upload", "--clobber")
-    assert alias and f"/index-{DAY}.json" in alias[0]
+    assert alias and f"/index-{DAY}.json" in alias[-1]
 
 
 def test_publish_starts_an_index_when_the_release_has_none(fakes: Path, tmp_path: Path) -> None:
@@ -657,6 +660,10 @@ def test_a_failed_release_write_names_the_step(
     assert result.returncode == 1
     assert message in result.stderr
     assert "may be partly updated" in result.stderr
+    if command == "upload":
+        # A failed upload stops the script, so the notes edit after it never runs.
+        assert not _calls_with(tmp_path, "gh release edit", TAG)
+        assert f"the upload of report-{DAY}-202013Z.md failed" in result.stderr
 
 
 def test_a_retry_of_an_older_build_leaves_the_aliases_with_the_newest_build(

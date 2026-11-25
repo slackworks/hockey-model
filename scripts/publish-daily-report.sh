@@ -287,7 +287,7 @@ release_write() {
   local what="$1"
   shift
   if ! GH_TOKEN="$read_token" gh "$@"; then
-    echo "publish-daily-report: $what failed on $tag; gh's error is above. The release may be partly updated. Run the report workflow again: a release that is behind its newest build is repaired." >&2
+    echo "publish-daily-report: $what failed on $tag; gh's error is above. The release may be partly updated: files of this build can sit on it with no index entry, and a failed create can leave a draft release. Check $tag, then run the report workflow again. The next build publishes over it." >&2
     exit 1
   fi
 }
@@ -305,7 +305,10 @@ if [[ "$answer" == "published" ]]; then
     release_write "the upload of ${version_json##*/}" release upload "$tag" "$version_json"
   fi
   if [[ "$newest" == "$version_name" ]]; then
-    release_write "the upload of the report-$day files" release upload "$tag" "${latest[@]}" --clobber
+    # One call for each file, so a failure names the file. The index is last in the array.
+    for file in "${latest[@]}"; do
+      release_write "the upload of ${file##*/}" release upload "$tag" "$file" --clobber
+    done
     release_write "the edit of the notes" release edit "$tag" --notes-file "$notes"
   else
     echo "publish-daily-report: $build is older than the newest build ${newest%.json} of $tag. Its version files and its index entry are published; the report-$day files and the notes stay with the newest build." >&2

@@ -23,7 +23,7 @@ release_gap() {
     return 1
   }
   for asset in "index-$day.json" "report-$day.json"; do
-    if ! grep -qxF "$asset" <<<"$names"; then
+    if ! grep -qxF -- "$asset" <<<"$names"; then
       printf 'it has no %s' "$asset"
       return 0
     fi
@@ -43,9 +43,10 @@ release_gap() {
     return 1
   fi
   newest_build="${newest_build%.json}"
-  # The index names the newest build, so its version files must be assets (#341).
+  # The index names the newest build, so its version files must be assets (#341). Older builds
+  # are not checked: only the newest build owns the alias and the notes.
   for asset in "$newest_build.json" "$newest_build.md"; do
-    if ! grep -qxF "$asset" <<<"$names"; then
+    if ! grep -qxF -- "$asset" <<<"$names"; then
       printf 'it has no %s, the version file of its newest build' "$asset"
       return 0
     fi
