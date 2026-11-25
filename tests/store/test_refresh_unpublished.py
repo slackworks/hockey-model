@@ -63,10 +63,15 @@ def test_an_unpublished_file_never_becomes_a_known_gap(conn: sqlite3.Connection)
     assert URL not in abandoned_urls(conn, "moneypuck")
 
 
-def test_an_expected_absence_writes_no_observation(conn: sqlite3.Connection) -> None:
-    """An absence is not a fetch that the archive records, so it holds no row for that URL."""
+def test_an_expected_absence_writes_its_observation_and_no_failed_read(
+    conn: sqlite3.Connection,
+) -> None:
+    """The request ran, so the archive says what it returned. The absence is not a gap."""
     moneypuck_run(conn, URL, missing(URL, 404))
-    assert URL not in [o.url for o in observations_for(conn, "moneypuck", None)]
+    (found,) = [o for o in observations_for(conn, "moneypuck", None) if o.url == URL]
+    assert found.status == "http_error"
+    assert found.error is not None and "HTTP 404" in found.error
+    assert failed_reads(conn, URL) == 0
 
 
 def test_the_file_is_read_when_it_appears_after_404_runs(conn: sqlite3.Connection) -> None:

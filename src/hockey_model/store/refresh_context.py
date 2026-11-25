@@ -119,7 +119,8 @@ class RefreshRun:
 
         ``reading.expected_absence`` takes the failure and returns a note when the failure is a
         resource that does not exist yet. The note replaces the error, and no failed read is
-        stored, so the absence never becomes a known gap. The next refresh tries the unit again.
+        stored, so the absence never becomes a known gap. The request still writes its
+        observation, with the status of the failure. The next refresh tries the unit again.
         The return value is False for an expected absence too, so a caller that counts failures
         counts it, and the callback must name one file only.
         """
@@ -137,6 +138,10 @@ class RefreshRun:
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:
+                # The request ran, so the archive keeps the row that says what it returned. Only
+                # the failed read and the error are absent, so the absence never becomes a gap.
+                with self.conn:
+                    self._observe(capture, recorded.records, exc)
                 self.notes.append(absent)
                 return False
             with self.conn:

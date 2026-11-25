@@ -72,7 +72,7 @@ CREATE TABLE goalie_game_revisions (    -- same columns as goalie_games, plus re
 
 Rules:
 
-1. Every fetch writes one `observations` row, also when the bytes did not change. A, then B, then A gives three rows and two `payloads` rows.
+1. Every fetch writes one `observations` row, also when the bytes did not change. A, then B, then A gives three rows and two `payloads` rows. A fetch that a `Reading.expected_absence` excuses still writes its row, with the status of the failure, because the request ran.
 2. A `payloads` row is written only when its hash is new (`INSERT OR IGNORE`).
 3. The upgrade writes revision 1 for each stored final boxscore from `skater_games` and `goalie_games`, with an `observations` row of status `ok`, `sha256` NULL, and `parser` `'legacy:unavailable'`. It never invents bytes or a fetch time: `fetched_at` is the `fetched_at` of the existing rows.
 4. A new boxscore revision is written only when its parsed rows differ from the newest revision of that game. An unchanged revisit adds an observation and no revision.
