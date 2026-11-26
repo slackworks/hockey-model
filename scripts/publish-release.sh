@@ -33,6 +33,37 @@ fail() {
   exit "${2:-1}"
 }
 
+# Delete the draft that a failed write left for the tag, so the next run is not stopped by the
+# draft check (#350). The tag stays: --verify-tag means the workflow created it before this run.
+clean_draft() {
+  local drafts
+  if ! drafts="$(gh release list --limit "$list_limit" --json tagName,isDraft \
+    --jq '.[] | select(.isDraft) | .tagName')"; then
+    echo "publish-release: cannot list the drafts; a draft of $tag may remain. Delete it by hand before a retry." >&2
+    return 0
+  fi
+  if grep -qxF "$tag" <<<"$drafts"; then
+    if gh release delete "$tag" --yes; then
+      echo "publish-release: deleted the draft of $tag that the failed write left; the tag is kept." >&2
+    else
+      echo "publish-release: cannot delete the draft of $tag; delete it by hand before a retry." >&2
+    fi
+  fi
+}
+
+# Run one release write. A failure names the step, since gh's own message does not say which
+# call failed or that the release may be partly updated (#348).
+release_write() {
+  local step="$1"
+  shift
+  if "$@"; then
+    return 0
+  fi
+  echo "publish-release: $step failed; gh's error is above. The release may be partly updated." >&2
+  clean_draft
+  exit 1
+}
+
 tag=""
 dist=""
 notes=""
@@ -100,7 +131,8 @@ if [[ "$answer" == "missing" ]]; then
   if [[ "$prerelease" == "true" ]]; then
     flags+=(--prerelease)
   fi
-  gh release create "$tag" "${files[@]}" "${flags[@]}"
+  release_write "the creation of the release $tag" \
+    gh release create "$tag" "${files[@]}" "${flags[@]}"
   echo "publish-release: created the release $tag with ${#files[@]} files." >&2
   exit 0
 fi
@@ -128,6 +160,6 @@ for file in "${files[@]}"; do
   fi
 done
 if ((${#new[@]} > 0)); then
-  gh release upload "$tag" "${new[@]}"
+  release_write "the upload of ${#new[@]} file(s) to $tag" gh release upload "$tag" "${new[@]}"
   echo "publish-release: uploaded ${#new[@]} file(s) to $tag." >&2
 fi
