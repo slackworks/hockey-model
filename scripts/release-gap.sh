@@ -10,12 +10,28 @@
 # give the order across midnight UTC.
 newest_build_filter='.builds | max_by(.generated_at)'
 
+# Print the first version JSON asset of the day that the index does not list, or print nothing
+# (#349). $1 holds the asset names, $2 the index file, $3 the report day as YYYY-MM-DD. A build
+# file is report-DAY-HHMMSSZ.json, so the shape is matched in the grep and the list is checked
+# in the shell. Returns 1 when the index cannot be read.
+unlisted_version_json() {
+  local names="$1" index="$2" day="$3" listed asset
+  listed="$(jq -er '.builds[].file | select(type == "string")' "$index")" || return 1
+  while IFS= read -r asset; do
+    if ! grep -qxF -- "$asset" <<<"$listed"; then
+      printf '%s' "$asset"
+      return 0
+    fi
+  done < <(grep -E "^report-$day-[0-9]{6}Z\.json\$" <<<"$names" || true)
+}
+
 # Print why release $1 is behind its newest build, or print nothing when it is not (#318).
 # A publish uploads the version files, then the report-DATE files and the index, then the
 # notes. A failed step leaves the release behind, and so does a retry of an older build from
 # before the publish script kept the report-DATE files with the newest build. The function
 # downloads the index and report-DATE.json into the directory $2 for the compare. It returns 1
-# when a release call fails or the index names no build.
+# when a release call fails or the index names no build. The callers run it inside an if-guard,
+# where set -e does not apply, so each fallible call ends in its own return 1 (#340).
 release_gap() {
   local tag="$1" dir="$2" day="$3" names asset newest_at newest_build alias_at notes
   names="$(gh release view "$tag" --json assets --jq '.assets[].name')" || {
@@ -51,6 +67,16 @@ release_gap() {
       return 0
     fi
   done
+  # A version file that the index does not list is an orphan. The next publish can skip it as
+  # unchanged, so the release reports it here (#349).
+  if ! orphan="$(unlisted_version_json "$names" "$dir/index-$day.json" "$day")"; then
+    echo "daily-report: cannot read the builds of index-$day.json for release $tag; check the index" >&2
+    return 1
+  fi
+  if [[ -n "$orphan" ]]; then
+    printf 'it has %s, a version file that its index does not list' "$orphan"
+    return 0
+  fi
   # A report-DATE.json that is not a report is a defect of the release, and a publish repairs it.
   if ! alias_at="$(jq -er '.generated_at | select(type == "string")' \
     "$dir/report-$day.json")"; then

@@ -65,3 +65,38 @@ def test_a_build_name_that_starts_with_a_dash_is_not_read_as_a_grep_flag(
         [f"index-{DAY}.json", f"report-{DAY}.json"],
     )
     assert f"it has no -ereport-{DAY}.json" in answer
+
+
+def test_a_version_json_that_the_index_does_not_list_is_an_orphan_gap(
+    fakes: Path, tmp_path: Path
+) -> None:
+    # A publish that fails after it uploads build B's files leaves B's JSON off the index (#349).
+    build = f"report-{DAY}-100000Z"
+    orphan = f"report-{DAY}-090000Z.json"
+    assets = [f"index-{DAY}.json", f"report-{DAY}.json", f"{build}.json", f"{build}.md", orphan]
+    answer = _gap(fakes, tmp_path, f"{build}.json", assets)
+    assert f"it has {orphan}, a version file that its index does not list" in answer
+
+
+def test_a_listed_version_json_is_not_an_orphan(fakes: Path, tmp_path: Path) -> None:
+    build = f"report-{DAY}-100000Z"
+    assets = [f"index-{DAY}.json", f"report-{DAY}.json", f"{build}.json", f"{build}.md"]
+    answer = _gap(fakes, tmp_path, f"{build}.json", assets)
+    assert "does not list" not in answer
+
+
+def test_a_failed_release_call_returns_1_inside_an_if_guard(fakes: Path, tmp_path: Path) -> None:
+    # The callers run release_gap inside an if-guard, where set -e is off (#340). The function
+    # must return 1 on its own, or the caller would read the failure as no gap.
+    work = tmp_path / "work"
+    work.mkdir()
+    env = _env(fakes, tmp_path, FAKE_GH_FAIL="1")
+    script = (
+        f'source "{SCRIPTS}/release-gap.sh"\n'
+        f'if release_gap "{TAG}" "{work}" "{DAY}"; then echo GAP_OR_NONE; else echo FAILED; fi'
+    )
+    result = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+    assert "FAILED" in result.stdout
+    assert "cannot list the assets" in result.stderr
