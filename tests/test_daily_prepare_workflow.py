@@ -116,10 +116,10 @@ def test_the_force_flag_comes_from_the_dispatch_input() -> None:
 def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
     """A prepared day holds the group for minutes, and a forced run rebuilds at once (#311)."""
     skip = _job(PREPARE.read_text(encoding="utf-8"), "skip")
-    assert "needs: [gate, hold]" in skip
+    assert "needs: gate" in skip
+    assert "hold" not in skip
     assert "timeout-minutes: 10" in skip
     assert "needs.gate.outputs.go == 'true'" in skip
-    assert "needs.hold.outputs.go == 'true'" in skip
     assert "inputs.force != true" in skip
 
 
@@ -212,5 +212,14 @@ def test_the_hold_job_has_no_store_group_and_asks_for_a_waiting_manual_run() -> 
     hold = _job(text, "hold")
     assert "concurrency:" not in hold
     assert "bash scripts/prepare-stand-aside.sh" in hold
-    assert "needs: gate" in hold
+    # The check runs after skip, because a manual run can start while skip holds the group.
+    assert "needs: [gate, skip]" in hold
     assert "needs: [gate, skip, hold]" in _job(text, "prepare")
+    assert "needs.hold.outputs.go == 'true'" in _job(text, "prepare")
+
+
+def test_the_hold_job_runs_only_when_a_rebuild_is_about_to_join_the_group() -> None:
+    """A forced run skips the skip job, so the condition needs !cancelled() (#335)."""
+    condition = job_condition(PREPARE.read_text(encoding="utf-8"), "hold")
+    assert condition.index("!cancelled()") < condition.index("inputs.force == true")
+    assert "needs.skip.outputs.rebuild == 'true'" in condition
