@@ -127,8 +127,50 @@ jobs:
     outputs:
       rebuild: ${{ steps.check.outputs.rebuild }}
 
-  prepare:
+  # The skip check holds the store group, so a scheduled run reaches this point with a group
+  # slot of its own. Joining the group would cancel a manual run that waits there, because the
+  # group has queue: single (#335). This job has no group. It checks for a waiting manual run
+  # again, so a scheduled run stands aside after the skip check. A few seconds remain between
+  # this check and the join in prepare, the same race the gate job accepts.
+  hold:
     needs: [gate, skip]
+    if: >-
+      !cancelled()
+      && needs.gate.outputs.go == 'true'
+      && (inputs.force == true || needs.skip.outputs.rebuild == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.manual.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" != "schedule" ]]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pending="$(bash scripts/manual-prepare-pending.sh)" || {
+            echo "::error::The lookup of manual daily-prepare runs failed, so this run stops."
+            exit 1
+          }
+          if [[ "$pending" == "yes" ]]; then
+            echo "::warning::A manual daily-prepare run waits or runs, so this run stands aside."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  prepare:
+    needs: [gate, skip, hold]
     # A manual run with force goes straight here, because it always rebuilds. Any other run
     # rebuilds only when the skip check found that the day needs it. A skipped job fails the
     # jobs that need it, and a forced run skips the check job, so the condition names a status
@@ -137,6 +179,7 @@ jobs:
       !cancelled()
       && needs.gate.outputs.go == 'true'
       && (inputs.force == true || needs.skip.outputs.rebuild == 'true')
+      && needs.hold.outputs.go == 'true'
     # The same group as daily-report, so only one run writes the cached store at a time.
     concurrency:
       group: hockey-model-store

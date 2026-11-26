@@ -99,7 +99,8 @@ A prepare that fails every hour shows as red `daily-prepare` runs. The green rep
 
 Both workflows share one concurrency group, and GitHub keeps one waiting run for a group.
 A newer waiting run replaces an older one, so a manual `force` prepare that waits behind a running prepare could be replaced by the next run that joins the group (#285).
-The `skip` and `prepare` jobs of `daily-prepare.yml` hold the group, and a `gate` job before them has none.
+The `skip` and `prepare` jobs of `daily-prepare.yml` hold the group, and the `gate` and `hold` jobs before them have none.
+The `hold` job runs after `skip` and makes the same check as the gate, so a scheduled run that reaches `prepare` does not join the group while a manual run waits (#335).
 On a scheduled run the gate calls `scripts/manual-prepare-pending.sh`, and the run stands aside while a manual `daily-prepare` run is pending, queued, waiting, or running.
 A manual dispatch never stands aside.
 A failed lookup fails the gate, so the hourly run turns red and the next hour retries.

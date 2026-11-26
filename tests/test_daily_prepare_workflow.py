@@ -83,9 +83,10 @@ def test_the_prepare_job_waits_for_the_gate_and_the_skip_check() -> None:
     """The rebuild runs only when the skip check named it, so it waits for that job (#311)."""
     text = PREPARE.read_text(encoding="utf-8")
     prepare = _job(text, "prepare")
-    assert "needs: [gate, skip]" in prepare
+    assert "needs: [gate, skip, hold]" in prepare
     assert "needs.gate.outputs.go == 'true'" in prepare
     assert "needs.skip.outputs.rebuild == 'true'" in prepare
+    assert "needs.hold.outputs.go == 'true'" in prepare
 
 
 def test_a_forced_run_rebuilds_even_though_the_skip_job_is_skipped() -> None:
@@ -190,3 +191,12 @@ def test_a_failed_lookup_stops_the_gate_and_never_lets_the_run_go() -> None:
 def test_a_run_that_stands_aside_says_so_as_a_warning() -> None:
     gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
     assert "::warning::A manual daily-prepare run waits or runs" in gate
+
+
+def test_the_hold_job_has_no_store_group_and_asks_for_a_waiting_manual_run() -> None:
+    """The hold job checks for a waiting manual run without joining the group (#335)."""
+    text = PREPARE.read_text(encoding="utf-8")
+    hold = _job(text, "hold")
+    assert "concurrency:" not in hold
+    assert "scripts/manual-prepare-pending.sh" in hold
+    assert "needs: [gate, skip]" in hold
