@@ -210,7 +210,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Read `stale_sources` and `training_gaps` only from reads before their cutoff, so a later read no longer changes an earlier answer (#330). [fix:store]
 - Stop a publish with a message that names the failed release call, and treat a release that lacks the version files of its newest build as behind, so the next run repairs it (#339, #341). [fix:publish]
 - Keep a deleted experiment number reserved when a merge brings in its deletion from a side branch (#319). [fix:experiments]
-- Name the failed step when a release write fails in `publish-release.sh`, and delete the draft that the failed step left, so a retry can run (#348, #350). [fix:publish]
+- Name the failed step when a release write fails in `publish-release.sh`, and delete the draft that a failed create left, so a retry can run (#348, #350). [fix:publish]
 - Report a version JSON on a release that its index does not list, so an orphaned file is visible (#349). [fix:publish]
 - Stop a scheduled `daily-prepare` run from cancelling a manual dispatch that waits for the store group (#335). [fix:ci]
 
