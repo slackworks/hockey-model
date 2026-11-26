@@ -45,21 +45,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-        run: |
-          if [[ "$EVENT" != "schedule" ]]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          pending="$(bash scripts/manual-prepare-pending.sh)" || {
-            echo "::error::The lookup of manual daily-prepare runs failed, so this run stops."
-            exit 1
-          }
-          if [[ "$pending" == "yes" ]]; then
-            echo "::warning::A manual daily-prepare run waits or runs, so this run stands aside."
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash scripts/prepare-stand-aside.sh
+
+  # Every job below that joins the store group must come after this check. A scheduled run that
+  # joined the group would cancel a manual run that waits there, because the group has
+  # queue: single (#335). The check has no group, so it never queues. A few seconds remain
+  # between this check and the join of skip or prepare, the same race the gate job accepts.
+  hold:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.manual.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: bash scripts/prepare-stand-aside.sh
 
   # The skip check is its own job because it is short and it holds the store group (#311). The
   # report gate reads the timeout of the job that holds the group, so a prepared day holds it
@@ -68,8 +78,11 @@ jobs:
   # the starters are confirmed. The job writes the store only through the refresh, which ends
   # in seconds with a warm cache.
   skip:
-    needs: gate
-    if: needs.gate.outputs.go == 'true' && inputs.force != true
+    needs: [gate, hold]
+    if: >-
+      needs.gate.outputs.go == 'true'
+      && needs.hold.outputs.go == 'true'
+      && inputs.force != true
     concurrency:
       group: hockey-model-store
       cancel-in-progress: false
@@ -126,48 +139,6 @@ jobs:
           key: hockey-model-store-${{ github.run_id }}-${{ github.run_attempt }}-skip
     outputs:
       rebuild: ${{ steps.check.outputs.rebuild }}
-
-  # The skip check holds the store group, so a scheduled run reaches this point with a group
-  # slot of its own. Joining the group would cancel a manual run that waits there, because the
-  # group has queue: single (#335). This job has no group. It checks for a waiting manual run
-  # again, so a scheduled run stands aside after the skip check. A few seconds remain between
-  # this check and the join in prepare, the same race the gate job accepts.
-  hold:
-    needs: [gate, skip]
-    if: >-
-      !cancelled()
-      && needs.gate.outputs.go == 'true'
-      && (inputs.force == true || needs.skip.outputs.rebuild == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      go: ${{ steps.manual.outputs.go }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: manual
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          if [[ "$EVENT" != "schedule" ]]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          pending="$(bash scripts/manual-prepare-pending.sh)" || {
-            echo "::error::The lookup of manual daily-prepare runs failed, so this run stops."
-            exit 1
-          }
-          if [[ "$pending" == "yes" ]]; then
-            echo "::warning::A manual daily-prepare run waits or runs, so this run stands aside."
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          fi
 
   prepare:
     needs: [gate, skip, hold]

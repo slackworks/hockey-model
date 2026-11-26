@@ -9,6 +9,7 @@ from workflow_support import job_condition
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = require_path(ROOT / ".github" / "workflows" / "daily-prepare.yml")
+STAND_ASIDE = require_path(ROOT / "scripts" / "prepare-stand-aside.sh")
 REPORT = require_path(ROOT / ".github" / "workflows" / "daily-report.yml")
 _CRON = re.compile(r'cron: "[0-9]{1,2} \* \* \* \*"')
 
@@ -115,9 +116,10 @@ def test_the_force_flag_comes_from_the_dispatch_input() -> None:
 def test_the_skip_job_is_short_and_runs_only_without_force() -> None:
     """A prepared day holds the group for minutes, and a forced run rebuilds at once (#311)."""
     skip = _job(PREPARE.read_text(encoding="utf-8"), "skip")
-    assert "needs: gate" in skip
+    assert "needs: [gate, hold]" in skip
     assert "timeout-minutes: 10" in skip
     assert "needs.gate.outputs.go == 'true'" in skip
+    assert "needs.hold.outputs.go == 'true'" in skip
     assert "inputs.force != true" in skip
 
 
@@ -165,13 +167,15 @@ def test_the_skip_and_the_rebuild_do_not_share_a_cache_key() -> None:
 
 
 def test_only_a_scheduled_run_asks_whether_a_manual_run_waits() -> None:
-    gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
+    text = PREPARE.read_text(encoding="utf-8")
+    gate = _job(text, "gate")
     assert "actions: read" in gate
-    assert 'if [[ "$EVENT" != "schedule" ]]' in gate
     assert "EVENT: ${{ github.event_name }}" in gate
-    assert gate.count("scripts/manual-prepare-pending.sh") == 1
-    # A manual dispatch never stands aside, so the gate exits before it asks.
-    assert gate.index('"$EVENT" != "schedule"') < gate.index("manual-prepare-pending.sh")
+    assert "bash scripts/prepare-stand-aside.sh" in gate
+    script = STAND_ASIDE.read_text(encoding="utf-8")
+    assert script.count('"$script_dir/manual-prepare-pending.sh"') == 1
+    # A manual dispatch never stands aside, so the script exits before it asks.
+    assert script.index('"$EVENT" != "schedule"') < script.index('"$script_dir/manual-prepare')
 
 
 def test_the_prepare_timeout_stays_on_the_prepare_job() -> None:
@@ -182,15 +186,24 @@ def test_the_prepare_timeout_stays_on_the_prepare_job() -> None:
 
 
 def test_a_failed_lookup_stops_the_gate_and_never_lets_the_run_go() -> None:
-    gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
-    assert "|| true" not in gate
-    assert 'pending="$(bash scripts/manual-prepare-pending.sh)" || {' in gate
-    assert "exit 1" in gate
+    script = STAND_ASIDE.read_text(encoding="utf-8")
+    assert "|| true" not in script
+    assert 'pending="$("$script_dir/manual-prepare-pending.sh")" || {' in script
+    assert "exit 1" in script
+
+
+def test_only_the_answer_no_lets_a_scheduled_run_go() -> None:
+    """Any answer other than yes or no stops the run, so an unknown value never starts prepare."""
+    script = STAND_ASIDE.read_text(encoding="utf-8")
+    assert "\nno)\n" in script
+    assert "\nyes)\n" in script
+    assert "not yes or no" in script
 
 
 def test_a_run_that_stands_aside_says_so_as_a_warning() -> None:
-    gate = _job(PREPARE.read_text(encoding="utf-8"), "gate")
-    assert "::warning::A manual daily-prepare run waits or runs" in gate
+    script = STAND_ASIDE.read_text(encoding="utf-8")
+    assert "::warning::A manual daily-prepare run waits or runs" in script
+    assert "GITHUB_STEP_SUMMARY" in script
 
 
 def test_the_hold_job_has_no_store_group_and_asks_for_a_waiting_manual_run() -> None:
@@ -198,5 +211,6 @@ def test_the_hold_job_has_no_store_group_and_asks_for_a_waiting_manual_run() -> 
     text = PREPARE.read_text(encoding="utf-8")
     hold = _job(text, "hold")
     assert "concurrency:" not in hold
-    assert "scripts/manual-prepare-pending.sh" in hold
-    assert "needs: [gate, skip]" in hold
+    assert "bash scripts/prepare-stand-aside.sh" in hold
+    assert "needs: gate" in hold
+    assert "needs: [gate, skip, hold]" in _job(text, "prepare")
