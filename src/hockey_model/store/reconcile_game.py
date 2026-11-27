@@ -73,10 +73,9 @@ def _goals(conn: sqlite3.Connection, pbp_obs: int) -> list[tuple[str | None, int
 
 
 def _team_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
-    goals: dict[str, int] = {}
+    goals: dict[str | None, int] = {}
     for owner, _ in _goals(conn, inputs.pbp_obs):
-        if owner is not None:
-            goals[owner] = goals.get(owner, 0) + 1
+        goals[owner] = goals.get(owner, 0) + 1
     scores, last_period = _final_score(conn, inputs.game_id)
     return check_goals_by_team(goals, inputs.home, inputs.away, scores, last_period)
 

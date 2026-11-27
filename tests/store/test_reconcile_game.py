@@ -315,3 +315,16 @@ def test_a_shift_that_ends_before_it_starts_makes_a_settled_game_incomplete(
     assert result is not None
     assert result.status == "incomplete"
     assert _checks(conn)["shift_lengths"] is False
+
+
+def test_a_goal_with_no_owner_team_fails_the_team_check(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    events = parse_pbp(_json("nhl/pbp_2025020709.json"), GAME).events
+    first = next(i for i, e in enumerate(events) if e.type == "goal")
+    nameless = replace(events[first], owner_team=None)
+    _store(conn, LATE, events=(*events[:first], nameless, *events[first + 1 :]))
+    reconcile_game(conn, GAME, LATE)
+    assert _checks(conn)["goals_by_team"] is False
+    notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
+    entry = next(n for n in notes if n["check"] == "goals_by_team")
+    assert entry["detail"]["found"]["null"] == 1

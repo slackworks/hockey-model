@@ -54,7 +54,7 @@ def _expected_goals(
 
 
 def check_goals_by_team(
-    goals: Mapping[str, int],
+    goals: Mapping[str | None, int],
     home: str,
     away: str,
     scores: tuple[int | None, int | None],
@@ -64,7 +64,7 @@ def check_goals_by_team(
     expected = _expected_goals(home, away, scores, last_period)
     if isinstance(expected, str):
         return CheckResult("goals_by_team", False, {"reason": expected})
-    found = {home: goals.get(home, 0), away: goals.get(away, 0)}
+    found: dict[str | None, int] = {home: goals.get(home, 0), away: goals.get(away, 0)}
     found.update({team: n for team, n in goals.items() if team not in (home, away)})
     return CheckResult("goals_by_team", found == expected, {"expected": expected, "found": found})
 

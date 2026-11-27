@@ -194,3 +194,9 @@ def test_the_notes_hold_the_result_of_every_check() -> None:
     assert text == (
         '[{"check":"a","passed":true,"detail":{}},{"check":"b","passed":false,"detail":{"x":1}}]'
     )
+
+
+def test_a_goal_with_no_team_is_counted_apart_and_fails_the_check() -> None:
+    result = check_goals_by_team({HOME: 3, AWAY: 3, None: 1}, HOME, AWAY, (3, 3), "REG")
+    assert not result.passed
+    assert result.detail["found"] == {HOME: 3, AWAY: 3, None: 1}
