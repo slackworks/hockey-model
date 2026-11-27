@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from git_env import clear_repo_env
 from hypothesis import settings
 
 from hockey_model import progress
@@ -15,6 +16,11 @@ from hockey_model.store.db import connect
 # The tests check results, not speed.
 settings.register_profile("default", deadline=None)
 settings.load_profile("default")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep a hook's git variables from pointing a test's git command at the real repository."""
+    clear_repo_env()
 
 
 @pytest.fixture
