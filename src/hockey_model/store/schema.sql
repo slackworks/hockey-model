@@ -228,6 +228,7 @@ CREATE TABLE pbp_events (
     goalie_in_net INTEGER,
     home_score INTEGER,
     away_score INTEGER,
+    game_state TEXT NOT NULL,
     parser TEXT NOT NULL,
     PRIMARY KEY (obs_id, event_id)
 );

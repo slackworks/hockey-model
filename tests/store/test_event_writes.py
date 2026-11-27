@@ -233,3 +233,10 @@ def test_the_summary_rows_keep_the_espn_athlete_id_and_name(conn: sqlite3.Connec
     write_espn(conn, obs, GAME, _espn())
     query = "SELECT espn_id FROM espn_skater_toi WHERE espn_name = 'Quinton Byfield'"
     assert conn.execute(query).fetchall() == [(4697383,)]
+
+
+def test_each_event_row_keeps_the_game_state_of_the_feed(conn: sqlite3.Connection) -> None:
+    obs = _obs(conn, NHL_PBP)
+    write_pbp(conn, obs, _pbp())
+    found = conn.execute("SELECT DISTINCT game_state FROM pbp_events").fetchall()
+    assert found == [("OFF",)]

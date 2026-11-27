@@ -24,7 +24,7 @@ def write_pbp(conn: sqlite3.Connection, obs_id: int, rows: PbpRows) -> None:
         "INSERT INTO pbp_events (obs_id, game_id, event_id, sort_order, period, period_type,"
         " period_second, game_second, type, situation_code, owner_team, x, y, attack_x_sign,"
         " zone, shot_type, player1, player2, player3, goalie_in_net, home_score, away_score,"
-        " parser) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " game_state, parser) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             (
                 obs_id,
@@ -47,6 +47,7 @@ def write_pbp(conn: sqlite3.Connection, obs_id: int, rows: PbpRows) -> None:
                 e.goalie_in_net,
                 e.home_score,
                 e.away_score,
+                rows.game_state,
                 PBP_PARSER,
             )
             for e in rows.events

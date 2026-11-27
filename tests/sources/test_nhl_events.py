@@ -375,3 +375,22 @@ def test_an_offensive_zone_event_is_at_the_end_of_the_rink_that_its_team_attacks
 def test_a_fetch_of_a_body_that_is_not_json_names_the_source() -> None:
     with pytest.raises(SourceParseError, match="^read nhl_pbp data: "):
         fetch_pbp(_Client(b"not json"), GAME)
+
+
+def test_the_game_state_of_the_feed_is_kept() -> None:
+    assert parse_pbp(load(), GAME).game_state == "OFF"
+
+
+@pytest.mark.parametrize("value", [None, "", 3, []])
+def test_a_game_state_that_is_not_text_is_a_named_error(value: object) -> None:
+    payload = load()
+    payload["gameState"] = value
+    with pytest.raises(SourceParseError, match="gameState"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_feed_with_no_game_state_is_a_named_error() -> None:
+    payload = load()
+    del payload["gameState"]
+    with pytest.raises(SourceParseError, match="gameState"):
+        parse_pbp(payload, GAME)

@@ -226,7 +226,8 @@ _EVENTS_V11 = (
     "period_second INTEGER NOT NULL, game_second INTEGER, type TEXT NOT NULL, situation_code "
     "TEXT, owner_team TEXT, x REAL, y REAL, attack_x_sign INTEGER CHECK (attack_x_sign IN "
     "(-1, 1)), zone TEXT, shot_type TEXT, player1 INTEGER, player2 INTEGER, player3 INTEGER, "
-    "goalie_in_net INTEGER, home_score INTEGER, away_score INTEGER, parser TEXT NOT NULL, "
+    "goalie_in_net INTEGER, home_score INTEGER, away_score INTEGER, game_state TEXT NOT NULL, "
+    "parser TEXT NOT NULL, "
     "PRIMARY KEY (obs_id, event_id))",
     "CREATE TABLE shifts (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), game_id "
     "INTEGER NOT NULL, row_no INTEGER NOT NULL, player_id INTEGER NOT NULL, team TEXT NOT "

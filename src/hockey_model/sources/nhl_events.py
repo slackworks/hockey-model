@@ -90,6 +90,7 @@ class PbpRows:
     game_id: int
     home: str
     away: str
+    game_state: str
     roster: tuple[RosterSpot, ...]
     events: tuple[EventRow, ...]
 
@@ -267,6 +268,7 @@ def parse_pbp(payload: object, game_id: int) -> PbpRows:
     if named != game_id:
         raise SourceParseError(SOURCE, f"{where} names game {named}")
     codes, home, away = _teams(top, where)
+    state = str_field(SOURCE, top, "gameState", where)
     plays = as_list(SOURCE, field(SOURCE, top, "plays", where), f"{where} plays")
     if not plays:
         raise SourceParseError(SOURCE, f"{where} lists no play; the game may not have started")
@@ -276,7 +278,8 @@ def parse_pbp(payload: object, game_id: int) -> PbpRows:
         if event.event_id in seen:
             raise SourceParseError(SOURCE, f"{where} lists event {event.event_id} twice")
         seen.add(event.event_id)
-    return PbpRows(game_id, home, away, tuple(_roster(top, codes, where)), tuple(events))
+    roster = tuple(_roster(top, codes, where))
+    return PbpRows(game_id, home, away, state, roster, tuple(events))
 
 
 def pbp_url(game_id: int) -> str:
