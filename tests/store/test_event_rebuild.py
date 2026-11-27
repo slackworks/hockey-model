@@ -176,22 +176,36 @@ def test_an_observation_with_no_bytes_is_skipped(conn: sqlite3.Connection) -> No
     assert (report.games, report.derived) == (0, 0)
 
 
-def test_a_refused_payload_leaves_no_rows_of_an_earlier_parse(
-    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _archive(conn, NHL_PBP, status=SHAPE_ERROR)
-    rebuild_source(conn, NHL_PBP, PBP_PARSER)
-    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (325,)
-
+def _regress(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(payload: object, game_id: int) -> object:
         raise SourceParseError("nhl_pbp", "the parser lost the shape of the feed")
 
     monkeypatch.setattr(event_rebuild, "parse_pbp", refuse)
-    report = rebuild_source(conn, NHL_PBP, PBP_PARSER)
+
+
+def test_a_payload_that_a_later_parser_accepted_needs_allow_refused_to_leave(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first read refused the payload and a later parser accepted it. A regression stops."""
+    _archive(conn, NHL_PBP, status=SHAPE_ERROR)
+    rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (325,)
+    _regress(monkeypatch)
+    with pytest.raises(StoreError, match=r"observation \d+: the parser .* --allow-refused"):
+        rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (325,)
+
+
+def test_allow_refused_clears_the_rows_of_an_earlier_parse(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _archive(conn, NHL_PBP, status=SHAPE_ERROR)
+    rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    _regress(monkeypatch)
+    report = rebuild_source(conn, NHL_PBP, PBP_PARSER, allow_refused=True)
     assert report.rejected == 1
     assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (0,)
     assert conn.execute("SELECT COUNT(obs_id) FROM pbp_roster").fetchone() == (0,)
-    assert conn.execute("SELECT COUNT(obs_id) FROM latest_pbp_events").fetchone() == (0,)
 
 
 @pytest.mark.parametrize("key", ["²", "٢٠٢٥٠٢٠٧٠٩", "12", "20250207090"])

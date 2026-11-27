@@ -249,6 +249,24 @@ def test_a_payload_that_the_first_read_accepted_and_the_parser_refuses_stops_the
     assert conn.execute("SELECT MAX(derivation) FROM boxscore_revisions").fetchone() == (1,)
 
 
+def test_a_payload_that_a_later_parser_accepted_stops_a_regressing_rebuild(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first read refused the payload, a later parser accepted it, and a newer one refuses."""
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    conn.execute("UPDATE observations SET status = ? WHERE source = ?", (SHAPE_ERROR, BOXSCORES))
+    conn.commit()
+
+    def broken(payload: object) -> BoxscoreRows:
+        raise SourceParseError("nhl", "the parser lost the shape of the feed")
+
+    monkeypatch.setattr(boxscore_rebuild, "BOXSCORE_PARSER", NEXT_PARSER)
+    monkeypatch.setattr(boxscore_rebuild, "parse_boxscore", broken)
+    with pytest.raises(StoreError, match="--allow-refused"):
+        rebuild_source(conn, BOXSCORES, NEXT_PARSER)
+    assert conn.execute("SELECT MAX(derivation) FROM boxscore_revisions").fetchone() == (1,)
+
+
 def test_a_deeply_nested_archived_body_is_a_refusal_and_not_a_crash(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:

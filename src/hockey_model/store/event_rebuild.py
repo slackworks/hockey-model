@@ -82,14 +82,21 @@ def _payload(conn: sqlite3.Connection, obs: Observation, sha256: str) -> object:
     return get_json_text(obs.source, raw, f"archived payload of observation {obs.obs_id}")
 
 
+def _has_rows(conn: sqlite3.Connection, kind: _Kind, obs_id: int) -> bool:
+    """Return True when an earlier parse left rows for the observation."""
+    found = conn.execute(f"SELECT 1 FROM {kind.tables[0]} WHERE obs_id = ? LIMIT 1", (obs_id,))
+    return found.fetchone() is not None
+
+
 def rebuild_events(
     conn: sqlite3.Connection, source: str, parser: str, *, allow_refused: bool = False
 ) -> RebuildReport:
     """Rewrite the derived rows of each archived observation of ``source``.
 
-    ``parser`` must name the parser that the code holds. A payload that the first read accepted
-    and the parser refuses now stops the rebuild, as a parser regression does, unless
-    ``allow_refused`` says that the stricter parser is intended. The rebuild is one transaction.
+    ``parser`` must name the parser that the code holds. A payload that an earlier read or an
+    earlier parse accepted, and the parser refuses now, stops the rebuild as a parser regression
+    does, unless ``allow_refused`` says that the stricter parser is intended. An earlier parse
+    left rows for the observation. The rebuild is one transaction.
     """
     kind = KINDS[source]
     if parser != kind.parser:
@@ -104,14 +111,15 @@ def rebuild_events(
             if obs.sha256 is None or obs.status not in (OK, SHAPE_ERROR):
                 continue
             seen += 1
+            accepted_before = obs.status == OK or _has_rows(conn, kind, obs.obs_id)
             try:
                 kind.apply(conn, obs, _payload(conn, obs, obs.sha256))
             except (SourceParseError, SourceShapeError) as exc:
-                if obs.status == OK and not allow_refused:
+                if accepted_before and not allow_refused:
                     raise StoreError(
                         f"rebuild {source} observation {obs.obs_id}: the parser {kind.parser} "
-                        f"refuses a payload that the first read accepted ({exc}); fix the "
-                        "parser, or pass --allow-refused when the stricter parser is intended"
+                        f"refuses a payload that an earlier read or parse accepted ({exc}); fix "
+                        "the parser, or pass --allow-refused when the stricter parser is intended"
                     ) from exc
                 # The rows of an earlier parse must not outlive a refusal: a view that picks the
                 # newest observation would serve them as the rows of these bytes.
