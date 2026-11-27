@@ -214,8 +214,9 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
     """Build the stints of a game, check them, and store the status. None means no inputs.
 
     The caller owns the transaction. A second call for the same pair of observations replaces
-    the stints and the status of that pair. A call that raises a store error deletes the stints
-    and the status of the game, because a status that its inputs no longer support is a claim.
+    the stints and the status of that pair and removes those of an older pair. A call that
+    raises a store error deletes the stints and the status of the game, because a status that its
+    inputs no longer support is a claim.
     """
     try:
         built = build_game_stints(conn, game_id)
@@ -230,6 +231,9 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
         _forget(conn, game_id)
         raise
     game = GameStatus(game_id, inputs.pbp_obs, inputs.shift_obs, status, tuple(results))
+    # The views read the newest pair only. The rows of an older pair are derived rows that a
+    # run of this function makes again, so they go instead of growing with each revisit.
+    _forget(conn, game_id)
     write_stints(conn, built)
     _write_status(conn, game, notes_json(results), now)
     return game

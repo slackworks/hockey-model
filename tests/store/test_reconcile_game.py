@@ -425,3 +425,31 @@ def test_a_boxscore_read_after_the_last_revisit_settles_the_game(
     result = reconcile_game(conn, GAME, LATE)
     assert result is not None
     assert result.status == "reconciled"
+
+
+def test_a_run_for_a_newer_pair_removes_the_rows_of_the_older_pair(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    newest = _store(conn, LATE + timedelta(days=1))
+    reconcile_game(conn, GAME, LATE + timedelta(days=1))
+    pairs = {(row[0], row[1]) for row in conn.execute("SELECT pbp_obs, shift_obs FROM stints")}
+    assert pairs == {newest}
+    assert [(row[1], row[2]) for row in _status(conn)] == [newest]
+
+
+def test_a_run_for_one_game_leaves_the_rows_of_another_game(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    conn.execute(
+        "INSERT INTO event_status (game_id, pbp_obs, shift_obs, status, checked_at, notes)"
+        " VALUES (?, 1, 2, 'reconciled', 'x', '[]')",
+        (GAME + 1,),
+    )
+    reconcile_game(conn, GAME, LATE)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM event_status WHERE game_id = ?", (GAME + 1,)
+    ).fetchone() == (1,)
