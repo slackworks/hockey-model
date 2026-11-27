@@ -48,10 +48,14 @@ def _expected_goals(
     if home_score is None or away_score is None:
         return "the game has no final score"
     expected = {home: home_score, away: away_score}
-    if last_period == SHOOTOUT:
-        if home_score == away_score:
-            return "a shootout game has equal scores"
-        expected[home if home_score > away_score else away] -= 1
+    if last_period != SHOOTOUT:
+        return expected
+    if home_score > away_score:
+        expected[home] -= 1
+    elif away_score > home_score:
+        expected[away] -= 1
+    else:
+        return "a shootout game has equal scores"
     return expected
 
 

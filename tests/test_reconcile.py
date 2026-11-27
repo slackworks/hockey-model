@@ -281,3 +281,73 @@ def test_more_skaters_never_turn_a_passing_situation_check_into_a_failing_one(
         total = before.detail["total"]
         assert isinstance(total, int)
         assert total <= len(events)
+
+
+def test_a_shootout_with_equal_scores_names_the_reason() -> None:
+    result = check_goals_by_team({HOME: 3, AWAY: 3}, HOME, AWAY, (3, 3), "SO")
+    assert result.detail == {"reason": "a shootout game has equal scores"}
+
+
+def test_the_shootout_goal_is_taken_from_the_winner_only() -> None:
+    result = check_goals_by_team({HOME: 3, AWAY: 3}, HOME, AWAY, (4, 3), "SO")
+    assert result.detail == {"expected": {HOME: 3, AWAY: 3}, "found": {HOME: 3, AWAY: 3}}
+    result = check_goals_by_team({HOME: 3, AWAY: 3}, HOME, AWAY, (3, 4), "SO")
+    assert result.detail == {"expected": {HOME: 3, AWAY: 3}, "found": {HOME: 3, AWAY: 3}}
+
+
+@pytest.mark.parametrize(
+    ("goals", "scores"),
+    [({HOME: 3}, (3, 0)), ({AWAY: 2}, (0, 2)), ({}, (0, 0))],
+)
+def test_a_team_with_no_goal_in_the_play_by_play_has_zero_goals(
+    goals: dict[str | None, int], scores: tuple[int, int]
+) -> None:
+    result = check_goals_by_team(goals, HOME, AWAY, scores, "REG")
+    assert result.passed
+    assert result.detail == {
+        "expected": {HOME: scores[0], AWAY: scores[1]},
+        "found": {HOME: scores[0], AWAY: scores[1]},
+    }
+
+
+def test_a_player_with_no_goal_in_one_source_has_zero_goals_there() -> None:
+    assert check_goals_by_player({1: 1}, {1: 1, 2: 0}).passed
+    assert check_goals_by_player({1: 1, 2: 0}, {1: 1}).passed
+    assert check_goals_by_player({}, {}).detail == {}
+
+
+def test_a_pass_of_each_check_has_an_empty_detail() -> None:
+    assert check_goals_by_player({1: 1}, {1: 1}).detail == {}
+    assert check_roster([1], {1: "C"}).detail == {}
+    assert check_espn_teams({HOME, AWAY}, HOME, AWAY).detail == {}
+    assert check_game_state({"OFF"}).detail == {}
+
+
+def test_each_situation_result_carries_the_name_of_the_check() -> None:
+    stints = [_stint(0, 100, 5, 5)]
+    for events in (
+        [SituationEvent(1, 1, 50, None)],
+        [SituationEvent(1, 1, 50, "1551")],
+        [SituationEvent(1, 1, 500, "1551")],
+    ):
+        assert check_situation(events, stints).name == "situation"
+
+
+def test_the_empty_status_message_says_what_to_do() -> None:
+    with pytest.raises(HockeyModelError) as error:
+        status_of([], settled=True)
+    assert str(error.value) == (
+        "status_of got no check result, so no game can be called reconciled; "
+        "run the reconciliation checks first"
+    )
+
+
+def test_each_result_of_a_check_says_passed_with_a_real_boolean() -> None:
+    results = [
+        check_goals_by_team({HOME: 1}, HOME, AWAY, (1, 0), "REG"),
+        check_goals_by_player({1: 1}, {1: 1}),
+        check_roster([1], {1: "C"}),
+        check_situation([SituationEvent(1, 1, 50, None)], []),
+        check_espn_teams({HOME}, HOME, AWAY),
+    ]
+    assert [type(r.passed) for r in results] == [bool] * 5
