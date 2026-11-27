@@ -18,7 +18,7 @@ from hockey_model.store import refresh_events, refresh_revisit
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
-from hockey_model.store.refresh_events import read_events
+from hockey_model.store.refresh_events import events, read_events
 from hockey_model.store.refresh_nhl import read_boxscores
 from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS
 
@@ -231,3 +231,31 @@ def test_the_derive_hook_refuses_to_run_before_the_unit(conn: sqlite3.Connection
     assert reading.derive is not None
     with pytest.raises(StoreError, match=rf"derive nhl_shifts {GAME}: .*no parsed rows"):
         reading.derive(conn, 1)
+
+
+def _both() -> dict[str, bytes | Exception]:
+    return {
+        pbp_url(GAME): fixture("nhl/pbp_2025020709.json"),
+        shifts_url(GAME): fixture("nhl/shifts_2025020709.json"),
+    }
+
+
+def test_a_game_without_a_status_is_reconciled_again_in_the_next_refresh(
+    conn: sqlite3.Connection,
+) -> None:
+    _reconciled_game(conn)
+    (good,) = conn.execute("SELECT DISTINCT fetched_at FROM boxscore_revisions").fetchall()
+    conn.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
+    first = RefreshRun(conn, FakeClient(_both()), NOW + timedelta(days=21))
+    read_events(first, NHL_PBP, [GAME])
+    assert _status(conn) == []
+    assert sum("garbage" in note for note in first.notes) == 1
+    again = RefreshRun(conn, FakeClient(), NOW + timedelta(days=22))
+    events(again)
+    assert _status(conn) == []
+    assert sum("garbage" in note for note in again.notes) == 1
+    conn.execute("UPDATE boxscore_revisions SET fetched_at = ?", good)
+    last = RefreshRun(conn, FakeClient(), NOW + timedelta(days=23))
+    events(last)
+    assert [row[0] for row in _status(conn)] == ["reconciled"]
+    assert last.notes == []

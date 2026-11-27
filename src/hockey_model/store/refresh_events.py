@@ -133,6 +133,31 @@ def _note_skips(run: RefreshRun, source: str, gapped: int, waiting: int) -> None
         )
 
 
+def games_pending_reconcile(conn: sqlite3.Connection) -> list[int]:
+    """Return the games with a good play-by-play and shift chart but no status for that pair.
+
+    A game that could not reconcile has its status removed. It is not due for a read, so this
+    list brings it back until it reconciles, and each run names the cause again in the notes.
+    """
+    rows = conn.execute(
+        "SELECT CAST(p.key AS INTEGER) FROM observations p"
+        " JOIN latest_event_observations lp ON lp.obs_id = p.obs_id"
+        " JOIN observations s ON s.source = ? AND s.key = p.key AND s.status = 'ok'"
+        " JOIN latest_event_observations ls ON ls.obs_id = s.obs_id"
+        " WHERE p.source = ? AND p.status = 'ok' AND NOT EXISTS ("
+        "SELECT 1 FROM event_status e WHERE e.pbp_obs = p.obs_id AND e.shift_obs = s.obs_id)"
+        " ORDER BY p.key",
+        (NHL_SHIFTS, NHL_PBP),
+    )
+    return [int(game_id) for (game_id,) in rows]
+
+
+def _reconcile_pending(run: RefreshRun) -> None:
+    for game_id in games_pending_reconcile(run.conn):
+        with run.conn:
+            run.reconcile_in_unit(game_id)
+
+
 def _read_source(run: RefreshRun, source: str) -> None:
     waiting = games_missing_events(run, source)
     with run.step(source, "missing", len(waiting)):
@@ -141,6 +166,10 @@ def _read_source(run: RefreshRun, source: str) -> None:
 
 
 def events(run: RefreshRun) -> None:
-    """Read the play-by-play and the shift chart of each final game that lacks one, then revisit."""
+    """Read the play-by-play and the shift chart of each final game that lacks one, then revisit.
+
+    A game with both reads and no status is reconciled again at the end.
+    """
     for source in _KINDS:
         _read_source(run, source)
+    _reconcile_pending(run)
