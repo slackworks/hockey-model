@@ -14,7 +14,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import boxscore_url
 from hockey_model.sources.nhl_events import pbp_url
 from hockey_model.sources.nhl_shifts import shifts_url
-from hockey_model.store import refresh_events, refresh_revisit
+from hockey_model.store import refresh_context, refresh_events, refresh_revisit
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
@@ -284,3 +284,35 @@ def test_a_feed_that_is_not_published_yet_never_becomes_a_known_gap(
     refresh(conn, client, now=NOW + timedelta(days=4))
     assert url in client.urls
     assert GAME in _games(conn, "pbp_events" if source == NHL_PBP else "shifts")
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("bug in a check"), sqlite3.IntegrityError("dup")])
+def test_a_bug_in_the_reconcile_code_leaves_the_boxscore_read_intact(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    _reconciled_game(conn)
+    revisions = conn.execute("SELECT COUNT(*) FROM boxscore_revisions").fetchone()[0]
+
+    def broken(db: sqlite3.Connection, game_id: int, now: object) -> None:
+        db.execute(
+            "INSERT INTO event_status (game_id, pbp_obs, shift_obs, status, checked_at, notes)"
+            " VALUES (?, 1, 2, 'reconciled', 'x', '[]')",
+            (GAME + 1,),
+        )
+        raise failure
+
+    monkeypatch.setattr(refresh_context, "reconcile_game", broken)
+    body = json.loads(fixture("nhl/boxscore_2025020709.json"))
+    for side in body["playerByGameStats"].values():
+        for group in side.values():
+            for entry in group:
+                if entry.get("goals"):
+                    entry["goals"] += 1
+    later = RefreshRun(conn, FakeClient({BOX: json.dumps(body).encode()}), NOW + timedelta(days=21))
+    read_boxscores(later, [GAME])
+    assert later.errors == []
+    assert conn.execute("SELECT COUNT(*) FROM boxscore_revisions").fetchone()[0] > revisions
+    assert _status(conn) == []
+    assert _status(conn, GAME + 1) == []
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
+    assert sum(type(failure).__name__ in note for note in later.notes) == 1

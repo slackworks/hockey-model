@@ -13,7 +13,7 @@ from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.archive import OK, STORE_ERROR, record_observation
 from hockey_model.store.db import StoreError
-from hockey_model.store.reconcile_game import reconcile_game
+from hockey_model.store.reconcile_game import forget_game, reconcile_game
 from hockey_model.store.recording import (
     Capture,
     Reading,
@@ -115,15 +115,22 @@ class RefreshRun:
     def reconcile_in_unit(self, game_id: int) -> None:
         """Reconcile one game inside the transaction of the running unit (#35).
 
-        A game that cannot reconcile has its stints and status removed by ``reconcile_game``, so
-        its status is unknown. The error goes to the notes of the report. It does not fail the
-        unit, because the bytes that the unit read are good and the archive keeps them, and it
-        does not fail the refresh, because the model reads no event.
+        The reconcile code runs under a savepoint, because the unit may be a boxscore read that
+        the model uses, and a fault of the event dataset must not undo it. A store error leaves
+        the game with no status, as ``reconcile_game`` makes it. Any other fault rolls back the
+        writes of the reconcile code and removes the status of the game. Both go to the notes of
+        the report, and the next refresh reconciles the game again.
         """
+        self.conn.execute("SAVEPOINT reconcile_game")
         try:
             reconcile_game(self.conn, game_id, self.last_stamp or self.now)
         except StoreError as exc:
             self.notes.append(f"reconcile: {exc}")
+        except Exception as exc:  # noqa: BLE001 - a fault here must not undo the unit
+            self.conn.execute("ROLLBACK TO reconcile_game")
+            forget_game(self.conn, game_id)
+            self.notes.append(f"reconcile: game {game_id}: {type(exc).__name__}: {exc}")
+        self.conn.execute("RELEASE reconcile_game")
 
     def stop(self, note: str) -> None:
         """Record why a read stopped, in the notes of the refresh and in the progress step."""

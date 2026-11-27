@@ -209,7 +209,7 @@ def _write_status(
     )
 
 
-def _forget(conn: sqlite3.Connection, game_id: int) -> None:
+def forget_game(conn: sqlite3.Connection, game_id: int) -> None:
     """Delete every stint and every status of a game."""
     for table in ("stints", "event_status"):
         conn.execute(f"DELETE FROM {table} WHERE game_id = ?", (game_id,))
@@ -233,12 +233,12 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
     except StoreError:
         # No status means that the game is unknown. The old one must not outlive inputs that
         # no longer reconcile.
-        _forget(conn, game_id)
+        forget_game(conn, game_id)
         raise
     game = GameStatus(game_id, inputs.pbp_obs, inputs.shift_obs, status, tuple(results))
     # The views read the newest pair only. The rows of an older pair are derived rows that a
     # run of this function makes again, so they go instead of growing with each revisit.
-    _forget(conn, game_id)
+    forget_game(conn, game_id)
     write_stints(conn, built)
     _write_status(conn, game, notes_json(results), now)
     return game
