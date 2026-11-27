@@ -20,6 +20,7 @@ from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 COMPLETE = "complete"
 INCOMPLETE = "incomplete"
 MATCHED = "matched"
+MISMATCHED = "mismatched"
 # The parser of a revision that an upgrade wrote from rows that kept no bytes.
 LEGACY_PARSER = "legacy:unavailable"
 

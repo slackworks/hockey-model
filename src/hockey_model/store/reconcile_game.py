@@ -22,7 +22,7 @@ from hockey_model.reconcile import (
     status_of,
 )
 from hockey_model.store.archive import OK, SHAPE_ERROR
-from hockey_model.store.boxscore_revisions import LATEST, boxscore_rows
+from hockey_model.store.boxscore_revisions import COMPLETE, LATEST, MISMATCHED, boxscore_rows
 from hockey_model.store.db import StoreError
 from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
@@ -79,6 +79,12 @@ def _player_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
     revision = boxscore_rows(conn, inputs.game_id, policy=LATEST)
     if revision is None:
         return CheckResult("goals_by_player", False, {"reason": "the game has no boxscore"})
+    if revision.completeness != COMPLETE:
+        reason = "the newest boxscore revision is incomplete"
+        return CheckResult("goals_by_player", False, {"reason": reason})
+    if revision.identity == MISMATCHED:
+        reason = "the newest boxscore revision names another game or teams"
+        return CheckResult("goals_by_player", False, {"reason": reason})
     scored: dict[int, int] = {}
     for _, scorer in _goals(conn, inputs.pbp_obs):
         if scorer is not None and inputs.positions.get(scorer) != "G":

@@ -239,3 +239,34 @@ def test_a_stored_time_that_does_not_parse_is_a_store_error_that_names_the_game(
         conn.execute("UPDATE observations SET fetched_at = 'garbage' WHERE source = ?", (NHL_PBP,))
     with pytest.raises(StoreError, match=rf"game {GAME}: .*garbage"):
         reconcile_game(conn, GAME, LATE)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "reason"),
+    [
+        ("completeness", "incomplete", "the newest boxscore revision is incomplete"),
+        ("identity", "mismatched", "the newest boxscore revision names another game or teams"),
+    ],
+)
+def test_a_boxscore_revision_that_is_not_sound_fails_the_player_check_with_a_reason(
+    conn: sqlite3.Connection, column: str, value: str, reason: str
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    conn.execute(f"UPDATE boxscore_revisions SET {column} = ?", (value,))
+    reconcile_game(conn, GAME, LATE)
+    notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
+    entry = next(n for n in notes if n["check"] == "goals_by_player")
+    assert entry["passed"] is False
+    assert entry["detail"] == {"reason": reason}
+
+
+def test_an_unverified_boxscore_revision_is_read_and_the_check_can_pass(
+    conn: sqlite3.Connection,
+) -> None:
+    """A revision from before the identity check is read, and the player goals still decide."""
+    _boxscore(conn)
+    _store(conn, LATE)
+    conn.execute("UPDATE boxscore_revisions SET identity = 'unverified'")
+    reconcile_game(conn, GAME, LATE)
+    assert _checks(conn)["goals_by_player"] is True
