@@ -13,6 +13,7 @@ from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.archive import OK, STORE_ERROR, record_observation
 from hockey_model.store.db import StoreError
+from hockey_model.store.reconcile_game import reconcile_game
 from hockey_model.store.recording import (
     Capture,
     Reading,
@@ -105,6 +106,18 @@ class RefreshRun:
         """Return the time to store with a read: the clock when one is set, else ``now``."""
         self.last_stamp = self.now if self.clock is None else self.clock()
         return self.last_stamp
+
+    def reconcile_in_unit(self, game_id: int) -> None:
+        """Reconcile one game inside the transaction of the running unit (#35).
+
+        A game that cannot reconcile has its stints and status removed by ``reconcile_game``, so
+        its status is unknown. The error goes to the report and does not fail the unit, because
+        the bytes that the unit read are good and the archive keeps them.
+        """
+        try:
+            reconcile_game(self.conn, game_id, self.last_stamp or self.now)
+        except StoreError as exc:
+            self.errors.append(exc)
 
     def stop(self, note: str) -> None:
         """Record why a read stopped, in the notes of the refresh and in the progress step."""

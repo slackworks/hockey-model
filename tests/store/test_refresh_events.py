@@ -199,3 +199,21 @@ def test_a_revisit_bound_names_the_games_left_for_the_next_refresh(
     assert any("12 revisit(s) wait for the next refresh" in n for n in report.notes)
     assert _observations(conn, NHL_PBP, 2025020697) == 2
     assert _observations(conn, NHL_PBP, 2025020710) == 1
+
+
+@pytest.mark.parametrize("source", [NHL_PBP, NHL_SHIFTS])
+def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    _reconciled_game(conn)
+    conn.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
+    served: dict[str, bytes | Exception] = {
+        pbp_url(GAME): fixture("nhl/pbp_2025020709.json"),
+        shifts_url(GAME): fixture("nhl/shifts_2025020709.json"),
+    }
+    run = RefreshRun(conn, FakeClient(served), NOW + timedelta(days=21))
+    read_events(run, source, [GAME])
+    assert _observations(conn, source) == 2
+    assert len(run.errors) == 1
+    assert "garbage" in str(run.errors[0])
+    assert _status(conn) == []

@@ -21,7 +21,6 @@ from hockey_model.store.event_writes import write_pbp, write_shifts
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.refresh_nhl import MAX_REVISITS, RETRY_FAILED_AFTER
-from hockey_model.store.refresh_reconcile import reconcile_in_unit
 from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS, failed_since
 from hockey_model.store.timestamps import iso_utc
 
@@ -71,7 +70,7 @@ def _unit(run: RefreshRun, source: str, game_id: int) -> tuple[Callable[[datetim
         # The hook runs after a good unit only, so the list holds exactly one writer.
         (write,) = held
         write(conn, obs_id)
-        reconcile_in_unit(run, conn, game_id)
+        run.reconcile_in_unit(game_id)
 
     return unit, Reading(kind.parser, derive=derive)
 
