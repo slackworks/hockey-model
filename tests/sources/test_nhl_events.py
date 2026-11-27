@@ -30,7 +30,7 @@ def test_the_parser_names_its_version() -> None:
 
 
 def test_a_saved_game_gives_its_teams_roster_and_events() -> None:
-    rows = parse_pbp(load())
+    rows = parse_pbp(load(), GAME)
     assert (rows.game_id, rows.home, rows.away) == (GAME, "EDM", "LAK")
     assert len(rows.roster) == 40
     assert len(rows.events) == 325
@@ -39,7 +39,7 @@ def test_a_saved_game_gives_its_teams_roster_and_events() -> None:
 
 
 def test_the_goals_carry_their_players_and_the_score() -> None:
-    goals = [e for e in parse_pbp(load()).events if e.type == "goal"]
+    goals = [e for e in parse_pbp(load(), GAME).events if e.type == "goal"]
     assert len(goals) == 7
     first = goals[0]
     assert (first.owner_team, first.period, first.period_second) == ("EDM", 1, 552)
@@ -48,7 +48,7 @@ def test_the_goals_carry_their_players_and_the_score() -> None:
 
 
 def test_a_shootout_event_has_no_second_of_the_game() -> None:
-    events = parse_pbp(load()).events
+    events = parse_pbp(load(), GAME).events
     shootout = [e for e in events if e.period_type == "SO"]
     assert shootout
     assert all(e.game_second is None for e in shootout)
@@ -65,7 +65,7 @@ def test_the_second_of_the_game_follows_the_period(period: int, second: int, exp
 
 
 def test_an_overtime_event_of_the_saved_game_sits_after_regulation() -> None:
-    events = [e for e in parse_pbp(load()).events if e.period_type == "OT"]
+    events = [e for e in parse_pbp(load(), GAME).events if e.period_type == "OT"]
     assert events
     assert all(3600 <= (e.game_second or 0) <= 3900 for e in events)
 
@@ -76,9 +76,9 @@ def test_the_attack_direction_follows_the_side_that_the_home_team_defends() -> N
     owner = shot["details"]["eventOwnerTeamId"]
     home_id = payload["homeTeam"]["id"]
     shot["homeTeamDefendingSide"] = "left"
-    left = next(e for e in parse_pbp(payload).events if e.event_id == shot["eventId"])
+    left = next(e for e in parse_pbp(payload, GAME).events if e.event_id == shot["eventId"])
     shot["homeTeamDefendingSide"] = "right"
-    right = next(e for e in parse_pbp(payload).events if e.event_id == shot["eventId"])
+    right = next(e for e in parse_pbp(payload, GAME).events if e.event_id == shot["eventId"])
     # The home team defends the left side, so it attacks toward positive x.
     assert left.attack_x_sign == (1 if owner == home_id else -1)
     assert right.attack_x_sign == -left.attack_x_sign
@@ -88,12 +88,12 @@ def test_an_event_with_no_defending_side_has_no_direction() -> None:
     payload = load()
     shot = next(p for p in payload["plays"] if p["typeDescKey"] == "shot-on-goal")
     del shot["homeTeamDefendingSide"]
-    found = next(e for e in parse_pbp(payload).events if e.event_id == shot["eventId"])
+    found = next(e for e in parse_pbp(payload, GAME).events if e.event_id == shot["eventId"])
     assert found.attack_x_sign is None
 
 
 def test_an_event_with_no_owner_has_no_direction() -> None:
-    events = parse_pbp(load()).events
+    events = parse_pbp(load(), GAME).events
     stoppage = next(e for e in events if e.type == "stoppage" and e.owner_team is None)
     assert stoppage.attack_x_sign is None
 
@@ -103,7 +103,7 @@ def test_a_bad_defending_side_is_a_named_error() -> None:
     shot = next(p for p in payload["plays"] if p["typeDescKey"] == "shot-on-goal")
     shot["homeTeamDefendingSide"] = "up"
     with pytest.raises(SourceParseError, match="left or right"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 @pytest.mark.parametrize("key", ["id", "homeTeam", "awayTeam", "plays", "rosterSpots"])
@@ -111,7 +111,7 @@ def test_a_renamed_top_level_key_is_a_named_error(key: str) -> None:
     payload = load()
     payload[f"{key}_renamed"] = payload.pop(key)
     with pytest.raises(SourceParseError, match=key):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 @pytest.mark.parametrize("key", ["eventId", "periodDescriptor", "timeInPeriod", "typeDescKey"])
@@ -119,7 +119,7 @@ def test_a_renamed_play_key_is_a_named_error(key: str) -> None:
     payload = load()
     payload["plays"][3][f"{key}_renamed"] = payload["plays"][3].pop(key)
     with pytest.raises(SourceParseError, match=key):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 @pytest.mark.parametrize("value", ["7:5", "07:60", "x", "٠٠:٠٠", 5, None])
@@ -127,7 +127,7 @@ def test_a_bad_clock_is_a_named_error(value: object) -> None:
     payload = load()
     payload["plays"][3]["timeInPeriod"] = value
     with pytest.raises(SourceParseError, match="MM:SS"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_clock_seconds_reads_minutes_and_seconds() -> None:
@@ -140,14 +140,14 @@ def test_an_unknown_period_type_is_a_named_error(period_type: object) -> None:
     payload = load()
     payload["plays"][3]["periodDescriptor"]["periodType"] = period_type
     with pytest.raises(SourceParseError, match="period"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_a_period_below_one_is_a_named_error() -> None:
     payload = load()
     payload["plays"][3]["periodDescriptor"]["number"] = 0
     with pytest.raises(SourceParseError, match="not a known period"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 @pytest.mark.parametrize("code", ["155", "15511", "abcd", 1551])
@@ -155,14 +155,14 @@ def test_a_bad_situation_code_is_a_named_error(code: object) -> None:
     payload = load()
     payload["plays"][3]["situationCode"] = code
     with pytest.raises(SourceParseError, match="situationCode"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_an_unknown_team_code_is_a_named_error() -> None:
     payload = load()
     payload["homeTeam"]["abbrev"] = "XXX"
     with pytest.raises(SourceShapeError):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_an_unknown_owner_team_id_is_a_named_error() -> None:
@@ -170,28 +170,28 @@ def test_an_unknown_owner_team_id_is_a_named_error() -> None:
     shot = next(p for p in payload["plays"] if p["typeDescKey"] == "shot-on-goal")
     shot["details"]["eventOwnerTeamId"] = 999
     with pytest.raises(SourceParseError, match="unknown team id 999"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_a_roster_spot_for_an_unknown_team_is_a_named_error() -> None:
     payload = load()
     payload["rosterSpots"][0]["teamId"] = 999
     with pytest.raises(SourceParseError, match="unknown team id 999"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_an_event_listed_twice_is_a_named_error() -> None:
     payload = load()
     payload["plays"].append(copy.deepcopy(payload["plays"][0]))
     with pytest.raises(SourceParseError, match="lists event .* twice"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_both_teams_must_be_different() -> None:
     payload = load()
     payload["awayTeam"] = dict(payload["homeTeam"])
     with pytest.raises(SourceParseError, match="both teams"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_a_coordinate_that_is_not_a_number_is_a_named_error() -> None:
@@ -199,13 +199,13 @@ def test_a_coordinate_that_is_not_a_number_is_a_named_error() -> None:
     shot = next(p for p in payload["plays"] if p["typeDescKey"] == "shot-on-goal")
     shot["details"]["xCoord"] = "far"
     with pytest.raises(SourceParseError, match="xCoord"):
-        parse_pbp(payload)
+        parse_pbp(payload, GAME)
 
 
 def test_the_parser_does_not_change_its_input() -> None:
     payload = load()
     before = copy.deepcopy(payload)
-    parse_pbp(payload)
+    parse_pbp(payload, GAME)
     assert payload == before
 
 
@@ -230,3 +230,97 @@ def test_fetch_reads_the_url_of_the_game() -> None:
 def test_fetch_checks_that_the_payload_names_the_game() -> None:
     with pytest.raises(SourceParseError, match="names game"):
         fetch_pbp(_Client(FIXTURE.read_bytes()), 2025020710)
+
+
+def test_a_payload_that_names_another_game_is_a_named_error() -> None:
+    with pytest.raises(SourceParseError, match=f"names game {GAME}"):
+        parse_pbp(load(), GAME + 1)
+
+
+def test_a_feed_with_no_play_is_a_named_error() -> None:
+    """A game that has not started lists no play. A later read can fix the refusal."""
+    payload = load()
+    payload["plays"] = []
+    with pytest.raises(SourceParseError, match="lists no play"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_feed_with_no_roster_is_a_named_error() -> None:
+    payload = load()
+    payload["rosterSpots"] = []
+    with pytest.raises(SourceParseError, match="lists no roster spot"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_player_listed_twice_in_the_roster_is_a_named_error() -> None:
+    payload = load()
+    payload["rosterSpots"].append(dict(payload["rosterSpots"][0]))
+    with pytest.raises(SourceParseError, match="a player twice in its roster"):
+        parse_pbp(payload, GAME)
+
+
+def test_two_teams_with_one_code_are_a_named_error() -> None:
+    payload = load()
+    payload["awayTeam"]["abbrev"] = payload["homeTeam"]["abbrev"]
+    with pytest.raises(SourceParseError, match="both teams"):
+        parse_pbp(payload, GAME)
+
+
+@pytest.mark.parametrize("value", ["20:01", "99:59", "100:00"])
+def test_a_period_clock_past_the_period_is_a_named_error(value: str) -> None:
+    payload = load()
+    payload["plays"][3]["timeInPeriod"] = value
+    with pytest.raises(SourceParseError, match="past the limit"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_total_may_pass_one_period_when_the_caller_names_the_limit() -> None:
+    assert clock_seconds("25:00", "x", limit=6000) == 1500
+
+
+@pytest.mark.parametrize("value", [-1, 2**63, 10**30])
+def test_an_id_outside_the_store_range_is_a_named_error(value: int) -> None:
+    payload = load()
+    payload["plays"][3]["eventId"] = value
+    with pytest.raises(SourceParseError, match="out of range"):
+        parse_pbp(payload, GAME)
+
+
+def test_the_largest_id_that_the_store_holds_is_accepted() -> None:
+    payload = load()
+    payload["plays"][3]["eventId"] = 2**63 - 1
+    assert any(e.event_id == 2**63 - 1 for e in parse_pbp(payload, GAME).events)
+
+
+@pytest.mark.parametrize("period", [0, 21, 10**20])
+def test_a_period_outside_the_range_is_a_named_error(period: int) -> None:
+    payload = load()
+    payload["plays"][3]["periodDescriptor"]["number"] = period
+    with pytest.raises(SourceParseError, match="period|out of range"):
+        parse_pbp(payload, GAME)
+
+
+@pytest.mark.parametrize("text", ["NaN", "Infinity", "-Infinity"])
+def test_a_coordinate_that_is_not_finite_is_a_named_error(text: str) -> None:
+    """json.loads accepts NaN and Infinity, and SQLite would store NaN as NULL."""
+    raw = FIXTURE.read_text().replace('"xCoord":71', f'"xCoord":{text}', 1)
+    payload = json.loads(raw)
+    with pytest.raises(SourceParseError, match="xCoord"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_play_with_null_details_has_no_details() -> None:
+    payload = load()
+    stoppage = next(p for p in payload["plays"] if p["typeDescKey"] == "stoppage")
+    stoppage["details"] = None
+    found = next(e for e in parse_pbp(payload, GAME).events if e.event_id == stoppage["eventId"])
+    assert (found.owner_team, found.players) == (None, (None, None, None))
+
+
+def test_an_event_type_with_no_player_keys_in_the_map_keeps_its_type_and_no_players() -> None:
+    """The raw payload stays in the archive, so a later parser can read the players."""
+    payload = load()
+    shot = next(p for p in payload["plays"] if p["typeDescKey"] == "shot-on-goal")
+    shot["typeDescKey"] = "failed-shot-attempt"
+    found = next(e for e in parse_pbp(payload, GAME).events if e.event_id == shot["eventId"])
+    assert (found.type, found.players) == ("failed-shot-attempt", (None, None, None))

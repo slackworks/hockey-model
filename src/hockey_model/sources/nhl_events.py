@@ -5,6 +5,7 @@ A parsed event keeps the raw feed coordinates and the attacking direction that t
 Design: docs/design/pbp-shift-dataset.md
 """
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -27,8 +28,12 @@ PBP_BASE = "https://api-web.nhle.com/v1/gamecenter"
 PBP_PARSER = "nhl_pbp:1"
 PERIOD_TYPES = frozenset({"REG", "OT", "SO"})
 PERIOD_SECONDS = 1200
+# The largest id that SQLite stores as an integer, and the most periods that a game can have.
+# A larger value is a feed fault, and the parser names it before the store sees it.
+MAX_ID = 2**63 - 1
+MAX_PERIOD = 20
 # ASCII digits only, so a Unicode digit never parses as a time.
-_CLOCK = re.compile(r"([0-9]{1,2}):([0-9]{2})")
+_CLOCK = re.compile(r"([0-9]{1,3}):([0-9]{2})")
 _SITUATION = re.compile(r"[0-9]{4}")
 # The keys of ``details`` that name the players of an event, by event type, in the order of
 # player1, player2, and player3.
@@ -89,12 +94,28 @@ class PbpRows:
     events: tuple[EventRow, ...]
 
 
-def clock_seconds(value: object, where: str) -> int:
-    """Return the seconds of an ``MM:SS`` clock, or raise naming ``where``."""
+def clock_seconds(value: object, where: str, *, limit: int = PERIOD_SECONDS) -> int:
+    """Return the seconds of an ``MM:SS`` clock, or raise naming ``where``.
+
+    A clock past ``limit`` seconds is a feed fault: a period clock past 20:00 would land inside
+    the next period. ``limit`` is one period unless the caller reads a total, such as a time on
+    ice.
+    """
     match = _CLOCK.fullmatch(value) if isinstance(value, str) else None
     if match is None or int(match.group(2)) >= 60:
         raise SourceParseError(SOURCE, f"{where} clock must be MM:SS, got {value!r}")
-    return int(match.group(1)) * 60 + int(match.group(2))
+    seconds = int(match.group(1)) * 60 + int(match.group(2))
+    if seconds > limit:
+        raise SourceParseError(SOURCE, f"{where} clock {value!r} is past the limit of {limit} s")
+    return seconds
+
+
+def bounded_int(source: str, obj: Mapping[str, object], key: str, where: str) -> int:
+    """Return an integer field that fits the store: 0 to ``MAX_ID``."""
+    value = int_field(source, obj, key, where)
+    if not 0 <= value <= MAX_ID:
+        raise SourceParseError(source, f"{where} field {key!r} is out of range: {value}")
+    return value
 
 
 def game_second(period: int, period_second: int) -> int:
@@ -107,46 +128,53 @@ def game_second(period: int, period_second: int) -> int:
     return (period - 1) * PERIOD_SECONDS + period_second
 
 
-def _team_ids(top: Mapping[str, object], where: str) -> dict[int, str]:
-    """Return the team code of each team id that the header names."""
-    codes: dict[int, str] = {}
+def _teams(top: Mapping[str, object], where: str) -> tuple[dict[int, str], str, str]:
+    """Return the team code of each team id, the home code, and the away code."""
+    found: list[tuple[int, str]] = []
     for key in ("homeTeam", "awayTeam"):
         team = as_mapping(SOURCE, field(SOURCE, top, key, where), f"{where} {key}")
         code = str_field(SOURCE, team, "abbrev", f"{where} {key}")
         if code not in NHL_TEAM_CODES:
             raise SourceShapeError(SOURCE, code)
-        codes[int_field(SOURCE, team, "id", f"{where} {key}")] = code
-    if len(codes) != 2:
+        found.append((bounded_int(SOURCE, team, "id", f"{where} {key}"), code))
+    (home_id, home), (away_id, away) = found
+    if home_id == away_id or home == away:
         raise SourceParseError(SOURCE, f"{where} names one team as both teams")
-    return codes
+    return {home_id: home, away_id: away}, home, away
 
 
 def _roster(top: Mapping[str, object], codes: Mapping[int, str], where: str) -> list[RosterSpot]:
     spots: list[RosterSpot] = []
-    for raw in as_list(SOURCE, field(SOURCE, top, "rosterSpots", where), f"{where} rosterSpots"):
+    listed = as_list(SOURCE, field(SOURCE, top, "rosterSpots", where), f"{where} rosterSpots")
+    if not listed:
+        raise SourceParseError(SOURCE, f"{where} lists no roster spot")
+    for raw in listed:
         spot = as_mapping(SOURCE, raw, f"{where} roster spot")
-        team_id = int_field(SOURCE, spot, "teamId", f"{where} roster spot")
+        team_id = bounded_int(SOURCE, spot, "teamId", f"{where} roster spot")
         if team_id not in codes:
             raise SourceParseError(SOURCE, f"{where} roster spot names unknown team id {team_id}")
         spots.append(
             RosterSpot(
-                int_field(SOURCE, spot, "playerId", f"{where} roster spot"),
+                bounded_int(SOURCE, spot, "playerId", f"{where} roster spot"),
                 codes[team_id],
                 str_field(SOURCE, spot, "positionCode", f"{where} roster spot"),
             )
         )
+    ids = [spot.player_id for spot in spots]
+    if len(set(ids)) != len(ids):
+        raise SourceParseError(SOURCE, f"{where} lists a player twice in its roster")
     return spots
 
 
 def _optional_int(details: Mapping[str, object], key: str, where: str) -> int | None:
-    return int_field(SOURCE, details, key, where) if key in details else None
+    return bounded_int(SOURCE, details, key, where) if key in details else None
 
 
 def _optional_number(details: Mapping[str, object], key: str, where: str) -> float | None:
     if key not in details:
         return None
     value = details[key]
-    if isinstance(value, bool) or not isinstance(value, int | float):
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         raise SourceParseError(SOURCE, f"{where} field {key!r} must be a number, got {value!r}")
     return float(value)
 
@@ -177,9 +205,9 @@ def _period(play: Mapping[str, object], where: str) -> tuple[int, str]:
     descriptor = as_mapping(
         SOURCE, field(SOURCE, play, "periodDescriptor", where), f"{where} periodDescriptor"
     )
-    number = int_field(SOURCE, descriptor, "number", f"{where} periodDescriptor")
+    number = bounded_int(SOURCE, descriptor, "number", f"{where} periodDescriptor")
     kind = str_field(SOURCE, descriptor, "periodType", f"{where} periodDescriptor")
-    if number < 1 or kind not in PERIOD_TYPES:
+    if not 1 <= number <= MAX_PERIOD or kind not in PERIOD_TYPES:
         raise SourceParseError(
             SOURCE, f"{where} period {number} of type {kind!r} is not a known period"
         )
@@ -188,12 +216,12 @@ def _period(play: Mapping[str, object], where: str) -> tuple[int, str]:
 
 def _parse_event(raw: object, codes: Mapping[int, str], home: str) -> EventRow:
     play = as_mapping(SOURCE, raw, "a play")
-    event_id = int_field(SOURCE, play, "eventId", "a play")
+    event_id = bounded_int(SOURCE, play, "eventId", "a play")
     where = f"play {event_id}"
     period, period_type = _period(play, where)
     seconds = clock_seconds(field(SOURCE, play, "timeInPeriod", where), where)
     kind = str_field(SOURCE, play, "typeDescKey", where)
-    details = as_mapping(SOURCE, play.get("details", {}), f"{where} details")
+    details = as_mapping(SOURCE, play.get("details") or {}, f"{where} details")
     owner_id = _optional_int(details, "eventOwnerTeamId", where)
     if owner_id is not None and owner_id not in codes:
         raise SourceParseError(SOURCE, f"{where} names unknown team id {owner_id}")
@@ -206,7 +234,7 @@ def _parse_event(raw: object, codes: Mapping[int, str], home: str) -> EventRow:
     one, two, three = _players(kind, details, where)
     return EventRow(
         event_id,
-        int_field(SOURCE, play, "sortOrder", where),
+        bounded_int(SOURCE, play, "sortOrder", where),
         period,
         period_type,
         seconds,
@@ -226,22 +254,23 @@ def _parse_event(raw: object, codes: Mapping[int, str], home: str) -> EventRow:
     )
 
 
-def parse_pbp(payload: object) -> PbpRows:
-    """Return the roster and the events of one play-by-play payload.
+def parse_pbp(payload: object, game_id: int) -> PbpRows:
+    """Return the roster and the events of the play-by-play of game ``game_id``.
 
-    Raises ``SourceParseError`` for a missing or mistyped field and ``SourceShapeError`` for a
-    team code that the maps do not know, so a renamed key never gives a silent empty game.
+    Raises ``SourceParseError`` for a missing or mistyped field, an empty feed, a repeated event
+    or player, and a payload that names another game. Raises ``SourceShapeError`` for a team code
+    that the maps do not know. A renamed key and an empty list never give a silent empty game.
     """
     top = as_mapping(SOURCE, payload, "the play-by-play")
-    game_id = int_field(SOURCE, top, "id", "the play-by-play")
+    named = bounded_int(SOURCE, top, "id", "the play-by-play")
     where = f"play-by-play {game_id}"
-    codes = _team_ids(top, where)
-    home = codes[int_field(SOURCE, as_mapping(SOURCE, top["homeTeam"], where), "id", where)]
-    away = next(code for code in codes.values() if code != home)
-    events = [
-        _parse_event(raw, codes, home)
-        for raw in as_list(SOURCE, field(SOURCE, top, "plays", where), f"{where} plays")
-    ]
+    if named != game_id:
+        raise SourceParseError(SOURCE, f"{where} names game {named}")
+    codes, home, away = _teams(top, where)
+    plays = as_list(SOURCE, field(SOURCE, top, "plays", where), f"{where} plays")
+    if not plays:
+        raise SourceParseError(SOURCE, f"{where} lists no play; the game may not have started")
+    events = [_parse_event(raw, codes, home) for raw in plays]
     seen: set[int] = set()
     for event in events:
         if event.event_id in seen:
@@ -256,8 +285,5 @@ def pbp_url(game_id: int) -> str:
 
 
 def fetch_pbp(client: HttpClient, game_id: int) -> PbpRows:
-    """Fetch and parse the play-by-play of one game, and check that it names that game."""
-    rows = parse_pbp(get_json(client, SOURCE, pbp_url(game_id)))
-    if rows.game_id != game_id:
-        raise SourceParseError(SOURCE, f"play-by-play for game {game_id} names game {rows.game_id}")
-    return rows
+    """Fetch and parse the play-by-play of one game."""
+    return parse_pbp(get_json(client, SOURCE, pbp_url(game_id)), game_id)

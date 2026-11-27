@@ -46,7 +46,7 @@ def _obs(conn: sqlite3.Connection, source: str, when: datetime = T1) -> int:
 
 
 def _pbp():
-    return parse_pbp(json.loads((FIXTURES / "nhl" / "pbp_2025020709.json").read_text()))
+    return parse_pbp(json.loads((FIXTURES / "nhl" / "pbp_2025020709.json").read_text()), GAME)
 
 
 def _shifts():

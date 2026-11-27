@@ -29,6 +29,8 @@ from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
 
 _EVENT = re.compile(r"[?&]event=([0-9]{1,12})\Z")
+# An NHL game id is ten ASCII digits. isdigit() also accepts other scripts.
+_GAME_KEY = re.compile(r"[0-9]{10}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +43,7 @@ class _Kind:
 
 def _game_of(obs: Observation) -> int:
     """Return the NHL game id that the observation is keyed on."""
-    if obs.key is None or not obs.key.isdigit():
+    if obs.key is None or _GAME_KEY.fullmatch(obs.key) is None:
         raise StoreError(
             f"rebuild {obs.source} observation {obs.obs_id}: the key {obs.key!r} is not a game "
             "id; the observation was written without its game"
@@ -50,7 +52,7 @@ def _game_of(obs: Observation) -> int:
 
 
 def _apply_pbp(conn: sqlite3.Connection, obs: Observation, payload: object) -> None:
-    write_pbp(conn, obs.obs_id, parse_pbp(payload))
+    write_pbp(conn, obs.obs_id, parse_pbp(payload, _game_of(obs)))
 
 
 def _apply_shifts(conn: sqlite3.Connection, obs: Observation, payload: object) -> None:
