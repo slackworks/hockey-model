@@ -291,7 +291,7 @@ CREATE TABLE stints (
 );
 
 -- The result of the reconciliation checks for one pair of observations. notes is a JSON list
--- of the failed checks and their values.
+-- with one entry for each check: its name, whether it passed, and the values of a failure.
 CREATE TABLE event_status (
     game_id INTEGER NOT NULL,
     pbp_obs INTEGER NOT NULL REFERENCES observations (obs_id),
