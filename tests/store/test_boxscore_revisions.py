@@ -13,7 +13,7 @@ from seeding import add_game, drop_revision_tables
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import BOXSCORE_PARSER, BoxscoreRows, parse_boxscore
-from hockey_model.store import boxscore_rebuild
+from hockey_model.store import boxscore_rebuild, refresh_nhl
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import (
     FIRST,
@@ -22,9 +22,12 @@ from hockey_model.store.boxscore_revisions import (
     boxscore_rows,
     record_revision,
 )
+from hockey_model.store.boxscore_revisit import boxscores_due
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.rebuild import rebuild_source
 from hockey_model.store.refresh import refresh
+from hockey_model.store.refresh_context import DeriveError
+from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.upgrade import upgrade_store
 
@@ -418,3 +421,27 @@ def test_a_game_with_rows_from_two_reads_keeps_a_legacy_observation(tmp_path: Pa
         assert parser == ("legacy:unavailable",)
     finally:
         store.close()
+
+
+def test_a_revisit_whose_derive_fails_is_still_due_after_the_fix(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vince's reproduction: a failed derive must not count as the revisit that was due."""
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    due_before = boxscores_due(conn, DAY_FOUR, REVISIT_AFTER_DAYS)
+    assert MAIN_GAME in due_before
+
+    def broken(*args: object) -> None:
+        raise StoreError("the revision table refused the row")
+
+    monkeypatch.setattr(refresh_nhl, "record_revision", broken)
+    with pytest.raises(DeriveError):
+        refresh(conn, FakeClient(), now=DAY_FOUR)
+    assert MAIN_GAME in boxscores_due(conn, DAY_FOUR, REVISIT_AFTER_DAYS)
+    assert conn.execute(
+        "SELECT status FROM observations WHERE key = ? ORDER BY obs_id DESC LIMIT 1",
+        (str(MAIN_GAME),),
+    ).fetchone() == ("store_error",)
+    monkeypatch.undo()
+    refresh(conn, FakeClient(), now=DAY_FOUR)
+    assert MAIN_GAME not in boxscores_due(conn, DAY_FOUR, REVISIT_AFTER_DAYS)

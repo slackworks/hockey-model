@@ -60,7 +60,11 @@ def test_a_store_error_in_the_hook_keeps_the_bytes_and_records_no_failed_read(
     # The unit rolled back and no failed read exists, so no backoff starts. The observation and
     # its bytes stay, so the next read can differ and this one can be parsed again.
     assert _counts(conn) == (0, 1)
-    assert conn.execute("SELECT sha256 IS NOT NULL FROM observations").fetchone() == (1,)
+    assert conn.execute("SELECT status, sha256 IS NOT NULL FROM observations").fetchone() == (
+        "store_error",
+        1,
+    )
+    assert "refused the row" in conn.execute("SELECT error FROM observations").fetchone()[0]
     assert conn.execute("SELECT COUNT(sha256) FROM payloads").fetchone() == (1,)
     assert not run.errors
 

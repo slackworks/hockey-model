@@ -4,14 +4,14 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 from hockey_model import progress
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
-from hockey_model.store.archive import record_observation
+from hockey_model.store.archive import OK, STORE_ERROR, record_observation
 from hockey_model.store.db import StoreError
 from hockey_model.store.recording import (
     Capture,
@@ -172,7 +172,10 @@ class RefreshRun:
             # the archive, because the next read can bring different bytes. The error is local,
             # so no failed read is recorded, and the refresh stops until the code is fixed.
             with self.conn:
-                self._observe(capture, recorded.records, exc)
+                for fetch in capture.fetches(recorded.records, exc):
+                    # The status is not ok, so a revisit that failed here is still due.
+                    failed = replace(fetch, status=STORE_ERROR, error=str(exc))
+                    record_observation(self.conn, failed if fetch.status == OK else fetch)
             raise
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
