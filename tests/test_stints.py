@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from hockey_model.stints import Interval, build_stints, merge_intervals, stint_at
+from hockey_model.stints import Interval, build_stints, merge_intervals, stint_at, stints_around
 from hockey_model.types import HockeyModelError
 
 HOME = "EDM"
@@ -184,3 +184,26 @@ def test_the_stints_cover_the_merged_time_of_each_player_exactly_once(
         assert (left.period, left.end) <= (right.period, right.start)
         same = (left.home_skaters, left.away_skaters) == (right.home_skaters, right.away_skaters)
         assert not (same and left.period == right.period and left.end == right.start)
+
+
+def test_an_event_at_a_boundary_has_the_stint_before_and_the_stint_after() -> None:
+    stints = build_stints(_line_change(), {90: "G", 91: "G"}, HOME, AWAY).stints
+    around = stints_around(stints, 1, 60)
+    assert [(s.start, s.end) for s in around] == [(0, 60), (60, 100)]
+
+
+def test_an_event_inside_a_stint_has_that_stint_only() -> None:
+    stints = build_stints(_line_change(), {90: "G", 91: "G"}, HOME, AWAY).stints
+    assert [(s.start, s.end) for s in stints_around(stints, 1, 30)] == [(0, 60)]
+
+
+def test_an_event_at_the_end_of_a_period_has_no_stint_after() -> None:
+    shifts = [_iv(1, HOME, 0, 1200, 1), _iv(2, HOME, 1200, 2400, 2)]
+    stints = build_stints(shifts, {}, HOME, AWAY).stints
+    assert [(s.period, s.end) for s in stints_around(stints, 1, 1200)] == [(1, 1200)]
+
+
+def test_an_event_in_no_stint_has_no_stints_around_it() -> None:
+    stints = build_stints([_iv(1, HOME, 0, 60)], {}, HOME, AWAY).stints
+    assert stints_around(stints, 1, 500) == ()
+    assert stints_around(stints, 2, 30) == ()

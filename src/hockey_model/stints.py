@@ -186,3 +186,19 @@ def stint_at(stints: Sequence[Stint], period: int, second: int) -> Stint | None:
         if stint.start < second <= stint.end:
             return stint
     return None
+
+
+def stints_around(stints: Sequence[Stint], period: int, second: int) -> tuple[Stint, ...]:
+    """Return the stint that owns an event, and the stint that starts at the event second.
+
+    A faceoff after a penalty ends takes the situation code of the players after the change, and
+    the owner rule gives it the players before the change. The two stints let a check accept
+    either. The tuple is empty when no stint owns the event.
+    """
+    owner = stint_at(stints, period, second)
+    if owner is None:
+        return ()
+    after = next(
+        (s for s in stints if s.period == period and s.start == second != owner.start), None
+    )
+    return (owner,) if after is None else (owner, after)
