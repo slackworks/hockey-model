@@ -422,6 +422,96 @@ def test_no_mutant_for_a_changed_function_fails(
     assert mod.run_check(repo) == 1
 
 
+def _mutmut_writes(mod: ModuleType, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    """Make the run leave ``text`` as the generated copy of the changed source file."""
+
+    def write(repo: Path) -> None:
+        target = repo / "mutants" / SOURCE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+    monkeypatch.setattr(mod, "clear_generated_mutants", write)
+
+
+def test_a_function_that_mutmut_leaves_plain_has_no_mutant_and_passes(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A function with one f-string return gives mutmut nothing to change."""
+    _changed_top(repo)
+    _mutmut_writes(mod, monkeypatch, 'def top(x):\n    return f"{x}"\n')
+    monkeypatch.setenv("FAKE_RESULTS", "")
+    assert mod.run_check(repo) == 0
+
+
+def test_a_function_with_a_mutmut_original_and_no_result_fails(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _changed_top(repo)
+    text = "def top(x):\n    pass\n\ndef x_top__mutmut_orig(x):\n    return x\n"
+    _mutmut_writes(mod, monkeypatch, text)
+    monkeypatch.setenv("FAKE_RESULTS", "")
+    assert mod.run_check(repo) == 1
+
+
+def _commit_source(repo: Path, source: str) -> None:
+    _commit(repo, {SOURCE: source}, "change source")
+
+
+@pytest.mark.parametrize("decorator", ["property", "functools.cache", "contextlib.contextmanager"])
+def test_a_decorated_function_that_mutmut_skips_fails_the_gate(
+    mod: ModuleType,
+    repo: Path,
+    fake_mutmut: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    decorator: str,
+) -> None:
+    """mutmut copies a decorated function unchanged, so the gate cannot test it."""
+    source = f"class Box:\n    @{decorator}\n    def size(self):\n        return 2\n"
+    _commit_source(repo, source)
+    monkeypatch.setattr(mod, "clear_generated_mutants", lambda root: _write_generated(root, source))
+    monkeypatch.setenv("FAKE_RESULTS", "")
+    assert mod.run_check(repo) == 1
+    assert "does not mutate decorated functions" in capsys.readouterr().err
+
+
+def _write_generated(repo: Path, text: str) -> None:
+    target = repo / "mutants" / SOURCE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+
+
+@pytest.mark.parametrize("decorator", ["staticmethod", "classmethod"])
+def test_a_static_or_class_method_that_has_nothing_to_mutate_passes(
+    mod: ModuleType,
+    repo: Path,
+    fake_mutmut: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    decorator: str,
+) -> None:
+    """mutmut does mutate these two, so a plain copy means that no mutant exists."""
+    arg = "cls" if decorator == "classmethod" else "x"
+    source = f"class Box:\n    @{decorator}\n    def url({arg}):\n        return f'{{x}}'\n"
+    source = source.replace("{x}", "u")
+    _commit_source(repo, source)
+    monkeypatch.setattr(mod, "clear_generated_mutants", lambda root: _write_generated(root, source))
+    monkeypatch.setenv("FAKE_RESULTS", "")
+    assert mod.run_check(repo) == 0
+
+
+def test_a_method_is_not_plain_because_a_top_level_function_has_its_name(
+    mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "def bar():\n    return 1\n\n\nclass Foo:\n    def bar(self):\n        return 2\n"
+    _commit_source(repo, source)
+    generated = "def bar():\n    return 1\n\n\nclass Foo:\n    pass\n"
+    monkeypatch.setattr(
+        mod, "clear_generated_mutants", lambda root: _write_generated(root, generated)
+    )
+    monkeypatch.setenv("FAKE_RESULTS", "")
+    assert mod.run_check(repo) == 1
+
+
 def test_a_failed_mutmut_run_fails(
     mod: ModuleType, repo: Path, fake_mutmut: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

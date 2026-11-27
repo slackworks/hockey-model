@@ -20,14 +20,18 @@ from hockey_model.store.archive import (
     canonical_bytes,
     is_market_source,
 )
-from hockey_model.store.source_reads import BOXSCORES, SCORES
+from hockey_model.store.db import StoreError
+from hockey_model.store.source_reads import BOXSCORES, NHL_PBP, NHL_SHIFTS, SCORES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 _SCORE_DAY = re.compile(r"/([0-9]{4}-[0-9]{2}-[0-9]{2})\Z")
 # A game id is always ten digits, and the bounds say so, so a short id never becomes a key.
+_GAME_ID = re.compile(r"[0-9]{10}")
 _BOXSCORE = re.compile(r"/gamecenter/([0-9]{10})/boxscore\Z")
+_PLAY_BY_PLAY = re.compile(r"/gamecenter/([0-9]{10})/play-by-play\Z")
+_SHIFT_CHART = re.compile(r"\?cayenneExp=gameId=([0-9]{10})\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,20 +79,28 @@ class RecordingClient(HttpClient):
                 RecordedFetch(url, HTTP_ERROR, None, f"{type(exc).__name__}: {exc}")
             )
             raise SourceError(source, url, f"fetch failed unexpectedly: {exc}") from exc
-        body = self._cleaned(body)
-        self.records.append(RecordedFetch(url, OK, body, None))
-        return body
+        cleaned = self._cleaned(body)
+        if cleaned is None:
+            # The parser gets the raw bytes and names the fault. The archive keeps none of them,
+            # because the bytes of a market source may hold the market fields (#35).
+            note = "body is not JSON that can be cleaned; not archived because it may hold prices"
+            self.records.append(RecordedFetch(url, OK, None, note))
+            return body
+        self.records.append(RecordedFetch(url, OK, cleaned, None))
+        return cleaned
 
-    def _cleaned(self, body: bytes) -> bytes:
-        """Return ``body`` without its market fields. A body that is not JSON is unchanged."""
+    def _cleaned(self, body: bytes) -> bytes | None:
+        """Return ``body`` without its market fields, or None when it cannot be cleaned.
+
+        A body that is not JSON, or that nests deeper than the cleaner can read, cannot be
+        checked for market fields. A source with no market fields returns its body unchanged.
+        """
         if not self._sanitize:
             return body
         try:
-            payload = json.loads(body)
+            return canonical_bytes(strip_market_fields(json.loads(body)))
         except ValueError, RecursionError:
-            # The parser owns the error for a body that is not JSON, and names the URL there.
-            return body
-        return canonical_bytes(strip_market_fields(payload))
+            return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,14 +111,24 @@ class Reading:
     that can change a parsed row gets a new version. ``keep_body`` is False for a file that the
     store keeps at the row level only, so its observation says that the fetch ran and no bytes
     of it are kept. ``expected_absence`` turns a failure into a note when the resource does not
-    exist yet. ``derive`` runs after a good unit, in the same transaction, with the id of the
+    exist yet. ``key`` names the resource when the URL does not, such as the NHL game id of an
+    ESPN summary. ``derive`` runs after a good unit, in the same transaction, with the id of the
     observation that holds the bytes of the unit. A source with versioned rows writes them there.
     """
 
     parser: str
     expected_absence: Callable[[Exception], str | None] | None = None
     keep_body: bool = True
+    key: str | None = None
     derive: Callable[[sqlite3.Connection, int], None] | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a key that is not an NHL game id, so a short id never becomes a key."""
+        if self.key is not None and _GAME_ID.fullmatch(self.key) is None:
+            raise StoreError(
+                f"read {self.parser}: key {self.key!r} is not an NHL game id; the key of a "
+                "reading names a game, as ten ASCII digits"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,10 +204,9 @@ def key_of(source: str, url: str) -> str | None:
         found = _SCORE_DAY.search(url)
         # A date that the pattern accepts can still name no day, such as 2026-13-45.
         return None if found is None or not _is_date(found[1]) else found[1]
-    if source == BOXSCORES:
-        found = _BOXSCORE.search(url)
-        return None if found is None else found[1]
-    return None
+    pattern = {BOXSCORES: _BOXSCORE, NHL_PBP: _PLAY_BY_PLAY, NHL_SHIFTS: _SHIFT_CHART}.get(source)
+    found = None if pattern is None else pattern.search(url)
+    return None if found is None else found[1]
 
 
 def _is_date(text: str) -> bool:

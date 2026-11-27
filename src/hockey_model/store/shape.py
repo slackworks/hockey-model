@@ -53,6 +53,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(10, "boxscore_revisions", "derivation", False),
     Requirement(10, "skater_game_revisions", "revision", False),
     Requirement(10, "goalie_game_revisions", "revision", False),
+    Requirement(11, "pbp_events", "event_id", False),
+    Requirement(11, "shifts", "row_no", False),
+    Requirement(11, "espn_skater_toi", "espn_id", False),
+    Requirement(11, "pbp_roster", "position", False),
 )
 # The shape before the first requirement, which is the first schema this package wrote. A store
 # with no schema_version row is refused before this module runs.

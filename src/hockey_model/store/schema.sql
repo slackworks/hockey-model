@@ -192,6 +192,76 @@ CREATE TABLE goalie_game_revisions (
         REFERENCES boxscore_revisions (game_id, derivation, revision)
 );
 
+-- The play-by-play, shift chart, and ESPN summary of a game (#35). Each derived row names the
+-- observation that gave it, so a rebuild replaces the rows of one observation.
+-- Design: docs/design/pbp-shift-dataset.md
+
+CREATE TABLE pbp_roster (
+    obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
+    game_id INTEGER NOT NULL,
+    player_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    position TEXT NOT NULL,
+    PRIMARY KEY (obs_id, player_id)
+);
+
+CREATE TABLE pbp_events (
+    obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
+    game_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    period_type TEXT NOT NULL CHECK (period_type IN ('REG', 'OT', 'SO')),
+    period_second INTEGER NOT NULL,
+    game_second INTEGER,
+    type TEXT NOT NULL,
+    situation_code TEXT,
+    owner_team TEXT,
+    x REAL,
+    y REAL,
+    attack_x_sign INTEGER CHECK (attack_x_sign IN (-1, 1)),
+    zone TEXT,
+    shot_type TEXT,
+    player1 INTEGER,
+    player2 INTEGER,
+    player3 INTEGER,
+    goalie_in_net INTEGER,
+    home_score INTEGER,
+    away_score INTEGER,
+    game_state TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    PRIMARY KEY (obs_id, event_id)
+);
+
+CREATE TABLE shifts (
+    obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
+    game_id INTEGER NOT NULL,
+    row_no INTEGER NOT NULL,
+    player_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    period INTEGER NOT NULL,
+    start_second INTEGER NOT NULL,
+    end_second INTEGER NOT NULL,
+    shift_number INTEGER,
+    parser TEXT NOT NULL,
+    PRIMARY KEY (obs_id, row_no)
+);
+
+CREATE TABLE espn_skater_toi (
+    obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
+    game_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    espn_id INTEGER NOT NULL,
+    espn_name TEXT NOT NULL,
+    toi INTEGER NOT NULL,
+    pp_toi INTEGER NOT NULL,
+    sh_toi INTEGER NOT NULL,
+    es_toi INTEGER NOT NULL,
+    shifts INTEGER NOT NULL,
+    parser TEXT NOT NULL,
+    PRIMARY KEY (obs_id, espn_id)
+);
+
 -- Indexes for the as-of reads, which filter by time, team, and player.
 CREATE INDEX IF NOT EXISTS games_start ON games (start_utc);
 CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started);

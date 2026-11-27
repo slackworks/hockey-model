@@ -535,13 +535,71 @@ def owner_of(
     return None
 
 
-def missing_mutants(globs: list[str], statuses: dict[str, str]) -> list[str]:
-    """Name each selected function that mutmut produced no mutant for."""
-    return [
-        f"{glob}: mutmut has no mutant for it; check the module and function names"
-        for glob in globs
-        if not any(fnmatch.fnmatchcase(name, glob) for name in statuses)
-    ]
+# mutmut 3.8.1 mutates a decorated function only when its decorator is one of these two.
+MUTATED_DECORATORS = frozenset({"staticmethod", "classmethod"})
+
+
+def find_function(tree: ast.Module, qualname: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Return the function or method that ``qualname`` names, or None."""
+    *classes, leaf = qualname.split(".")
+    body: list[ast.stmt] = tree.body
+    for name in classes:
+        owner = next((n for n in body if isinstance(n, ast.ClassDef) and n.name == name), None)
+        if owner is None:
+            return None
+        body = owner.body
+    wanted = (ast.FunctionDef, ast.AsyncFunctionDef)
+    return next((n for n in body if isinstance(n, wanted) and n.name == leaf), None)
+
+
+def is_skipped_by_mutmut(repo: Path, path: str, qualname: str) -> bool:
+    """Return True when mutmut copies the function unchanged because of its decorator."""
+    node = find_function(ast.parse((repo / path).read_text()), qualname)
+    if node is None:
+        return False
+    return any(
+        not (isinstance(d, ast.Name) and d.id in MUTATED_DECORATORS) for d in node.decorator_list
+    )
+
+
+def leaves_function_plain(repo: Path, path: str, qualname: str) -> bool:
+    """Return True when mutmut found nothing to change in the function.
+
+    A function with one f-string return has no mutant. mutmut copies it unchanged into
+    ``mutants/`` and writes no ``__mutmut_orig`` copy.
+    """
+    generated = repo / "mutants" / path
+    if not generated.is_file():
+        return False
+    text = generated.read_text()
+    if f"{mutmut_name(qualname)}__mutmut_orig(" in text:
+        return False
+    return find_function(ast.parse(text), qualname) is not None
+
+
+def missing_mutants(
+    repo: Path, found: list[tuple[str, Target, set[int]]], statuses: dict[str, str]
+) -> list[str]:
+    """Name each selected function that mutmut produced no mutant for.
+
+    A function that mutmut left plain has nothing to mutate, so it passes. A decorated function
+    that mutmut skips cannot be tested, so it fails with that reason.
+    """
+    failures: list[str] = []
+    for path, qualname in sorted({(path, target.qualname) for path, target, _ in found}):
+        glob = mutant_glob(path, qualname)
+        if any(fnmatch.fnmatchcase(name, glob) for name in statuses):
+            continue
+        if is_skipped_by_mutmut(repo, path, qualname):
+            failures.append(
+                f"{path}: {qualname}: mutmut does not mutate decorated functions, so the "
+                "gate cannot check it; test it by hand and push with SKIP=mutation-changed"
+            )
+        elif not leaves_function_plain(repo, path, qualname):
+            failures.append(
+                f"{glob}: mutmut has no mutant for it; check the module and function names"
+            )
+    return failures
 
 
 def mutates_changed_line(repo: Path, name: str, owner: tuple[str, Target, set[int]]) -> bool:
@@ -619,7 +677,7 @@ def run_check(repo: Path) -> int:
     run_mutmut(repo, ["run", *globs])
     statuses = parse_results(run_mutmut(repo, ["results", "--all", "true"]))
     gate_failures, ignored = gate(repo, statuses, found)
-    failures = missing_mutants(globs, statuses) + gate_failures
+    failures = missing_mutants(repo, found, statuses) + gate_failures
     elapsed = time.monotonic() - started
     if ignored:
         print(

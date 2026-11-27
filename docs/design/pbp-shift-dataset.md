@@ -47,6 +47,7 @@ CREATE TABLE pbp_events (
     player1 INTEGER, player2 INTEGER, player3 INTEGER,   -- see the role map below
     goalie_in_net INTEGER,
     home_score INTEGER, away_score INTEGER,              -- after the event, when the feed gives it
+    game_state TEXT NOT NULL,                            -- the feed gameState, such as OFF or LIVE
     PRIMARY KEY (obs_id, event_id)
 );
 CREATE TABLE shifts (
@@ -72,9 +73,9 @@ CREATE TABLE stints (
 );
 CREATE TABLE espn_skater_toi (
     obs_id INTEGER NOT NULL, game_id INTEGER NOT NULL, nhl_id INTEGER,
-    espn_name TEXT NOT NULL, toi INTEGER, pp_toi INTEGER, sh_toi INTEGER, es_toi INTEGER,
+    espn_id INTEGER NOT NULL, espn_name TEXT NOT NULL, toi INTEGER, pp_toi INTEGER, sh_toi INTEGER, es_toi INTEGER,
     shifts INTEGER,
-    PRIMARY KEY (obs_id, espn_name)
+    PRIMARY KEY (obs_id, espn_id)
 );
 CREATE TABLE event_status (
     game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL, shift_obs INTEGER NOT NULL,
@@ -86,6 +87,9 @@ CREATE TABLE event_status (
 ```
 
 Add views `latest_pbp_events`, `latest_shifts`, and `latest_stints` that pick the rows of the newest observation of each game.
+The newest observation is the newest one of the game with the status `ok` or `shape_error`, by fetch time and then by observation id (view `latest_event_observations`).
+A fetch that the parser refused is the newest one, so its game has no rows, and the view never serves an older fetch in its place.
+A fetch that failed to answer (`http_error`, `store_error`) does not count.
 
 Role map for `player1` to `player3` (verify on the fixtures, and change the map if a feed key differs):
 
@@ -126,6 +130,7 @@ Each check writes its result into `event_status.notes`.
 3. Each skater's merged shift time is within `TOI_TOLERANCE_S` of `skater_games.toi_seconds`. Measure the differences on the first 500 backfilled games, set the constant at the 99th percentile, rounded up to 5 seconds, and freeze it in that pull request.
 4. In the ESPN sample, stint time by strength is within `STRENGTH_TOI_TOLERANCE_S` of `PPTOI`, `SHTOI`, and `ESTOI`, and the merged shift count equals `SHFT`. Set the tolerance in the same way.
 5. A stint with fewer skaters than `situation_code` gives, at an event inside it, marks the game `incomplete`. No player is added.
+6. The two teams of the ESPN summary are the two teams of the NHL game that the observation key names. The parser checks that the summary lists two teams, and the refresh step maps an ESPN event to an NHL game, so a wrong map would store rows under the wrong game. A mismatch marks the game `incomplete`. Tracked in #35.
 
 Status: `provisional` until the last revisit (`REVISIT_AFTER_DAYS` of the archive design). Then `reconciled` when every check passed, else `incomplete`.
 
@@ -153,6 +158,21 @@ The list in the issue body is the acceptance list. Add these:
 2. Stints and reconciliation. One pull request.
 3. Refresh units and the backfill. One pull request.
 4. The real backfill, and a report under `docs/research/` with the per-season count of `reconciled`, `provisional`, and `incomplete` games and the measured tolerances.
+
+## Built as
+
+Delivery step 1 shipped with these changes from the plan above:
+
+- `pbp_roster (obs_id, game_id, player_id, team, position)` holds the roster of the play-by-play, because the stint step needs the position `G`.
+- `shifts` is keyed on `(obs_id, row_no)`, where `row_no` is the place of the shift among the shift rows of the feed. The feed can repeat a shift, and the stint step merges the repeats.
+- A derived row has a `parser` column, and a rebuild replaces the rows of one observation in place. The archive keeps the bytes, so the earlier parse is not lost. A payload that the rebuild refuses leaves no rows.
+- `espn_skater_toi` is keyed on `(obs_id, espn_id)` and has no `nhl_id`. The ESPN athlete id is in the payload, so two skaters with one display name on one team stay apart. A rebuild must give the rows of a first parse of the same bytes, and an id from the player catalog of the day would change it. The reconciliation joins the ESPN id and name to the roster of the game when it reads.
+- `pbp_events` has a `game_state` column, the `gameState` of the feed. A partial in-game feed then differs from a final one in the tables. The reconciliation step reads it for `event_status`.
+- The observation key of `espn_summary` is the NHL game id, through `Reading.key`.
+- The version is 11. Schema version 10 is the boxscore revision tables of #82.
+- The tables `stints` and `event_status`, the view `latest_stints`, and the stint builder return with the reconciliation step that writes them. They have no writer in step 1.
+- A parser refuses an empty feed, a payload for another game or event, a repeated event, player, or skater, a clock past its limit, and an id outside the integer range of the store. An event type with no entry in the role map keeps its type and no players, and the archived payload keeps the player keys for a later parser.
+- `store rebuild --source nhl_pbp`, `nhl_shifts`, or `espn_summary` rewrites the rows of each archived observation. `--allow-refused` lets a stricter parser drop a payload that an earlier parser accepted.
 
 ## Calls made
 

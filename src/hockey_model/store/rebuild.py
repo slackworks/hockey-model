@@ -4,10 +4,11 @@ import sqlite3
 
 from hockey_model.store.boxscore_rebuild import RebuildReport, rebuild_boxscores
 from hockey_model.store.db import StoreError
+from hockey_model.store.event_rebuild import KINDS, rebuild_events
 from hockey_model.store.source_reads import BOXSCORES
 
 # The sources that a rebuild supports. A source with no derived rows has nothing to rebuild.
-REBUILDABLE = (BOXSCORES,)
+REBUILDABLE = (BOXSCORES, *KINDS)
 
 
 def rebuild_source(
@@ -20,6 +21,8 @@ def rebuild_source(
     """
     if source == BOXSCORES:
         return rebuild_boxscores(conn, parser, allow_refused=allow_refused)
+    if source in KINDS:
+        return rebuild_events(conn, source, parser, allow_refused=allow_refused)
     raise StoreError(
         f"rebuild {source!r}: this source has no rows to rebuild; "
         f"pass --source one of {', '.join(REBUILDABLE)}"

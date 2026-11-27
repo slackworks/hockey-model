@@ -156,7 +156,7 @@ class RefreshRun:
         """
         # RecordingClient refuses a source that a refresh does not record, before any request.
         stamp = self.stamp()
-        capture = Capture(source, key_of(source, url), stamp, reading)
+        capture = Capture(source, reading.key or key_of(source, url), stamp, reading)
         inner = self.client
         recorded = RecordingClient(inner, source)
         self.client = recorded

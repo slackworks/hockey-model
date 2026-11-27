@@ -89,3 +89,9 @@ One run is enough when the work is scaled this way.
 
 A split by function (#176) is the way to shorter shards. It needs the `Class.method` entries and the rest entry in `docs/design/mutation-function-shards.md`.
 Record the generation step time of each shard next to its durations, so that the scaling reads data and not a log.
+
+## Modules added after the measurement
+
+`sources.nhl_events`, `sources.nhl_shifts`, and `sources.espn_summary` (#35) are not in the table above, because no run has measured them.
+They sit in shards 2 and 3, beside modules of the same kind.
+The next measured run sizes them. The step limit leaves room for the added work until then.

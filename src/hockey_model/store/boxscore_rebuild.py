@@ -81,24 +81,27 @@ def _chain(
     """Return the revisions that the archive gives under the current parser, and the refusals.
 
     A revision with no bytes cannot be parsed again, so it carries over as it stands. A payload
-    that the first read accepted and the parser refuses now is a parser regression: the rebuild
-    stops and names it, so a bad parser never replaces a good derivation. ``allow_refused`` says
+    that the first read accepted, or that the newest derivation holds, and the parser refuses now
+    is a parser regression: the rebuild stops and names it, so a bad parser never replaces a good
+    derivation. ``allow_refused`` says
     that the stricter parser is intended: the payload then leaves the derivation, and the report
     names it. A payload that was a ``shape_error`` and stays one is a refusal in the report.
     """
     chain = [replace(r, derivation=derivation) for r in previous if r.parser == LEGACY_PARSER]
     refused: list[str] = []
+    held = {r.obs_id for r in previous}
     for obs in observations_for(conn, BOXSCORES, str(game_id)):
         if obs.sha256 is None or obs.status not in (OK, SHAPE_ERROR):
             continue
         try:
             rows = _parsed(conn, game_id, obs, obs.sha256)
         except (SourceParseError, SourceShapeError) as exc:
-            if obs.status == OK and not allow_refused:
+            if (obs.status == OK or obs.obs_id in held) and not allow_refused:
                 raise StoreError(
                     f"rebuild {BOXSCORES} game {game_id} observation {obs.obs_id}: the parser "
-                    f"{BOXSCORE_PARSER} refuses a payload that the first read accepted ({exc}); "
-                    "fix the parser, or pass --allow-refused when the stricter parser is intended"
+                    f"{BOXSCORE_PARSER} refuses a payload that an earlier read or parse "
+                    f"accepted ({exc}); fix the parser, or pass --allow-refused when the "
+                    "stricter parser is intended"
                 ) from exc
             refused.append(f"game {game_id} observation {obs.obs_id}: {exc}")
             continue

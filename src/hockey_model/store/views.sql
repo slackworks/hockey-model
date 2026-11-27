@@ -36,3 +36,29 @@ CREATE VIEW latest_players AS
 SELECT p.* FROM players p
 JOIN (SELECT nhl_id, MAX(fetched_at) AS latest FROM players GROUP BY nhl_id) n
     ON p.nhl_id = n.nhl_id AND p.fetched_at = n.latest;
+
+-- The newest observation of each event source and key that the feed answered (#35). A fetch
+-- that the parser refused is the newest one, and its game has no rows. A fetch that failed to
+-- answer does not count. A revisit adds an observation. A rebuild rewrites the rows of an
+-- observation in place. The fetch time orders the observations, because an import can insert an
+-- old fetch after a new one.
+DROP VIEW IF EXISTS latest_event_observations;
+CREATE VIEW latest_event_observations AS
+SELECT o.obs_id FROM observations o
+WHERE o.source IN ('nhl_pbp', 'nhl_shifts')
+  AND o.key IS NOT NULL
+  AND o.status IN ('ok', 'shape_error')
+  AND NOT EXISTS (
+    SELECT 1 FROM observations n
+    WHERE n.source = o.source AND n.key = o.key
+      AND n.status IN ('ok', 'shape_error')
+      AND (n.fetched_at > o.fetched_at OR (n.fetched_at = o.fetched_at AND n.obs_id > o.obs_id))
+  );
+
+DROP VIEW IF EXISTS latest_pbp_events;
+CREATE VIEW latest_pbp_events AS
+SELECT e.* FROM pbp_events e JOIN latest_event_observations l ON e.obs_id = l.obs_id;
+
+DROP VIEW IF EXISTS latest_shifts;
+CREATE VIEW latest_shifts AS
+SELECT s.* FROM shifts s JOIN latest_event_observations l ON s.obs_id = l.obs_id;
