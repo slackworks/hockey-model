@@ -29,7 +29,6 @@ def test_the_parser_names_its_version() -> None:
 
 def test_a_saved_summary_gives_the_skaters_of_both_teams() -> None:
     rows = parse_summary(load(), EVENT)
-    assert rows.event_id == EVENT
     assert len(rows.skaters) == 36
     assert {s.team for s in rows.skaters} == {"EDM", "LAK"}
 
@@ -145,3 +144,53 @@ def test_fetch_reads_the_summary_url_of_the_event() -> None:
     assert len(fetch_summary(client, EVENT).skaters) == 36
     assert client.urls == [summary_url(EVENT)]
     assert summary_url(EVENT).endswith(f"/summary?event={EVENT}")
+
+
+def test_a_summary_for_another_event_is_a_named_error() -> None:
+    with pytest.raises(SourceParseError, match=f"names event {EVENT}"):
+        parse_summary(load(), "401803061")
+
+
+def test_a_summary_with_no_header_id_is_a_named_error() -> None:
+    payload = load()
+    del payload["header"]["id"]
+    with pytest.raises(SourceParseError, match="id"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_skater_listed_twice_for_one_team_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    group["athletes"].append(copy.deepcopy(group["athletes"][0]))
+    with pytest.raises(SourceParseError, match="a skater twice"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_summary_with_one_team_is_a_named_error() -> None:
+    payload = load()
+    payload["boxscore"]["players"] = payload["boxscore"]["players"][:1]
+    with pytest.raises(SourceParseError, match="two teams"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_stat_key_list_with_a_repeated_key_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    group["keys"][0] = group["keys"][1]
+    with pytest.raises(SourceParseError, match="unique strings"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_time_on_ice_past_the_longest_game_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    index = group["keys"].index("timeOnIce")
+    group["athletes"][0]["stats"][index] = "121:00"
+    with pytest.raises(SourceParseError, match="past the limit"):
+        parse_summary(payload, EVENT)
+
+
+@pytest.mark.parametrize("event", ["", "40180&x=1", "4018030601234", "٤٠١", "abc"])
+def test_a_url_for_an_event_id_that_is_not_digits_is_a_named_error(event: str) -> None:
+    with pytest.raises(SourceParseError, match="1 to 12 ASCII digits"):
+        summary_url(event)

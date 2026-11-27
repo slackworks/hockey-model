@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from hockey_model.sources.http import HttpClient
+from hockey_model.sources.nhl_events import clock_seconds
 from hockey_model.sources.payload import (
     as_list,
     as_mapping,
@@ -35,9 +36,11 @@ _STAT_KEYS = (
     "evenStrengthTimeOnIce",
     "shifts",
 )
-# ASCII digits only, so a Unicode digit never parses as a time.
-_CLOCK = re.compile(r"([0-9]{1,3}):([0-9]{2})")
+# The longest time on ice that a skater can play: more than the longest game on record.
+MAX_TOI_SECONDS = 7200
+# ASCII digits only, so a Unicode digit never parses as a number.
 _COUNT = re.compile(r"[0-9]{1,4}")
+_EVENT_ID = re.compile(r"[0-9]{1,12}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,15 +60,11 @@ class EspnSkaterToi:
 class EspnSummary:
     """The skater lines of one ESPN game summary."""
 
-    event_id: str
     skaters: tuple[EspnSkaterToi, ...]
 
 
 def _seconds(value: object, where: str) -> int:
-    match = _CLOCK.fullmatch(value) if isinstance(value, str) else None
-    if match is None or int(match.group(2)) >= 60:
-        raise SourceParseError(SOURCE, f"{where} time must be M:SS, got {value!r}")
-    return int(match.group(1)) * 60 + int(match.group(2))
+    return clock_seconds(value, f"{SOURCE} {where}", limit=MAX_TOI_SECONDS)
 
 
 def _count(value: object, where: str) -> int:
@@ -76,7 +75,10 @@ def _count(value: object, where: str) -> int:
 
 def _stat_columns(group: Mapping[str, object], where: str) -> dict[str, int]:
     keys = as_list(SOURCE, field(SOURCE, group, "keys", where), f"{where} keys")
-    columns = {key: index for index, key in enumerate(keys) if isinstance(key, str)}
+    names = [key for key in keys if isinstance(key, str)]
+    if len(names) != len(keys) or len(set(names)) != len(names):
+        raise SourceParseError(SOURCE, f"{where} keys must be unique strings")
+    columns = {key: index for index, key in enumerate(names)}
     missing = [key for key in _STAT_KEYS if key not in columns]
     if missing:
         raise SourceParseError(SOURCE, f"{where} has no stat column {', '.join(missing)}")
@@ -123,23 +125,37 @@ def _team_skaters(side: object, where: str) -> list[EspnSkaterToi]:
 
 
 def parse_summary(payload: object, event_id: str) -> EspnSummary:
-    """Return the skater time on ice of one ESPN summary payload.
+    """Return the skater time on ice of the ESPN summary of event ``event_id``.
 
-    A missing stat column, a time that is not ``M:SS``, and a team code that ESPN writes and the
-    maps do not know raise a named error.
+    A missing stat column, a time that is not ``M:SS``, a team code that ESPN writes and the maps
+    do not know, a payload for another event, a skater listed twice, and a summary that does not
+    list two teams raise a named error.
     """
     top = as_mapping(SOURCE, payload, "the summary")
-    box = as_mapping(SOURCE, field(SOURCE, top, "boxscore", "the summary"), "the boxscore")
-    sides = as_list(SOURCE, field(SOURCE, box, "players", "the boxscore"), "boxscore players")
     where = f"summary {event_id}"
+    header = as_mapping(SOURCE, field(SOURCE, top, "header", where), f"{where} header")
+    named = str(field(SOURCE, header, "id", f"{where} header"))
+    if named != event_id:
+        raise SourceParseError(SOURCE, f"{where} names event {named}")
+    box = as_mapping(SOURCE, field(SOURCE, top, "boxscore", where), f"{where} boxscore")
+    sides = as_list(SOURCE, field(SOURCE, box, "players", where), f"{where} boxscore players")
     skaters = [s for side in sides for s in _team_skaters(side, where)]
     if not skaters:
         raise SourceParseError(SOURCE, f"{where} lists no skater")
-    return EspnSummary(event_id, tuple(skaters))
+    if len({s.team for s in skaters}) != 2:
+        raise SourceParseError(SOURCE, f"{where} must list skaters of two teams")
+    keys = [(s.team, s.name) for s in skaters]
+    if len(set(keys)) != len(keys):
+        raise SourceParseError(SOURCE, f"{where} lists a skater twice for one team")
+    return EspnSummary(tuple(skaters))
 
 
 def summary_url(event_id: str) -> str:
-    """Return the URL of the ESPN summary of one event."""
+    """Return the URL of the ESPN summary of one event, or raise for an id that is not digits."""
+    if _EVENT_ID.fullmatch(event_id) is None:
+        raise SourceParseError(
+            SOURCE, f"ESPN event id must be 1 to 12 ASCII digits, got {event_id!r}"
+        )
     return f"{SUMMARY_URL}?event={event_id}"
 
 
