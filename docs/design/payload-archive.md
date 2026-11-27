@@ -59,7 +59,7 @@ CREATE TABLE boxscore_revisions (
     parser TEXT NOT NULL,             -- 'nhl_boxscore:1', or 'legacy:unavailable' for a row with no bytes
     fetched_at TEXT NOT NULL,         -- the time of the observation, never a time of the rebuild
     completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'incomplete')),
-    identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched')),
+    identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched', 'unverified')),
     PRIMARY KEY (game_id, derivation, revision)
 );
 CREATE TABLE skater_game_revisions (    -- the columns of skater_games, plus derivation and revision
@@ -78,7 +78,7 @@ Rules:
 
 1. Every fetch writes one `observations` row, also when the bytes did not change. A, then B, then A gives three rows and two `payloads` rows. A fetch that a `Reading.expected_absence` excuses still writes its row, with the status of the failure, because the request ran.
 2. A `payloads` row is written only when its hash is new (`INSERT OR IGNORE`).
-3. The 9->10 upgrade writes revision 1 of derivation 1 for each stored final boxscore from `skater_games` and `goalie_games`, with an `observations` row of status `ok`, `sha256` NULL, and `parser` `'legacy:unavailable'`. It never invents bytes or a fetch time: `fetched_at` is the newest `fetched_at` of the rows of the game, because that is when the whole boxscore was in the store. `completeness` is `complete` when both teams have a skater line and a goalie line. `identity` is `matched` when every team of the rows is the home or the away team of the stored game.
+3. The 9->10 upgrade writes revision 1 of derivation 1 for each stored final boxscore from `skater_games` and `goalie_games`, with an `observations` row of status `ok`, `sha256` NULL, and `parser` `'legacy:unavailable'`. It never invents bytes or a fetch time: `fetched_at` is the newest `fetched_at` of the rows of the game, because that is when the whole boxscore was in the store. `completeness` is `complete` when both teams have a skater line and a goalie line. `identity` is `matched` when every team of the rows is the home or the away team of the stored game, `mismatched` when one team is neither, and `unverified` when the store holds no game row to compare. A revision that a source gives later is `matched` always, because a boxscore that fails the identity check writes no revision.
 4. A new boxscore revision is written only when its parsed rows differ from the newest revision of that game. An unchanged revisit adds an observation and no revision. A boxscore that fails the parser or the identity check writes no revision, and its observation keeps the bytes with the status `shape_error`.
 5. A rebuild writes a new derivation for a game only when the revisions that the archived bytes give now differ from the newest derivation. A revision with no bytes carries over, so the first revision of a game that began before the archive stays revision 1. A second rebuild with the same parser changes nothing. An earlier derivation stays, so a forecast can name the rows it read. `boxscore_rows` reads the newest derivation unless a caller pins one.
 

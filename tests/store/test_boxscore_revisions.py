@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -190,7 +190,7 @@ def test_record_revision_compares_rows_and_not_row_order(conn: sqlite3.Connectio
     assert record_revision(conn, MAIN_GAME, shuffled, obs_id) is None
 
 
-def _v9_store(path: Path) -> Path:
+def _v9_store(path: Path, extra: Callable[[sqlite3.Connection], None] | None = None) -> Path:
     """A version 9 store: a game with both teams' rows, and a game with the home team only."""
     store = connect(path)
     add_game(store, 11, "2026-01-05T00:00:00+00:00")
@@ -208,6 +208,8 @@ def _v9_store(path: Path) -> Path:
             "INSERT INTO goalie_games VALUES (?,?,?,?,?,?)",
             (game_id, team, game_id * 1000 + ord(team[0]), 3600, 1, stamp),
         )
+    if extra is not None:
+        extra(store)
     drop_revision_tables(store)
     store.execute("UPDATE schema_version SET version = 9")
     store.commit()
@@ -307,3 +309,33 @@ def test_a_revisit_with_a_repeated_player_is_a_shape_error_and_adds_no_revision(
         "SELECT status FROM observations WHERE source = ? AND key = ? ORDER BY obs_id DESC LIMIT 1",
         (BOXSCORES, str(MAIN_GAME)),
     ).fetchone() == ("shape_error",)
+
+
+def test_the_upgrade_marks_a_stray_team_mismatched_and_a_missing_game_unverified(
+    tmp_path: Path,
+) -> None:
+    def extra(store: sqlite3.Connection) -> None:
+        add_game(store, 13, "2026-01-07T00:00:00+00:00")
+        for game_id, team in ((13, "TOR"), (13, "BOS"), (13, "MTL"), (14, "TOR"), (14, "BOS")):
+            store.execute(
+                "INSERT INTO skater_games VALUES (?,?,?,?,?,?,?)",
+                (game_id, team, game_id * 100 + ord(team[0]) + ord(team[1]), 1000, 0, 0, "z"),
+            )
+            store.execute(
+                "INSERT INTO goalie_games VALUES (?,?,?,?,?,?)",
+                (game_id, team, game_id * 1000 + ord(team[0]) + ord(team[1]), 3600, 1, "z"),
+            )
+
+    path = _v9_store(tmp_path / "v9.db", extra)
+    upgrade_store(path)
+    store = connect(path)
+    try:
+        found = dict(
+            store.execute(
+                "SELECT game_id, completeness || '/' || identity FROM boxscore_revisions"
+                " WHERE game_id IN (13, 14)"
+            )
+        )
+        assert found == {13: "complete/mismatched", 14: "incomplete/unverified"}
+    finally:
+        store.close()

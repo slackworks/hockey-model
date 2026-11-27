@@ -161,7 +161,7 @@ CREATE TABLE boxscore_revisions (
     parser TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'incomplete')),
-    identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched')),
+    identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched', 'unverified')),
     PRIMARY KEY (game_id, derivation, revision)
 );
 
