@@ -203,7 +203,9 @@ Step 3 must keep the status in step with its inputs. The status depends on more 
 Delivery step 3a shipped the refresh units of the play-by-play and the shift chart:
 
 - A refresh step `events` follows the NHL step. One unit reads one final game and one source, in one transaction, with the rules of a boxscore read: a stop after three failed units in a row, a wait of a day after a failed read, and a known gap after the existing failure rule.
-- A plain refresh reads the first copy of a game that started in the last `FIRST_READ_DAYS` (14) days. An older game with no events is the work of the backfill, in delivery step 3d.
-- The revisit days are `REVISIT_AFTER_DAYS` of the boxscore, and the due query takes the source. A revisit is bounded by `MAX_REVISITS` for each source.
-- The derive hook of each of the three units (boxscore, play-by-play, shift chart) writes the rows and then calls `reconcile_game` for the game, in the same transaction. A game that cannot reconcile has its stints and status removed, and the error goes to the report. The unit does not fail, because the bytes that it read are good and the archive keeps them.
+- A plain refresh reads the first copy of a game that started in the last `FIRST_READ_DAYS` (14) days. An older game with no events is the work of the backfill, in delivery step 3d (#369).
+- The revisit days are `REVISIT_AFTER_DAYS` of the boxscore, and the due query takes the source. A revisit is bounded by `MAX_REVISITS` for each source, and the boxscore and the event steps share one revisit function.
+- A read names the games that it skipped, as the boxscore read does: a known gap, and a game whose last read failed a day ago or less.
+- The derive hook of each of the three units (boxscore, play-by-play, shift chart) writes the rows and then calls `reconcile_game` for the game, in the same transaction. A game that cannot reconcile has its stints and status removed, and the error goes to the notes of the report. The unit does not fail, because the bytes that it read are good and the archive keeps them. The events step reconciles a game with both reads and no status at the end of each refresh, so a game that failed is tried again and the notes name the cause until it works.
+- A failure of an event source, and a reconcile error, are notes of the report and not its errors. The model reads no event, so an outage of the shift chart host must not exit the refresh with 1 and stop the daily prepare before its backtest.
 - The ESPN summary unit has the same hook in delivery step 3b.
