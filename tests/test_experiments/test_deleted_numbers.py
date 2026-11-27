@@ -7,6 +7,7 @@ import pytest
 from experiment_support import register
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from mutation_copy import require_path
 
 from hockey_model.experiments.check import check_all
 from hockey_model.experiments.history import deleted_record_ids, outlived, parse_deletion_log
@@ -131,6 +132,7 @@ def test_a_name_that_is_not_a_record_id_is_not_read(repo: Path, registry_dir: Pa
 
 def test_the_registry_of_this_repository_passes() -> None:
     root = Path(__file__).resolve().parents[2]
+    require_path(root / "experiments")
     if not (root / ".git").exists():
         pytest.skip("the mutation copy has no git history")
     assert check_all(repo_root=root)["ok"] is True

@@ -18,8 +18,16 @@ COPY_DIR = "mutants"
 
 
 def in_mutation_copy(path: Path | None = None) -> bool:
-    """Return True when ``path`` sits inside a mutation copy, or the default when it is None."""
-    return COPY_DIR in (path if path is not None else Path(__file__)).resolve().parts
+    """Return True when ``path`` sits inside a mutation copy, or the default when it is None.
+
+    The copy is a ``mutants`` directory whose parent holds ``pyproject.toml``, which is the repo
+    root. A checkout that lives under a folder named ``mutants`` has no such marker above it.
+    """
+    target = (path if path is not None else Path(__file__)).resolve()
+    return any(
+        parent.name == COPY_DIR and (parent.parent / "pyproject.toml").is_file()
+        for parent in target.parents
+    )
 
 
 def require_path(path: Path) -> Path:

@@ -21,6 +21,7 @@ from experiment_support import (
     register,
     seed,
 )
+from mutation_copy import require_path
 from seeding import add_game
 
 from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun
@@ -177,7 +178,9 @@ class TestCheckAll:
 
     def test_check_all_accepts_the_real_registry(self):
         """The records committed in the repository pass their own checker."""
-        result = check_all(repo_root=_repo_root())
+        root = _repo_root()
+        require_path(root / "experiments")
+        result = check_all(repo_root=root)
         assert result["ok"] is True, result["errors"]
         ids = [entry["id"] for entry in result["records"]]
         assert "0001-v1-forward-test" in ids
