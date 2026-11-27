@@ -31,6 +31,9 @@ from hockey_model.store.timestamps import iso_utc
 # without events is the work of the backfill.
 FIRST_READ_DAYS = max(REVISIT_AFTER_DAYS)
 
+# A refresh reconciles at most this many games that have events and no status.
+MAX_PENDING_RECONCILES = 100
+
 Writer = Callable[[sqlite3.Connection, int], None]
 
 
@@ -160,7 +163,19 @@ def games_pending_reconcile(conn: sqlite3.Connection) -> list[int]:
 
 
 def _reconcile_pending(run: RefreshRun) -> None:
-    for game_id in games_pending_reconcile(run.conn):
+    """Reconcile the pending games, at most ``MAX_PENDING_RECONCILES`` and inside the budget."""
+    pending = games_pending_reconcile(run.conn)
+    if len(pending) > MAX_PENDING_RECONCILES:
+        run.notes.append(
+            f"reconcile: {len(pending) - MAX_PENDING_RECONCILES} game(s) wait for the next "
+            f"refresh; this run reconciles at most {MAX_PENDING_RECONCILES}"
+        )
+    for index, game_id in enumerate(pending[:MAX_PENDING_RECONCILES]):
+        if run.out_of_time():
+            left = min(len(pending), MAX_PENDING_RECONCILES) - index
+            run.stop(f"reconcile: stopped, because the time ran out; {left} not tried")
+            run.timed_out = True
+            return
         with run.conn:
             run.reconcile_in_unit(game_id)
 

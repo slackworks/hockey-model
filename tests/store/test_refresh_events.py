@@ -316,3 +316,31 @@ def test_a_bug_in_the_reconcile_code_leaves_the_boxscore_read_intact(
     assert _status(conn, GAME + 1) == []
     assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
     assert sum(type(failure).__name__ in note for note in later.notes) == 1
+
+
+def test_a_run_reconciles_at_most_the_bound_and_names_the_rest(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_events, "MAX_PENDING_RECONCILES", 2)
+    monkeypatch.setattr(refresh_events, "games_pending_reconcile", lambda _conn: [1, 2, 3, 4])
+    seen: list[int] = []
+    monkeypatch.setattr(RefreshRun, "reconcile_in_unit", lambda _run, game: seen.append(game))
+    run = RefreshRun(conn, FakeClient(), NOW)
+    events(run)
+    assert seen == [1, 2]
+    assert "reconcile: 2 game(s) wait for the next refresh; this run reconciles at most 2" in (
+        run.notes
+    )
+
+
+def test_a_spent_time_budget_stops_the_reconcile_of_pending_games(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_events, "games_pending_reconcile", lambda _conn: [1, 2])
+    seen: list[int] = []
+    monkeypatch.setattr(RefreshRun, "reconcile_in_unit", lambda _run, game: seen.append(game))
+    run = RefreshRun(conn, FakeClient(), NOW, deadline=NOW)
+    events(run)
+    assert seen == []
+    assert run.timed_out
+    assert any("reconcile: stopped, because the time ran out; 2 not tried" in n for n in run.notes)
