@@ -198,8 +198,6 @@ def drop_archive_tables(conn: sqlite3.Connection) -> None:
 
 
 EVENT_TABLES = (
-    "event_status",
-    "stints",
     "espn_skater_toi",
     "shifts",
     "pbp_events",

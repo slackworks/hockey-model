@@ -246,27 +246,11 @@ CREATE TABLE shifts (
     PRIMARY KEY (obs_id, row_no)
 );
 
-CREATE TABLE stints (
-    game_id INTEGER NOT NULL,
-    pbp_obs INTEGER NOT NULL REFERENCES observations (obs_id),
-    shift_obs INTEGER NOT NULL REFERENCES observations (obs_id),
-    stint INTEGER NOT NULL,
-    period INTEGER NOT NULL,
-    start_second INTEGER NOT NULL,
-    end_second INTEGER NOT NULL,
-    home_skaters TEXT NOT NULL,
-    away_skaters TEXT NOT NULL,
-    home_goalie INTEGER,
-    away_goalie INTEGER,
-    PRIMARY KEY (game_id, pbp_obs, shift_obs, stint)
-);
-
 CREATE TABLE espn_skater_toi (
     obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
     game_id INTEGER NOT NULL,
     team TEXT NOT NULL,
     espn_name TEXT NOT NULL,
-    nhl_id INTEGER,
     toi INTEGER NOT NULL,
     pp_toi INTEGER NOT NULL,
     sh_toi INTEGER NOT NULL,
@@ -274,16 +258,6 @@ CREATE TABLE espn_skater_toi (
     shifts INTEGER NOT NULL,
     parser TEXT NOT NULL,
     PRIMARY KEY (obs_id, team, espn_name)
-);
-
-CREATE TABLE event_status (
-    game_id INTEGER NOT NULL,
-    pbp_obs INTEGER NOT NULL REFERENCES observations (obs_id),
-    shift_obs INTEGER NOT NULL REFERENCES observations (obs_id),
-    status TEXT NOT NULL CHECK (status IN ('provisional', 'reconciled', 'incomplete')),
-    checked_at TEXT NOT NULL,
-    notes TEXT NOT NULL,
-    PRIMARY KEY (game_id, pbp_obs, shift_obs)
 );
 
 -- Indexes for the as-of reads, which filter by time, team, and player.

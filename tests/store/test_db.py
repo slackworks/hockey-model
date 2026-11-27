@@ -142,7 +142,6 @@ VIEWS = [
     "latest_players",
     "latest_pbp_events",
     "latest_shifts",
-    "latest_stints",
 ]
 
 

@@ -50,12 +50,3 @@ CREATE VIEW latest_shifts AS
 SELECT s.* FROM shifts s
 JOIN (SELECT game_id, MAX(obs_id) AS obs_id FROM shifts GROUP BY game_id) n
     ON s.obs_id = n.obs_id;
-
-DROP VIEW IF EXISTS latest_stints;
-CREATE VIEW latest_stints AS
-SELECT s.* FROM stints s
-JOIN (SELECT game_id, MAX(pbp_obs) AS pbp_obs FROM stints GROUP BY game_id) a
-    ON s.game_id = a.game_id AND s.pbp_obs = a.pbp_obs
-JOIN (SELECT game_id, pbp_obs, MAX(shift_obs) AS shift_obs FROM stints
-      GROUP BY game_id, pbp_obs) b
-    ON s.game_id = b.game_id AND s.pbp_obs = b.pbp_obs AND s.shift_obs = b.shift_obs;

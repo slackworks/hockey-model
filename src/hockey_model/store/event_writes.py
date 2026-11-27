@@ -78,31 +78,22 @@ def write_shifts(conn: sqlite3.Connection, obs_id: int, rows: ShiftRows) -> None
     )
 
 
-def _nhl_id(conn: sqlite3.Connection, team: str, name: str) -> int | None:
-    """Return the NHL id of the one player with this team and name, or None.
-
-    A name that two players share, or that the catalog does not hold, stays unresolved. The
-    row keeps the ESPN name, so no id is guessed.
-    """
-    found = conn.execute(
-        "SELECT nhl_id FROM latest_players WHERE team = ? AND full_name = ?", (team, name)
-    ).fetchall()
-    return int(found[0][0]) if len(found) == 1 else None
-
-
 def write_espn(conn: sqlite3.Connection, obs_id: int, game_id: int, rows: EspnSummary) -> None:
-    """Write the skater time on ice of one ESPN summary observation."""
+    """Write the skater time on ice of one ESPN summary observation.
+
+    The row keeps the ESPN name and no NHL id. A read step joins the name to the roster of the
+    game, so a rebuild never depends on the player catalog of the day.
+    """
     conn.execute("DELETE FROM espn_skater_toi WHERE obs_id = ?", (obs_id,))
     conn.executemany(
-        "INSERT INTO espn_skater_toi (obs_id, game_id, team, espn_name, nhl_id, toi, pp_toi,"
-        " sh_toi, es_toi, shifts, parser) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO espn_skater_toi (obs_id, game_id, team, espn_name, toi, pp_toi, sh_toi,"
+        " es_toi, shifts, parser) VALUES (?,?,?,?,?,?,?,?,?,?)",
         [
             (
                 obs_id,
                 game_id,
                 s.team,
                 s.name,
-                _nhl_id(conn, s.team, s.name),
                 s.toi,
                 s.pp_toi,
                 s.sh_toi,

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from seeding import add_game, drop_event_tables
 
-from hockey_model.sources.espn_summary import EspnSkaterToi, EspnSummary, parse_summary
+from hockey_model.sources.espn_summary import parse_summary
 from hockey_model.sources.nhl_events import parse_pbp
 from hockey_model.sources.nhl_shifts import ShiftRow, ShiftRows, parse_shifts
 from hockey_model.store.archive import OK, Fetch, is_market_source, record_observation
@@ -142,28 +142,6 @@ def test_the_saved_chart_is_stored_in_full(conn: sqlite3.Connection) -> None:
     assert _count(conn, "shifts", obs) == 740
 
 
-def test_espn_time_on_ice_resolves_a_name_to_the_one_player_of_the_team(
-    conn: sqlite3.Connection,
-) -> None:
-    conn.executemany(
-        "INSERT INTO players (nhl_id, full_name, position, team, fetched_at) VALUES (?,?,?,?,?)",
-        [
-            (1, "Quinton Byfield", "C", "LAK", "2026-01-11T00:00:00+00:00"),
-            (2, "Same Name", "C", "LAK", "2026-01-11T00:00:00+00:00"),
-            (3, "Same Name", "D", "LAK", "2026-01-11T00:00:00+00:00"),
-        ],
-    )
-    obs = _obs(conn, ESPN_SUMMARY)
-    line = EspnSkaterToi("LAK", "Quinton Byfield", 1276, 45, 175, 1056, 27)
-    twin = EspnSkaterToi("LAK", "Same Name", 600, 0, 0, 600, 20)
-    stranger = EspnSkaterToi("LAK", "Not In Catalog", 600, 0, 0, 600, 20)
-    write_espn(conn, obs, GAME, EspnSummary("1", (line, twin, stranger)))
-    found = dict(
-        conn.execute("SELECT espn_name, nhl_id FROM espn_skater_toi WHERE obs_id = ?", (obs,))
-    )
-    assert found == {"Quinton Byfield": 1, "Same Name": None, "Not In Catalog": None}
-
-
 def test_the_saved_summary_is_stored_in_full(conn: sqlite3.Connection) -> None:
     obs = _obs(conn, ESPN_SUMMARY)
     write_espn(conn, obs, GAME, _espn())
@@ -201,7 +179,7 @@ def test_the_upgrade_from_version_ten_adds_empty_tables_and_keeps_every_row(
     assert (report.from_version, report.to_version) == (10, SCHEMA_VERSION)
     upgraded = connect(path)
     try:
-        for table in ("pbp_events", "pbp_roster", "shifts", "stints", "espn_skater_toi"):
+        for table in ("pbp_events", "pbp_roster", "shifts", "espn_skater_toi"):
             assert upgraded.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
         assert upgraded.execute("SELECT COUNT(*) FROM games").fetchone() == (1,)
     finally:

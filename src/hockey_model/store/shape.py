@@ -55,9 +55,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(10, "goalie_game_revisions", "revision", False),
     Requirement(11, "pbp_events", "event_id", False),
     Requirement(11, "shifts", "row_no", False),
-    Requirement(11, "stints", "stint", False),
     Requirement(11, "espn_skater_toi", "espn_name", False),
-    Requirement(11, "event_status", "status", False),
     Requirement(11, "pbp_roster", "position", False),
 )
 # The shape before the first requirement, which is the first schema this package wrote. A store
