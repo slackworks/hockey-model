@@ -167,6 +167,13 @@ class RefreshRun:
                 observed = self._observe(capture, recorded.records, None)
                 if reading.derive is not None:
                     _derive(reading.derive, self.conn, observed, (source, url))
+        except DeriveError as exc:
+            # The unit rolled back, so the rows are gone. The bytes that reached the hook stay in
+            # the archive, because the next read can bring different bytes. The error is local,
+            # so no failed read is recorded, and the refresh stops until the code is fixed.
+            with self.conn:
+                self._observe(capture, recorded.records, exc)
+            raise
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:

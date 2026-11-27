@@ -47,7 +47,7 @@ def test_the_hook_gets_the_observation_that_holds_the_bytes(conn: sqlite3.Connec
     assert conn.execute("SELECT obs_id FROM observations").fetchall() == [(seen[0],)]
 
 
-def test_a_store_error_in_the_hook_is_not_a_failed_read_of_the_source(
+def test_a_store_error_in_the_hook_keeps_the_bytes_and_records_no_failed_read(
     conn: sqlite3.Connection,
 ) -> None:
     run = RefreshRun(conn, FakeClient(), NOW)
@@ -57,7 +57,11 @@ def test_a_store_error_in_the_hook_is_not_a_failed_read_of_the_source(
 
     with pytest.raises(DeriveError, match="refused the row"):
         run.attempt(BOXSCORES, URL, _unit(run, 1), Reading("nhl_boxscore:1", derive=derive))
-    assert _counts(conn) == (0, 0)
+    # The unit rolled back and no failed read exists, so no backoff starts. The observation and
+    # its bytes stay, so the next read can differ and this one can be parsed again.
+    assert _counts(conn) == (0, 1)
+    assert conn.execute("SELECT sha256 IS NOT NULL FROM observations").fetchone() == (1,)
+    assert conn.execute("SELECT COUNT(sha256) FROM payloads").fetchone() == (1,)
     assert not run.errors
 
 
@@ -69,4 +73,4 @@ def test_a_unit_with_a_hook_must_make_exactly_one_request(
     reading = Reading("nhl_boxscore:1", derive=lambda _conn, obs_id: None)
     with pytest.raises(DeriveError, match="exactly one"):
         run.attempt(BOXSCORES, URL, _unit(run, requests), reading)
-    assert _counts(conn) == (0, 0)
+    assert _counts(conn) == (0, requests)
