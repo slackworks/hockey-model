@@ -233,10 +233,10 @@ _EVENTS_V11 = (
     "NULL, period INTEGER NOT NULL, start_second INTEGER NOT NULL, end_second INTEGER NOT "
     "NULL, shift_number INTEGER, parser TEXT NOT NULL, PRIMARY KEY (obs_id, row_no))",
     "CREATE TABLE espn_skater_toi (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), "
-    "game_id INTEGER NOT NULL, team TEXT NOT NULL, espn_name TEXT NOT NULL, "
-    "toi INTEGER NOT NULL, pp_toi INTEGER NOT NULL, sh_toi INTEGER NOT NULL, es_toi INTEGER "
-    "NOT NULL, shifts INTEGER NOT NULL, parser TEXT NOT NULL, PRIMARY KEY (obs_id, team, "
-    "espn_name))",
+    "game_id INTEGER NOT NULL, team TEXT NOT NULL, espn_id INTEGER NOT NULL, espn_name TEXT "
+    "NOT NULL, toi INTEGER NOT NULL, pp_toi INTEGER NOT NULL, sh_toi INTEGER NOT NULL, "
+    "es_toi INTEGER NOT NULL, shifts INTEGER NOT NULL, parser TEXT NOT NULL, PRIMARY KEY "
+    "(obs_id, espn_id))",
 )
 
 # The change from each version to the next, in order. Each change is one statement. The

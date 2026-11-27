@@ -250,6 +250,7 @@ CREATE TABLE espn_skater_toi (
     obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
     game_id INTEGER NOT NULL,
     team TEXT NOT NULL,
+    espn_id INTEGER NOT NULL,
     espn_name TEXT NOT NULL,
     toi INTEGER NOT NULL,
     pp_toi INTEGER NOT NULL,
@@ -257,7 +258,7 @@ CREATE TABLE espn_skater_toi (
     es_toi INTEGER NOT NULL,
     shifts INTEGER NOT NULL,
     parser TEXT NOT NULL,
-    PRIMARY KEY (obs_id, team, espn_name)
+    PRIMARY KEY (obs_id, espn_id)
 );
 
 -- Indexes for the as-of reads, which filter by time, team, and player.

@@ -226,3 +226,10 @@ def test_the_view_picks_by_fetch_time_and_not_by_insert_order(conn: sqlite3.Conn
         5,
         newer,
     )
+
+
+def test_the_summary_rows_keep_the_espn_athlete_id_and_name(conn: sqlite3.Connection) -> None:
+    obs = _obs(conn, ESPN_SUMMARY)
+    write_espn(conn, obs, GAME, _espn())
+    query = "SELECT espn_id FROM espn_skater_toi WHERE espn_name = 'Quinton Byfield'"
+    assert conn.execute(query).fetchall() == [(4697383,)]

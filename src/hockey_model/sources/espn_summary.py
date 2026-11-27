@@ -41,6 +41,7 @@ MAX_TOI_SECONDS = 7200
 # ASCII digits only, so a Unicode digit never parses as a number.
 _COUNT = re.compile(r"[0-9]{1,4}")
 _EVENT_ID = re.compile(r"[0-9]{1,12}")
+_ATHLETE_ID = re.compile(r"[0-9]{1,12}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,7 @@ class EspnSkaterToi:
     """The time on ice of one skater, in seconds, split by strength."""
 
     team: str
+    espn_id: int
     name: str
     toi: int
     pp_toi: int
@@ -85,6 +87,15 @@ def _stat_columns(group: Mapping[str, object], where: str) -> dict[str, int]:
     return columns
 
 
+def _athlete_id(athlete: Mapping[str, object], where: str) -> int:
+    value = field(SOURCE, athlete, "id", f"{where} athlete")
+    if not isinstance(value, str) or _ATHLETE_ID.fullmatch(value) is None:
+        raise SourceParseError(
+            SOURCE, f"{where} athlete id must be 1 to 12 ASCII digits, got {value!r}"
+        )
+    return int(value)
+
+
 def _skater(raw: object, columns: Mapping[str, int], team: str, where: str) -> EspnSkaterToi:
     entry = as_mapping(SOURCE, raw, f"{where} athlete")
     athlete = as_mapping(SOURCE, field(SOURCE, entry, "athlete", where), f"{where} athlete")
@@ -99,6 +110,7 @@ def _skater(raw: object, columns: Mapping[str, int], team: str, where: str) -> E
 
     return EspnSkaterToi(
         team,
+        _athlete_id(athlete, f"{where} {name}"),
         name,
         _seconds(stat("timeOnIce"), f"{name} timeOnIce"),
         _seconds(stat("powerPlayTimeOnIce"), f"{name} powerPlayTimeOnIce"),
@@ -145,9 +157,9 @@ def parse_summary(payload: object, event_id: str) -> EspnSummary:
         raise SourceParseError(SOURCE, f"{where} lists no skater")
     if len({s.team for s in skaters}) != 2:
         raise SourceParseError(SOURCE, f"{where} must list skaters of two teams")
-    keys = [(s.team, s.name) for s in skaters]
-    if len(set(keys)) != len(keys):
-        raise SourceParseError(SOURCE, f"{where} lists a skater twice for one team")
+    ids = [s.espn_id for s in skaters]
+    if len(set(ids)) != len(ids):
+        raise SourceParseError(SOURCE, f"{where} lists a skater twice")
     return EspnSummary(tuple(skaters))
 
 

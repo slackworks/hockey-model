@@ -81,18 +81,19 @@ def write_shifts(conn: sqlite3.Connection, obs_id: int, rows: ShiftRows) -> None
 def write_espn(conn: sqlite3.Connection, obs_id: int, game_id: int, rows: EspnSummary) -> None:
     """Write the skater time on ice of one ESPN summary observation.
 
-    The row keeps the ESPN name and no NHL id. A read step joins the name to the roster of the
-    game, so a rebuild never depends on the player catalog of the day.
+    The row keeps the ESPN athlete id and name, and no NHL id. A read step joins them to the
+    roster of the game, so a rebuild never depends on the player catalog of the day.
     """
     conn.execute("DELETE FROM espn_skater_toi WHERE obs_id = ?", (obs_id,))
     conn.executemany(
-        "INSERT INTO espn_skater_toi (obs_id, game_id, team, espn_name, toi, pp_toi, sh_toi,"
-        " es_toi, shifts, parser) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO espn_skater_toi (obs_id, game_id, team, espn_id, espn_name, toi, pp_toi,"
+        " sh_toi, es_toi, shifts, parser) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         [
             (
                 obs_id,
                 game_id,
                 s.team,
+                s.espn_id,
                 s.name,
                 s.toi,
                 s.pp_toi,

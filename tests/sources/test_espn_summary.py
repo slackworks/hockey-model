@@ -236,3 +236,45 @@ def test_a_fetch_of_a_body_that_is_not_json_names_the_source() -> None:
 def test_an_event_id_that_is_not_digits_names_the_source() -> None:
     with pytest.raises(SourceParseError, match="^read espn_summary data: ESPN event id"):
         summary_url("abc")
+
+
+def test_a_skater_has_the_espn_athlete_id() -> None:
+    byfield = next(s for s in parse_summary(load(), EVENT).skaters if s.name == "Quinton Byfield")
+    assert byfield.espn_id == 4697383
+
+
+def test_two_skaters_with_one_name_on_one_team_are_both_kept() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    twin = copy.deepcopy(group["athletes"][0])
+    twin["athlete"]["id"] = "999000111"
+    group["athletes"].append(twin)
+    skaters = parse_summary(payload, EVENT).skaters
+    assert len(skaters) == 37
+    assert len({s.espn_id for s in skaters}) == 37
+
+
+@pytest.mark.parametrize("value", [None, 4697383, "", "x", "٤٦٩", "1" * 13, []])
+def test_an_athlete_id_that_is_not_digits_is_a_named_error(value: object) -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    group["athletes"][0]["athlete"]["id"] = value
+    with pytest.raises(SourceParseError, match="athlete id"):
+        parse_summary(payload, EVENT)
+
+
+def test_an_athlete_with_no_id_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    del group["athletes"][0]["athlete"]["id"]
+    with pytest.raises(SourceParseError, match="athlete"):
+        parse_summary(payload, EVENT)
+
+
+def test_an_athlete_id_listed_under_two_teams_is_a_named_error() -> None:
+    payload = load()
+    first = payload["boxscore"]["players"][0]["statistics"][0]["athletes"][0]
+    other = payload["boxscore"]["players"][1]["statistics"][0]["athletes"][0]
+    other["athlete"]["id"] = first["athlete"]["id"]
+    with pytest.raises(SourceParseError, match="a skater twice"):
+        parse_summary(payload, EVENT)

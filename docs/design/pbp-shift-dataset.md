@@ -72,9 +72,9 @@ CREATE TABLE stints (
 );
 CREATE TABLE espn_skater_toi (
     obs_id INTEGER NOT NULL, game_id INTEGER NOT NULL, nhl_id INTEGER,
-    espn_name TEXT NOT NULL, toi INTEGER, pp_toi INTEGER, sh_toi INTEGER, es_toi INTEGER,
+    espn_id INTEGER NOT NULL, espn_name TEXT NOT NULL, toi INTEGER, pp_toi INTEGER, sh_toi INTEGER, es_toi INTEGER,
     shifts INTEGER,
-    PRIMARY KEY (obs_id, espn_name)
+    PRIMARY KEY (obs_id, espn_id)
 );
 CREATE TABLE event_status (
     game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL, shift_obs INTEGER NOT NULL,
@@ -164,7 +164,7 @@ Delivery step 1 shipped with these changes from the plan above:
 - `pbp_roster (obs_id, game_id, player_id, team, position)` holds the roster of the play-by-play, because the stint step needs the position `G`.
 - `shifts` is keyed on `(obs_id, row_no)`, where `row_no` is the place of the shift among the shift rows of the feed. The feed can repeat a shift, and the stint step merges the repeats.
 - A derived row has a `parser` column, and a rebuild replaces the rows of one observation in place. The archive keeps the bytes, so the earlier parse is not lost. A payload that the rebuild refuses leaves no rows.
-- `espn_skater_toi` is keyed on `(obs_id, team, espn_name)` and has no `nhl_id`. A rebuild must give the rows of a first parse of the same bytes, and an id from the player catalog of the day would change it. The reconciliation joins the ESPN name to the roster of the game when it reads.
+- `espn_skater_toi` is keyed on `(obs_id, espn_id)` and has no `nhl_id`. The ESPN athlete id is in the payload, so two skaters with one display name on one team stay apart. A rebuild must give the rows of a first parse of the same bytes, and an id from the player catalog of the day would change it. The reconciliation joins the ESPN id and name to the roster of the game when it reads.
 - The observation key of `espn_summary` is the NHL game id, through `Reading.key`.
 - The version is 11. Schema version 10 is the boxscore revision tables of #82.
 - The tables `stints` and `event_status`, the view `latest_stints`, and the stint builder return with the reconciliation step that writes them. They have no writer in step 1.
