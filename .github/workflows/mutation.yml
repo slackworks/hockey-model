@@ -10,8 +10,9 @@ on:
     inputs:
       step_minutes:
         description: >-
-          Minutes that each shard may run mutmut. Leave it empty for the scheduled limit. A longer
-          limit lets a shard finish, so that its per-mutant durations size the shard table (#293).
+          Minutes that each shard may run mutmut, a whole number from 1 to 345. Leave it empty for
+          the scheduled limit. A longer limit lets a shard finish, so that its per-mutant
+          durations size the shard table (#293).
         required: false
         type: string
 
@@ -32,10 +33,17 @@ jobs:
       actions: read
     outputs:
       go: ${{ steps.manual.outputs.go }}
+      step_minutes: ${{ steps.limits.outputs.step_minutes }}
+      job_minutes: ${{ steps.limits.outputs.job_minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A bad step_minutes fails here, before any shard starts a runner (#293).
+      - id: limits
+        env:
+          STEP_MINUTES: ${{ inputs.step_minutes }}
+        run: bash scripts/mutation-limits.sh "$STEP_MINUTES" >> "$GITHUB_OUTPUT"
       - id: manual
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,8 +69,8 @@ jobs:
     needs: gate
     if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
-    # A run that sets step_minutes is a measurement run, so the job limit is the GitHub maximum.
-    timeout-minutes: ${{ inputs.step_minutes && 360 || 30 }}
+    # The gate validates step_minutes and derives the job limit from it.
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_minutes) }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +87,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - name: Run mutation shard
-        timeout-minutes: ${{ fromJSON(inputs.step_minutes || '25') }}
+        timeout-minutes: ${{ fromJSON(needs.gate.outputs.step_minutes) }}
         env:
           SHARD: ${{ matrix.shard }}
         run: |
