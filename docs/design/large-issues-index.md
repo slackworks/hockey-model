@@ -59,10 +59,13 @@ Several designs add tables through `hockey-model store upgrade`. Take the versio
 1. Version 3: shipped. [consumer-api.md](consumer-api.md) added `fit_labels`.
 2. Version 4: shipped. The `mp_team_games` rebuild that adds `attempts_known` to a version 2 store that has no such column.
 3. Version 5: shipped. The `source_reads` and `model_fits` rebuild that makes `fetched_at` and `created_at` NOT NULL.
-4. Version 6: [moneypuck-situations.md](moneypuck-situations.md).
-5. Version 7: [payload-archive.md](payload-archive.md).
-6. Version 8: [pbp-shift-dataset.md](pbp-shift-dataset.md).
-7. Then [shot-model.md](shot-model.md) and [aging-adjustments.md](aging-adjustments.md) (`player_bio`), in the order they merge.
+4. Version 6: shipped. The `permanent` column of `source_reads`.
+5. Version 7: shipped. The `starter_reads` and `injury_reads` rebuild that drops `nhl_id`, and the archive of the unblocked counts.
+6. Version 8: shipped. The `mp_team_games` rebuild that drops the unblocked counts (#92).
+7. Version 9: shipped. [payload-archive.md](payload-archive.md) added `payloads` and `observations` (#82, first slice).
+8. Version 10: shipped. [payload-archive.md](payload-archive.md) added the boxscore revision tables (#326).
+9. Version 11: [pbp-shift-dataset.md](pbp-shift-dataset.md).
+10. Then [moneypuck-situations.md](moneypuck-situations.md), [shot-model.md](shot-model.md), and [aging-adjustments.md](aging-adjustments.md) (`player_bio`), in the order they merge.
 
 When a design merges out of this order, it takes the next free version and updates this list.
 A shipped version keeps its number, so a later design pays the cost of the renumber.
