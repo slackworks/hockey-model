@@ -1,0 +1,186 @@
+"""Tests for the stint builder: merge, split, and the rule that owns a boundary event (#35)."""
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
+from hockey_model.stints import Interval, build_stints, merge_intervals, stint_at
+from hockey_model.types import HockeyModelError
+
+HOME = "EDM"
+AWAY = "LAK"
+
+
+def _iv(player: int, team: str, start: int, end: int, period: int = 1) -> Interval:
+    return Interval(player, team, period, start, end)
+
+
+def test_overlapping_and_touching_intervals_of_one_player_become_one() -> None:
+    merged, dropped = merge_intervals(
+        [_iv(1, HOME, 0, 40), _iv(1, HOME, 30, 60), _iv(1, HOME, 60, 90), _iv(1, HOME, 100, 120)]
+    )
+    assert [(i.start, i.end) for i in merged] == [(0, 90), (100, 120)]
+    assert dropped == []
+
+
+def test_an_interval_with_no_length_is_dropped_and_reported() -> None:
+    merged, dropped = merge_intervals([_iv(1, HOME, 50, 50), _iv(2, HOME, 60, 40)])
+    assert merged == []
+    assert [i.player_id for i in dropped] == [1, 2]
+
+
+def test_a_generator_of_intervals_is_read_once_and_in_full() -> None:
+    merged, dropped = merge_intervals(i for i in [_iv(1, HOME, 0, 10), _iv(2, HOME, 5, 5)])
+    assert [i.player_id for i in merged] == [1]
+    assert [i.player_id for i in dropped] == [2]
+
+
+def test_one_player_id_on_two_teams_stays_apart() -> None:
+    merged, _ = merge_intervals([_iv(1, HOME, 0, 30), _iv(1, AWAY, 10, 40)])
+    assert len(merged) == 2
+
+
+def test_the_same_player_in_two_periods_stays_apart() -> None:
+    merged, _ = merge_intervals([_iv(1, HOME, 0, 30, 1), _iv(1, HOME, 1200, 1230, 2)])
+    assert len(merged) == 2
+
+
+def _line_change() -> list[Interval]:
+    """Home skaters 1 and 2 play 0..100. Skater 3 replaces skater 2 at 60. The goalies stay."""
+    return [
+        _iv(1, HOME, 0, 100),
+        _iv(2, HOME, 0, 60),
+        _iv(3, HOME, 60, 100),
+        _iv(20, AWAY, 0, 100),
+        _iv(90, HOME, 0, 100),
+        _iv(91, AWAY, 0, 100),
+    ]
+
+
+def test_a_stint_splits_at_each_change_of_players() -> None:
+    result = build_stints(_line_change(), {90: "G", 91: "G"}, HOME, AWAY)
+    assert [(s.start, s.end, s.home_skaters) for s in result.stints] == [
+        (0, 60, (1, 2)),
+        (60, 100, (1, 3)),
+    ]
+    assert all(s.home_goalies == (90,) and s.away_goalies == (91,) for s in result.stints)
+    assert all(s.away_skaters == (20,) for s in result.stints)
+
+
+def test_the_builder_merges_the_shifts_and_reports_the_dropped_ones() -> None:
+    shifts = [_iv(1, HOME, 0, 50), _iv(1, HOME, 50, 100), _iv(2, HOME, 70, 70)]
+    result = build_stints(shifts, {}, HOME, AWAY)
+    assert [(s.start, s.end, s.home_skaters) for s in result.stints] == [(0, 100, (1,))]
+    assert [i.player_id for i in result.dropped] == [2]
+
+
+def test_neighbors_with_the_same_players_join_into_one_stint() -> None:
+    shifts = [_iv(1, HOME, 0, 40), _iv(1, HOME, 40, 80), _iv(2, AWAY, 0, 80)]
+    result = build_stints(shifts, {}, HOME, AWAY)
+    assert [(s.start, s.end) for s in result.stints] == [(0, 80)]
+
+
+def test_a_gap_with_nobody_on_the_ice_is_not_a_stint_and_does_not_join() -> None:
+    shifts = [_iv(1, HOME, 0, 40), _iv(1, HOME, 60, 100)]
+    result = build_stints(shifts, {}, HOME, AWAY)
+    assert [(s.start, s.end) for s in result.stints] == [(0, 40), (60, 100)]
+
+
+def test_a_stint_never_crosses_a_period() -> None:
+    shifts = [_iv(1, HOME, 0, 1200, 1), _iv(1, HOME, 1200, 2400, 2)]
+    result = build_stints(shifts, {}, HOME, AWAY)
+    assert [(s.period, s.start, s.end) for s in result.stints] == [(1, 0, 1200), (2, 1200, 2400)]
+
+
+def test_two_goalies_on_the_ice_at_once_are_both_kept() -> None:
+    shifts = [_iv(90, HOME, 0, 100), _iv(92, HOME, 90, 110), _iv(1, HOME, 0, 110)]
+    result = build_stints(shifts, {90: "G", 92: "G"}, HOME, AWAY)
+    overlap = next(s for s in result.stints if s.start == 90)
+    assert overlap.home_goalies == (90, 92)
+    assert overlap.home_skaters == (1,)
+
+
+def test_a_player_that_the_roster_does_not_name_counts_as_a_skater() -> None:
+    result = build_stints([_iv(7, HOME, 0, 10)], {}, HOME, AWAY)
+    assert result.stints[0].home_skaters == (7,)
+
+
+def test_a_shift_for_a_third_team_is_a_named_error() -> None:
+    with pytest.raises(HockeyModelError, match=r"player 5 .* neither the home team EDM"):
+        build_stints([_iv(5, "CGY", 0, 10)], {}, HOME, AWAY)
+
+
+@pytest.mark.parametrize(
+    ("period", "second", "owner"),
+    [
+        (1, 1, 0),
+        (1, 60, 0),
+        (1, 61, 1),
+        (1, 100, 1),
+        (1, 0, 0),
+        (1, 101, None),
+        (2, 1200, 2),
+        (2, 1260, 2),
+        (3, 50, None),
+    ],
+)
+def test_an_event_belongs_to_the_stint_that_ends_at_or_after_it(
+    period: int, second: int, owner: int | None
+) -> None:
+    shifts = [
+        _iv(1, HOME, 0, 60),
+        _iv(2, HOME, 60, 100),
+        _iv(3, HOME, 1200, 1300, 2),
+    ]
+    stints = build_stints(shifts, {}, HOME, AWAY).stints
+    found = stint_at(stints, period, second)
+    assert found is None if owner is None else found == stints[owner]
+
+
+def test_a_goal_at_a_line_change_belongs_to_the_players_before_the_change() -> None:
+    stints = build_stints(_line_change(), {90: "G", 91: "G"}, HOME, AWAY).stints
+    before = stint_at(stints, 1, 60)
+    assert before is not None
+    assert before.home_skaters == (1, 2)
+
+
+def test_the_first_second_of_a_period_belongs_to_the_first_stint_of_that_period() -> None:
+    shifts = [_iv(1, HOME, 0, 1200, 1), _iv(2, HOME, 1200, 2400, 2)]
+    stints = build_stints(shifts, {}, HOME, AWAY).stints
+    first = stint_at(stints, 2, 1200)
+    assert first is not None
+    assert first.home_skaters == (2,)
+    last_of_one = stint_at(stints, 1, 1200)
+    assert last_of_one is not None
+    assert last_of_one.home_skaters == (1,)
+
+
+players = st.integers(min_value=1, max_value=6)
+spans = st.tuples(st.integers(0, 60), st.integers(0, 60)).map(lambda p: (min(p), max(p)))
+shifts_strategy = st.lists(
+    st.tuples(players, st.sampled_from([HOME, AWAY]), st.integers(1, 2), spans),
+    max_size=14,
+)
+
+
+@given(shifts_strategy)
+def test_the_stints_cover_the_merged_time_of_each_player_exactly_once(
+    raw: list[tuple[int, str, int, tuple[int, int]]],
+) -> None:
+    intervals = [_iv(p, t, 1200 * (n - 1) + a, 1200 * (n - 1) + b, n) for p, t, n, (a, b) in raw]
+    merged, _ = merge_intervals(intervals)
+    stints = build_stints(intervals, {}, HOME, AWAY).stints
+    for interval in merged:
+        covered = sum(
+            s.end - s.start
+            for s in stints
+            if s.period == interval.period
+            and interval.player_id in (s.home_skaters if interval.team == HOME else s.away_skaters)
+            and interval.start <= s.start
+            and s.end <= interval.end
+        )
+        assert covered == interval.end - interval.start
+    for left, right in zip(stints, stints[1:], strict=False):
+        assert (left.period, left.end) <= (right.period, right.start)
+        same = (left.home_skaters, left.away_skaters) == (right.home_skaters, right.away_skaters)
+        assert not (same and left.period == right.period and left.end == right.start)

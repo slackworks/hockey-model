@@ -72,7 +72,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "sources.starters",
         "sources.teams",
     ),
-    ("backtest.row_codec", "sources.espn", "sources.daily_faceoff", "backtest.golden"),
+    ("backtest.row_codec", "sources.espn", "sources.daily_faceoff", "backtest.golden", "stints"),
 )
 
 
