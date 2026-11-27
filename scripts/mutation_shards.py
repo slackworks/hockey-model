@@ -46,53 +46,25 @@ RESULT_FIELDS = (
     "type_check_error_by_key",
     "estimated_durations_by_key",
 )
-# Balanced from the per-mutant durations that CI records in each .meta file, not from the
-# file count. Count is a poor guide: sources.http costs 357s for 190 mutants, and
-# experiments.models costs 3902s for 332 (#155). A surviving mutant runs every selected
-# test to the end, so the slow modules are the ones whose tests do real work.
-#
-# Seconds of mutant work per shard, summed from run 42372737510: 3902, 2916, 1718, 1517.
-# The four shards of that run sum to 10054s, so a perfect split is 2513s each.
-# experiments.models alone is 3902s, so that shard is the floor unless #176 splits a module.
-#
-# A fit over the two heaviest shards of that run gives ``wall = work / 3.87 + 105``
-# seconds: about 3.87 effective workers, and 105s of startup and stats before the first
-# mutant. It predicts 24.8 minutes for shard 3, which timed out at its 25-minute limit.
-# Applying it to the table below gives 18.6, 14.3, 9.2, and 8.3 minutes for the four
-# shards before the backtest modules joined.
-#
-# The backtest modules joined in #288, from local runs on one machine: runner 618s,
-# units 740s, shards 260s, golden 140s. Shard 2 gained units and golden, which brings it to
-# about 2600s of work. Shard 3 gained runner and shards, which brings it to about 2400s.
-# Read the new work as an estimate until a CI run records the real durations.
-#
-# The season row cache modules joined in #304 and went to shard 1, the lightest. Their tests run
-# in about 5s, so read their work as small until a CI run records it.
-#
-# The fit under-reads a shard of cheap mutants. Old shard 0 held 190 mutants of
-# sources.http, summed to 357s, and took 385s: 1.95 times its prediction. Each mutant is
-# a subprocess, so a cheap one spends most of its time in startup that its recorded
-# duration does not hold. Shards 2 and 3 below have the same shape, at 1.8s and 1.3s per
-# mutant, so read their minutes as a floor and keep the margin at the step limit.
+# Balanced from the per-mutant durations that CI records in each .meta file, not from the file
+# count. Each shard holds about 7850 s of mutant work, which is about 40 minutes of wall time.
+# The work of each module, the fit, and the reason for five shards:
+# docs/design/mutation-shard-times.md
 SHARDS: tuple[tuple[str, ...], ...] = (
-    ("experiments.models", "json_schema"),
-    ("backtest.metrics", "backtest.season_key", "backtest.row_cache", "backtest.row_codec"),
-    ("sources.nhl", "sources.http", "sources.payload", "backtest.units", "backtest.golden"),
+    ("experiments.models", "backtest.golden"),
     (
-        "backtest.runner",
-        "backtest.shards",
-        "sources.espn",
-        "sources.sanitize",
-        "sources.daily_faceoff",
-        "sources.moneypuck",
-        "game_model.elo",
         "game_model.logistic",
+        "sources.nhl",
+        "sources.moneypuck",
         "sources.errors",
         "sources.policy",
+        "sources.sanitize",
         "sources.shape_errors",
         "sources.starters",
-        "sources.teams",
     ),
+    ("backtest.metrics", "json_schema", "sources.daily_faceoff", "game_model.elo", "sources.teams"),
+    ("backtest.row_codec", "backtest.season_key", "sources.espn", "sources.payload"),
+    ("backtest.row_cache", "backtest.runner", "backtest.shards", "backtest.units", "sources.http"),
 )
 
 

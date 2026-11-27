@@ -26,7 +26,7 @@ def _limits(*args: str) -> tuple[int, int]:
 
 @pytest.mark.parametrize("args", [(), ("",)])
 def test_no_value_gives_the_scheduled_limits(args: tuple[str, ...]) -> None:
-    assert _limits(*args) == (25, 30)
+    assert _limits(*args) == (60, 75)
 
 
 def test_a_value_sets_the_step_limit_and_leaves_room_for_setup_and_upload() -> None:
