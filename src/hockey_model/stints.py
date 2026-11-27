@@ -10,6 +10,7 @@ Design: docs/design/pbp-shift-dataset.md
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 from hockey_model.types import HockeyModelError
 
@@ -106,7 +107,10 @@ def _stint(
 def _period_stints(
     period: int, intervals: Sequence[Interval], goalies: frozenset[int], home: str
 ) -> list[Stint]:
-    """Sweep the boundaries of one period. The intervals of a player must be merged."""
+    """Sweep the boundaries of one period. The intervals of a player must be merged.
+
+    Every boundary opens or closes an interval, so the players change at each boundary and no
+    two neighbor spans hold the same players."""
     opens: dict[int, list[Interval]] = defaultdict(list)
     closes: dict[int, list[Interval]] = defaultdict(list)
     for interval in intervals:
@@ -115,24 +119,14 @@ def _period_stints(
     points = sorted(opens.keys() | closes.keys())
     active: dict[tuple[int, str], Interval] = {}
     stints: list[Stint] = []
-    for low, high in zip(points, points[1:], strict=False):
+    for low, high in pairwise(points):
         for closed in closes.get(low, ()):
             del active[(closed.player_id, closed.team)]
         for opened in opens.get(low, ()):
             active[(opened.player_id, opened.team)] = opened
-        if not active:
-            continue
-        stint = _stint((period, low, high), active.values(), goalies, home)
-        previous = stints[-1] if stints else None
-        if previous is not None and previous.end == low and _players(previous) == _players(stint):
-            stints[-1] = Stint(period, previous.start, high, *_players(previous))
-        else:
-            stints.append(stint)
+        if active:
+            stints.append(_stint((period, low, high), active.values(), goalies, home))
     return stints
-
-
-def _players(stint: Stint) -> tuple[tuple[int, ...], ...]:
-    return stint.home_skaters, stint.away_skaters, stint.home_goalies, stint.away_goalies
 
 
 def build_stints(

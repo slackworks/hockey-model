@@ -80,7 +80,7 @@ def test_a_shift_that_ends_before_it_starts_is_counted_apart_from_a_zero_length_
     assert (result.zero_length, result.negative_length) == (1, 2)
 
 
-def test_neighbors_with_the_same_players_join_into_one_stint() -> None:
+def test_touching_shifts_of_one_player_give_one_stint() -> None:
     shifts = [_iv(1, HOME, 0, 40), _iv(1, HOME, 40, 80), _iv(2, AWAY, 0, 80)]
     result = build_stints(shifts, {}, HOME, AWAY)
     assert [(s.start, s.end) for s in result.stints] == [(0, 80)]
@@ -112,8 +112,12 @@ def test_a_player_that_the_roster_does_not_name_counts_as_a_skater() -> None:
 
 
 def test_a_shift_for_a_third_team_is_a_named_error() -> None:
-    with pytest.raises(HockeyModelError, match=r"player 5 .* neither the home team EDM"):
+    with pytest.raises(HockeyModelError) as error:
         build_stints([_iv(5, "CGY", 0, 10)], {}, HOME, AWAY)
+    assert str(error.value) == (
+        "player 5 has a shift for team 'CGY', which is neither the home team EDM nor the away "
+        "team LAK; check the team codes of the shift chart"
+    )
 
 
 @pytest.mark.parametrize(
