@@ -16,12 +16,13 @@ from hockey_model import progress as progress_log
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import PBP_PARSER, fetch_pbp, pbp_url
 from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, fetch_shifts, shifts_url
-from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS, reads_due
+from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS
 from hockey_model.store.db import StoreError
 from hockey_model.store.event_writes import write_pbp, write_shifts
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
-from hockey_model.store.refresh_nhl import MAX_REVISITS, RETRY_FAILED_AFTER
+from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
+from hockey_model.store.refresh_revisit import revisit_source
 from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS, failed_since
 from hockey_model.store.timestamps import iso_utc
 
@@ -118,29 +119,14 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
         progress_log.advance()
 
 
-def revisit_events(run: RefreshRun, source: str) -> None:
-    """Read each final game of ``source`` that is due again, the oldest due first and bounded.
-
-    A game left out by the bound is named in the notes, and the next refresh reads it.
-    """
-    gaps = run.skipped(source)
-    url_of = _KINDS[source].url
-    due = [
-        g for g in reads_due(run.conn, run.now, REVISIT_AFTER_DAYS, source) if url_of(g) not in gaps
-    ]
-    if len(due) > MAX_REVISITS:
-        run.notes.append(
-            f"{source}: {len(due) - MAX_REVISITS} revisit(s) wait for the next refresh; "
-            f"this run reads at most {MAX_REVISITS}"
-        )
-    with run.step(f"{source}-revisits", "due", min(len(due), MAX_REVISITS)):
-        read_events(run, source, due[:MAX_REVISITS])
+def _read_source(run: RefreshRun, source: str) -> None:
+    waiting = games_missing_events(run, source)
+    with run.step(source, "missing", len(waiting)):
+        read_events(run, source, waiting)
+    revisit_source(run, source, _KINDS[source].url, lambda games: read_events(run, source, games))
 
 
 def events(run: RefreshRun) -> None:
     """Read the play-by-play and the shift chart of each final game that lacks one, then revisit."""
     for source in _KINDS:
-        waiting = games_missing_events(run, source)
-        with run.step(source, "missing", len(waiting)):
-            read_events(run, source, waiting)
-        revisit_events(run, source)
+        _read_source(run, source)

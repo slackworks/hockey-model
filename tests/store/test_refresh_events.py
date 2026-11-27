@@ -14,7 +14,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import boxscore_url
 from hockey_model.sources.nhl_events import pbp_url
 from hockey_model.sources.nhl_shifts import shifts_url
-from hockey_model.store import refresh_events
+from hockey_model.store import refresh_events, refresh_revisit
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
@@ -197,7 +197,7 @@ def test_a_revisit_bound_names_the_games_left_for_the_next_refresh(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     refresh(conn, FakeClient(), now=NOW)
-    monkeypatch.setattr(refresh_events, "MAX_REVISITS", 2)
+    monkeypatch.setattr(refresh_revisit, "MAX_REVISITS", 2)
     report = refresh(conn, FakeClient(), now=NOW + timedelta(days=3))
     assert any("12 revisit(s) wait for the next refresh" in n for n in report.notes)
     assert _observations(conn, NHL_PBP, 2025020697) == 2
