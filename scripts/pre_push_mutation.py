@@ -617,7 +617,7 @@ def run_check(repo: Path) -> int:
     globs = sorted({mutant_glob(path, target.qualname) for path, target, _ in found})
     clear_generated_mutants(repo)
     run_mutmut(repo, ["run", *globs])
-    statuses = parse_results(run_mutmut(repo, ["results"]))
+    statuses = parse_results(run_mutmut(repo, ["results", "--all", "true"]))
     gate_failures, ignored = gate(repo, statuses, found)
     failures = missing_mutants(globs, statuses) + gate_failures
     elapsed = time.monotonic() - started
