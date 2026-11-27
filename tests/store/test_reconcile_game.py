@@ -14,9 +14,10 @@ from hockey_model.sources.espn_summary import EspnSummary, parse_summary
 from hockey_model.sources.nhl import BOXSCORE_PARSER, parse_boxscore
 from hockey_model.sources.nhl_events import parse_pbp
 from hockey_model.sources.nhl_shifts import parse_shifts
+from hockey_model.store import reconcile_game as reconcile_module
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import record_revision
-from hockey_model.store.db import connect
+from hockey_model.store.db import StoreError, connect
 from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
 from hockey_model.store.reconcile_game import reconcile_game
 from hockey_model.store.source_reads import BOXSCORES, ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
@@ -197,3 +198,44 @@ def test_a_game_with_no_shift_rows_gives_no_status(conn: sqlite3.Connection) -> 
     write_pbp(conn, pbp, parse_pbp(_json("nhl/pbp_2025020709.json"), GAME))
     assert reconcile_game(conn, GAME, LATE) is None
     assert _status(conn) == []
+
+
+def test_a_check_that_raises_leaves_the_stints_and_the_status_as_they_were(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+
+    def boom(*args: object) -> list[object]:
+        raise StoreError("game 1: a check failed")
+
+    monkeypatch.setattr(reconcile_module, "_checks", boom)
+    with pytest.raises(StoreError, match="a check failed"):
+        reconcile_game(conn, GAME, LATE)
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
+    assert _status(conn) == []
+
+
+def test_a_game_with_one_early_and_one_late_read_is_provisional(conn: sqlite3.Connection) -> None:
+    """The newer of the two reads does not settle a game. The older one decides."""
+    _boxscore(conn)
+    pbp, shift = _obs(conn, NHL_PBP, LATE), _obs(conn, NHL_SHIFTS, EARLY)
+    write_pbp(conn, pbp, parse_pbp(_json("nhl/pbp_2025020709.json"), GAME))
+    write_shifts(conn, shift, parse_shifts(_json("nhl/shifts_2025020709.json"), GAME))
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "provisional"
+
+
+@pytest.mark.parametrize("column", ["start_utc", "fetched_at"])
+def test_a_stored_time_that_does_not_parse_is_a_store_error_that_names_the_game(
+    conn: sqlite3.Connection, column: str
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    if column == "start_utc":
+        conn.execute("UPDATE games SET start_utc = 'garbage'")
+    else:
+        conn.execute("UPDATE observations SET fetched_at = 'garbage' WHERE source = ?", (NHL_PBP,))
+    with pytest.raises(StoreError, match=rf"game {GAME}: .*garbage"):
+        reconcile_game(conn, GAME, LATE)

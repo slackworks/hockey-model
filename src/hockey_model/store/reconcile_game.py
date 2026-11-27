@@ -26,8 +26,14 @@ from hockey_model.store.boxscore_revisions import LATEST, boxscore_rows
 from hockey_model.store.db import StoreError
 from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
-from hockey_model.store.stint_build import GameInputs, GameStints, build_game_stints
+from hockey_model.store.stint_build import (
+    GameInputs,
+    GameStints,
+    build_game_stints,
+    write_stints,
+)
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
+from hockey_model.types import HockeyModelError
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +91,7 @@ def _situation_check(conn: sqlite3.Connection, built: GameStints) -> CheckResult
     rows = conn.execute(
         "SELECT event_id, period, game_second, situation_code FROM pbp_events"
         " WHERE obs_id = ? AND game_second IS NOT NULL ORDER BY sort_order",
-        (built.pbp_obs,),
+        (built.inputs.pbp_obs,),
     ).fetchall()
     events = [SituationEvent(*row) for row in rows]
     return check_situation(events, built.stints.stints)
@@ -105,6 +111,17 @@ def _espn_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult | N
     return check_espn_teams([team for (team,) in teams], inputs.home, inputs.away)
 
 
+def _stored_time(game_id: int, text: str) -> datetime:
+    """Parse a time that the store wrote, or raise a store error that names the game."""
+    try:
+        return parse_iso_utc(text)
+    except (ValueError, HockeyModelError) as exc:
+        raise StoreError(
+            f"game {game_id}: the stored time {text!r} does not parse ({exc}); "
+            "fix the row, or read the game again"
+        ) from exc
+
+
 def _is_settled(conn: sqlite3.Connection, inputs: GameInputs) -> bool:
     """Return True when both observations were read after the last revisit day of the game."""
     start = conn.execute(
@@ -113,12 +130,12 @@ def _is_settled(conn: sqlite3.Connection, inputs: GameInputs) -> bool:
     ).fetchone()
     if start is None or start[0] is None:
         return False
-    last = parse_iso_utc(start[0]) + timedelta(days=max(REVISIT_AFTER_DAYS))
-    read = conn.execute(
-        "SELECT MIN(fetched_at) FROM observations WHERE obs_id IN (?, ?)",
+    last = _stored_time(inputs.game_id, start[0]) + timedelta(days=max(REVISIT_AFTER_DAYS))
+    reads = conn.execute(
+        "SELECT fetched_at FROM observations WHERE obs_id IN (?, ?)",
         (inputs.pbp_obs, inputs.shift_obs),
-    ).fetchone()[0]
-    return parse_iso_utc(read) >= last
+    )
+    return min(_stored_time(inputs.game_id, text) for (text,) in reads) >= last
 
 
 def _checks(conn: sqlite3.Connection, built: GameStints, inputs: GameInputs) -> list[CheckResult]:
@@ -158,8 +175,9 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
     inputs = built.inputs
     results = _checks(conn, built, inputs)
     status = status_of(results, settled=_is_settled(conn, inputs))
-    game = GameStatus(game_id, built.pbp_obs, built.shift_obs, status, tuple(results))
+    game = GameStatus(game_id, inputs.pbp_obs, inputs.shift_obs, status, tuple(results))
     notes = notes_json(results, dropped_shifts=len(built.stints.dropped))
+    write_stints(conn, built)
     _write_status(conn, game, notes, now)
     return game
 

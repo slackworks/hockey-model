@@ -35,14 +35,6 @@ class GameStints:
     inputs: GameInputs
     stints: Stints
 
-    @property
-    def pbp_obs(self) -> int:
-        return self.inputs.pbp_obs
-
-    @property
-    def shift_obs(self) -> int:
-        return self.inputs.shift_obs
-
 
 def _latest_observation(conn: sqlite3.Connection, game_id: int, source: str) -> int | None:
     found = conn.execute(
@@ -112,8 +104,9 @@ def _row(inputs: GameInputs, number: int, stint: Stint) -> tuple:
     )
 
 
-def write_stints(conn: sqlite3.Connection, inputs: GameInputs, stints: Stints) -> None:
+def write_stints(conn: sqlite3.Connection, built: GameStints) -> None:
     """Replace the stints of one pair of observations. The caller owns the transaction."""
+    inputs, stints = built.inputs, built.stints
     conn.execute(
         "DELETE FROM stints WHERE game_id = ? AND pbp_obs = ? AND shift_obs = ?",
         (inputs.game_id, inputs.pbp_obs, inputs.shift_obs),
@@ -127,7 +120,7 @@ def write_stints(conn: sqlite3.Connection, inputs: GameInputs, stints: Stints) -
 
 
 def build_game_stints(conn: sqlite3.Connection, game_id: int) -> GameStints | None:
-    """Build and store the stints of one game, or return None when it has no inputs."""
+    """Build the stints of one game, or return None when it has no inputs. Nothing is written."""
     inputs = game_inputs(conn, game_id)
     if inputs is None:
         return None
@@ -135,5 +128,4 @@ def build_game_stints(conn: sqlite3.Connection, game_id: int) -> GameStints | No
         stints = build_stints(inputs.intervals, inputs.positions, inputs.home, inputs.away)
     except HockeyModelError as exc:
         raise StoreError(f"game {game_id}: {exc}") from exc
-    write_stints(conn, inputs, stints)
     return GameStints(inputs, stints)
