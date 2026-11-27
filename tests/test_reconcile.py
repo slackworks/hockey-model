@@ -76,10 +76,26 @@ def test_only_the_first_ten_players_are_listed_and_the_total_is_kept() -> None:
 
 
 def test_a_shift_player_that_the_roster_lacks_fails_the_roster_check() -> None:
-    assert check_roster([1, 2, 2], {1, 2, 3}).passed
-    result = check_roster([1, 2, 9, 7], {1, 2})
+    positions = {1: "C", 2: "D", 3: "G"}
+    assert check_roster([1, 2, 2], positions).passed
+    result = check_roster([1, 2, 9, 7], positions)
     assert not result.passed
-    assert result.detail == {"missing": [7, 9]}
+    assert result.detail == {"missing": [7, 9], "unknown_position": []}
+
+
+@pytest.mark.parametrize("position", ["", "g", "GOALIE", "X", "F"])
+def test_a_roster_position_that_is_not_a_known_code_fails_the_roster_check(position: str) -> None:
+    result = check_roster([1, 2], {1: "C", 2: position})
+    assert not result.passed
+    assert result.detail == {
+        "missing": [],
+        "unknown_position": [{"player": 2, "position": position}],
+    }
+
+
+@pytest.mark.parametrize("position", ["C", "L", "R", "D", "G"])
+def test_each_position_code_of_the_feed_is_known(position: str) -> None:
+    assert check_roster([1], {1: position}).passed
 
 
 def _stint(start: int, end: int, home: int, away: int) -> Stint:
@@ -117,8 +133,22 @@ def test_an_event_in_no_stint_fails_the_situation_check() -> None:
     assert result.detail["events"] == [{"event": 7, "reason": "no stint holds the event"}]
 
 
-def test_an_event_with_no_code_is_not_checked() -> None:
-    assert check_situation([SituationEvent(1, 1, 50, None)], [_stint(0, 100, 5, 5)]).passed
+def test_a_game_where_no_event_has_a_code_fails_because_nothing_was_checked() -> None:
+    events = [SituationEvent(1, 1, 50, None), SituationEvent(2, 1, 60, None)]
+    result = check_situation(events, [_stint(0, 100, 5, 5)])
+    assert not result.passed
+    assert result.detail == {"reason": "no event carries a situation code", "events": 2}
+
+
+def test_a_game_with_no_event_fails_the_situation_check() -> None:
+    assert not check_situation([], [_stint(0, 100, 5, 5)]).passed
+
+
+def test_an_event_with_no_code_is_skipped_and_the_others_are_counted() -> None:
+    events = [SituationEvent(1, 1, 50, None), SituationEvent(2, 1, 60, "1551")]
+    result = check_situation(events, [_stint(0, 100, 5, 5)])
+    assert result.passed
+    assert result.detail == {"checked": 1}
 
 
 def test_the_espn_teams_must_be_the_teams_of_the_game() -> None:

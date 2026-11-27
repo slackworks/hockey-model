@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from hockey_model.stints import Stint, stints_around
 
 SHOOTOUT = "SO"
+# The position codes of the NHL roster: centre, left wing, right wing, defence, goalie.
+POSITIONS = frozenset({"C", "L", "R", "D", "G"})
 # A failed check lists at most this many items in its notes. The total is always kept.
 MAX_LISTED = 10
 
@@ -82,10 +84,22 @@ def check_goals_by_player(
     return CheckResult("goals_by_player", False, detail)
 
 
-def check_roster(shift_players: Iterable[int], roster: Collection[int]) -> CheckResult:
-    """Each player with a shift is in the roster, so the builder can tell a goalie."""
-    missing = sorted(set(shift_players) - set(roster))
-    return CheckResult("roster", not missing, {"missing": missing} if missing else {})
+def check_roster(shift_players: Iterable[int], positions: Mapping[int, str]) -> CheckResult:
+    """Each player with a shift is in the roster with a known position code.
+
+    The builder takes a goalie from the position ``G``, and it counts any other player as a
+    skater, so a roster that omits a goalie or names a strange code would hide a goalie.
+    """
+    on_ice = set(shift_players)
+    missing = sorted(on_ice - positions.keys())
+    unknown = [
+        {"player": player, "position": positions[player]}
+        for player in sorted(on_ice & positions.keys())
+        if positions[player] not in POSITIONS
+    ]
+    passed = not missing and not unknown
+    detail: dict[str, object] = {} if passed else {"missing": missing, "unknown_position": unknown}
+    return CheckResult("roster", passed, detail)
 
 
 def _skaters_of(code: str) -> tuple[int, int]:
@@ -110,15 +124,19 @@ def _situation_failure(event: SituationEvent, stints: Sequence[Stint]) -> dict[s
     }
 
 
-def check_situation(events: Iterable[SituationEvent], stints: Sequence[Stint]) -> CheckResult:
+def check_situation(events: Sequence[SituationEvent], stints: Sequence[Stint]) -> CheckResult:
     """No event has fewer skaters on the ice than its situation code gives.
 
     The stint that owns an event, or the stint that starts at its second, may satisfy the code.
     A shootout event is not in the input, and an event with no code is not checked.
     """
-    failures = [f for e in events if (f := _situation_failure(e, stints)) is not None]
+    coded = [e for e in events if e.code is not None]
+    if not coded:
+        reason = "no event carries a situation code"
+        return CheckResult("situation", False, {"reason": reason, "events": len(events)})
+    failures = [f for e in coded if (f := _situation_failure(e, stints)) is not None]
     if not failures:
-        return CheckResult("situation", True, {})
+        return CheckResult("situation", True, {"checked": len(coded)})
     return CheckResult(
         "situation", False, {"total": len(failures), "events": failures[:MAX_LISTED]}
     )
