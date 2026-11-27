@@ -223,3 +223,11 @@ def observations_for(
             query, params
         )
     ]
+
+
+def observations_for_source(conn: sqlite3.Connection, source: str) -> list[Observation]:
+    """Return every observation of ``source`` in fetch order, whatever its key."""
+    cursor = conn.execute(
+        "SELECT obs_id FROM observations WHERE source = ? ORDER BY obs_id", (source,)
+    )
+    return [observation_of(conn, int(obs_id)) for (obs_id,) in cursor.fetchall()]

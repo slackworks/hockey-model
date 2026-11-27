@@ -154,6 +154,18 @@ The list in the issue body is the acceptance list. Add these:
 3. Refresh units and the backfill. One pull request.
 4. The real backfill, and a report under `docs/research/` with the per-season count of `reconciled`, `provisional`, and `incomplete` games and the measured tolerances.
 
+## Built as
+
+Delivery step 1 shipped with these changes from the plan above:
+
+- `pbp_roster (obs_id, game_id, player_id, team, position)` holds the roster of the play-by-play, because the stint step needs the position `G`.
+- `shifts` is keyed on `(obs_id, row_no)`, where `row_no` is the place of the row in the feed. The feed can repeat a shift, and the stint step merges the repeats.
+- A derived row has a `parser` column, and a rebuild replaces the rows of one observation in place. The archive keeps the bytes, so the earlier parse is not lost.
+- `espn_skater_toi` is keyed on `(obs_id, team, espn_name)` and resolves `nhl_id` by the team and the name when one player matches.
+- The observation key of `espn_summary` is the NHL game id, through `Reading.key`.
+- The version is 11. Schema version 10 is the boxscore revision tables of #82.
+- `store rebuild --source nhl_pbp`, `nhl_shifts`, or `espn_summary` rewrites the rows of each archived observation, and `--allow-refused` lets a stricter parser drop a payload that an earlier parser accepted.
+
 ## Calls made
 
 - The shared archive of #82 instead of the `raw_payloads` table of the issue body, so there is one payload scheme.
