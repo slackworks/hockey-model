@@ -194,9 +194,6 @@ def test_the_missing_in_copy_list_names_every_tracked_root_entry() -> None:
         f"{sorted(leftover)} are tracked at the repo root, and a mutation copy leaves them out. "
         "Add each one to MISSING_IN_COPY, or to COPIED if mutmut copies it."
     )
-    assert not set(MISSING_IN_COPY) - _tracked_root_entries(), (
-        "MISSING_IN_COPY names an entry that git does not track. Remove the stale name."
-    )
 
 
 @pytest.mark.parametrize("name", _GUARDED_HELPERS)

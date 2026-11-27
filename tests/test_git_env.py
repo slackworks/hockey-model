@@ -1,47 +1,89 @@
 """Tests that a hook environment cannot point a test's git command at the real repository.
 
-A git hook runs with variables such as ``GIT_DIR`` and ``GIT_INDEX_FILE`` set. A test that runs
-``git add`` or ``git rm`` in a temporary repository then changed the index of the real
-repository, and the pre-push hook failed on a tree that looked dirty (#323).
+A git hook runs with variables such as ``GIT_DIR`` and ``GIT_INDEX_FILE`` set. A test that ran
+``git add`` or ``git config`` in a temporary repository then changed the index and the config of
+the real repository, and the pre-push hook failed on a tree that looked dirty (#323).
 """
 
 import os
 import subprocess
+import sys
+from pathlib import Path
 
-import conftest
 import pytest
-from git_env import CONFIG_VARS, REPO_VARS, clear_repo_env
+from git_env import clear_git_env
+
+TESTS_DIR = Path(__file__).resolve().parent
 
 
-def test_every_variable_that_names_a_repository_is_cleared(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "name",
+    ["GIT_DIR", "GIT_INDEX_FILE", "GIT_CONFIG", "GIT_CONFIG_KEY_0", "GIT_AUTHOR_NAME", "GIT_X"],
+)
+def test_a_git_variable_is_cleared(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(name, "/elsewhere")
+    clear_git_env()
+    assert name not in os.environ
+
+
+@pytest.mark.parametrize("name", ["GITHUB_TOKEN", "GITLAB_CI", "HOME", "PATH"])
+def test_a_variable_outside_the_git_prefix_stays(
+    monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    for name in REPO_VARS:
-        monkeypatch.setenv(name, "/elsewhere")
-    clear_repo_env()
-    assert [name for name in REPO_VARS if name in os.environ] == []
+    monkeypatch.setenv(name, "kept")
+    clear_git_env()
+    assert os.environ[name] == "kept"
 
 
-def test_a_variable_that_does_not_name_a_repository_stays(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test Author")
-    monkeypatch.setenv("GIT_DIR", "/elsewhere")
-    clear_repo_env()
-    assert os.environ["GIT_AUTHOR_NAME"] == "Test Author"
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True)
 
 
-def test_the_pytest_start_clears_the_repository_variables(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+def test_a_repository_in_a_temporary_folder_leaves_the_hook_repository_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("GIT_INDEX_FILE", "/elsewhere/index")
-    conftest.pytest_configure(request.config)
-    assert "GIT_INDEX_FILE" not in os.environ
+    hook_repo = tmp_path / "hook"
+    own_repo = tmp_path / "own"
+    for repo in (hook_repo, own_repo):
+        repo.mkdir()
+    _git(hook_repo, "init", "-q")
+    git_dir = hook_repo / ".git"
+    monkeypatch.setenv("GIT_DIR", str(git_dir))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+    monkeypatch.setenv("GIT_CONFIG", str(git_dir / "config"))
+    clear_git_env()
+
+    _git(own_repo, "init", "-q")
+    _git(own_repo, "config", "user.email", "own@example.com")
+    (own_repo / "file.txt").write_text("x\n", encoding="utf-8")
+    _git(own_repo, "add", "-A")
+
+    assert "own@example.com" not in (git_dir / "config").read_text(encoding="utf-8")
+    assert not (git_dir / "index").exists()
 
 
-def test_the_lists_cover_every_local_variable_that_git_reports() -> None:
-    listing = subprocess.run(
-        ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=True
-    ).stdout
-    assert set(listing.split()) <= set(REPO_VARS) | set(CONFIG_VARS), (
-        "git reports a local variable that tests/git_env.py names in neither list. "
-        "Add it to REPO_VARS, or to CONFIG_VARS when it holds configuration only."
+def test_a_pytest_run_under_a_hook_environment_starts_without_git_variables(
+    tmp_path: Path,
+) -> None:
+    """Load tests/conftest.py as a plugin in a child run that a hook-like environment starts."""
+    probe = tmp_path / "test_probe.py"
+    probe.write_text(
+        "import os\n\n\ndef test_clean():\n"
+        "    assert [name for name in os.environ if name.startswith('GIT_')] == []\n",
+        encoding="utf-8",
     )
+    env = os.environ | {
+        "GIT_DIR": "/elsewhere/.git",
+        "GIT_INDEX_FILE": "/elsewhere/.git/index",
+        "PYTHONPATH": str(TESTS_DIR),
+    }
+    command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "conftest"]
+    result = subprocess.run(
+        [*command, "--rootdir", str(tmp_path), str(probe)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

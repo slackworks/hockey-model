@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from git_env import clear_repo_env
+from git_env import clear_git_env
 from hypothesis import settings
 
 from hockey_model import progress
@@ -19,8 +19,8 @@ settings.load_profile("default")
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Keep a hook's git variables from pointing a test's git command at the real repository."""
-    clear_repo_env()
+    """Keep the git variables of a hook from reaching the git commands of a test."""
+    clear_git_env()
 
 
 @pytest.fixture
