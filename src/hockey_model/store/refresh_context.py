@@ -210,17 +210,24 @@ class RefreshRun:
                 # the failed read and the error are absent, so the absence never becomes a gap.
                 with self.conn:
                     self._observe(capture, recorded.records, exc)
+                    self._after_failure(reading)
                 self.notes.append(absent)
                 return False
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
                 self._observe(capture, recorded.records, exc)
+                self._after_failure(reading)
             self._report_failure(source, exc)
             return False
         finally:
             self.client = inner
         self.written[source] += written
         return True
+
+    def _after_failure(self, reading: Reading) -> None:
+        """Run the failure hook of a reading, in the transaction that records the failure."""
+        if reading.on_failure is not None:
+            reading.on_failure(self.conn)
 
     def _report_failure(self, source: str, failure: HockeyModelError) -> None:
         """Report a failed unit. The failure of an event source is a note, not an error.

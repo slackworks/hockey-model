@@ -78,3 +78,51 @@ def test_a_unit_with_a_hook_must_make_exactly_one_request(
     with pytest.raises(DeriveError, match="exactly one"):
         run.attempt(BOXSCORES, URL, _unit(run, requests), reading)
     assert _counts(conn) == (0, requests)
+
+
+def _fails(run: RefreshRun):
+    def unit(stamp: datetime) -> int:
+        run.client.get("nhl", URL)
+        raise StoreError("the parser refused the payload")
+
+    return unit
+
+
+def test_the_failure_hook_runs_in_the_transaction_that_records_the_failure(
+    conn: sqlite3.Connection,
+) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW)
+    seen: list[int] = []
+
+    def on_failure(db: sqlite3.Connection) -> None:
+        # The failed read and the observation are written when the hook runs.
+        seen.append(db.execute("SELECT COUNT(*) FROM observations").fetchone()[0])
+        db.execute("CREATE TABLE IF NOT EXISTS marker (x INTEGER)")
+        db.execute("INSERT INTO marker VALUES (1)")
+
+    reading = Reading("nhl_boxscore:1", on_failure=on_failure)
+    assert not run.attempt(BOXSCORES, URL, _fails(run), reading)
+    assert seen == [1]
+    assert conn.execute("SELECT COUNT(*) FROM marker").fetchone() == (1,)
+    assert _counts(conn) == (1, 1)
+
+
+def test_the_failure_hook_runs_for_an_expected_absence_too(conn: sqlite3.Connection) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW)
+    seen: list[str] = []
+    reading = Reading(
+        "nhl_boxscore:1",
+        expected_absence=lambda exc: "not yet",
+        on_failure=lambda db: seen.append("hook"),
+    )
+    assert not run.attempt(BOXSCORES, URL, _fails(run), reading)
+    assert seen == ["hook"]
+    assert _counts(conn) == (0, 1)
+
+
+def test_no_failure_hook_runs_for_a_good_unit(conn: sqlite3.Connection) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW)
+    seen: list[str] = []
+    reading = Reading("nhl_boxscore:1", on_failure=lambda db: seen.append("hook"))
+    assert run.attempt(BOXSCORES, URL, _unit(run, 1), reading)
+    assert seen == []
