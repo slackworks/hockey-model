@@ -12,6 +12,7 @@ import pytest
 from hockey_model.sources.espn_summary import SUMMARY_PARSER
 from hockey_model.sources.nhl_events import PBP_PARSER, pbp_url
 from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, shifts_url
+from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import event_rebuild, event_writes
 from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observation
 from hockey_model.store.db import StoreError, connect
@@ -173,3 +174,43 @@ def test_an_observation_with_no_bytes_is_skipped(conn: sqlite3.Connection) -> No
     )
     report = rebuild_source(conn, NHL_PBP, PBP_PARSER)
     assert (report.games, report.derived) == (0, 0)
+
+
+def test_a_refused_payload_leaves_no_rows_of_an_earlier_parse(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _archive(conn, NHL_PBP, status=SHAPE_ERROR)
+    rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (325,)
+
+    def refuse(payload: object, game_id: int) -> object:
+        raise SourceParseError("nhl_pbp", "the parser lost the shape of the feed")
+
+    monkeypatch.setattr(event_rebuild, "parse_pbp", refuse)
+    report = rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    assert report.rejected == 1
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_roster").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(obs_id) FROM latest_pbp_events").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("key", ["²", "٢٠٢٥٠٢٠٧٠٩", "12", "20250207090"])
+def test_an_observation_key_that_is_not_a_game_id_is_a_named_error(
+    conn: sqlite3.Connection, key: str
+) -> None:
+    parser, name, url, _ = SOURCES[NHL_SHIFTS]
+    body = (FIXTURES / name).read_bytes()
+    record_observation(conn, Fetch(NHL_SHIFTS, url, WHEN, OK, parser, key, body))
+    conn.commit()
+    with pytest.raises(StoreError, match="not a game id"):
+        rebuild_source(conn, NHL_SHIFTS, SHIFTS_PARSER)
+
+
+def test_a_payload_for_another_game_than_its_key_is_a_refusal(conn: sqlite3.Connection) -> None:
+    parser, name, url, _ = SOURCES[NHL_PBP]
+    body = (FIXTURES / name).read_bytes()
+    record_observation(conn, Fetch(NHL_PBP, url, WHEN, SHAPE_ERROR, parser, "2025020710", body))
+    conn.commit()
+    report = rebuild_source(conn, NHL_PBP, PBP_PARSER)
+    assert report.rejected == 1
+    assert "names game" in report.refused[0]

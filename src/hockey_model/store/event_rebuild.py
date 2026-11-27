@@ -39,6 +39,7 @@ class _Kind:
 
     parser: str
     apply: Callable[[sqlite3.Connection, Observation, object], None]
+    tables: tuple[str, ...]
 
 
 def _game_of(obs: Observation) -> int:
@@ -67,9 +68,9 @@ def _apply_espn(conn: sqlite3.Connection, obs: Observation, payload: object) -> 
 
 
 KINDS = {
-    NHL_PBP: _Kind(PBP_PARSER, _apply_pbp),
-    NHL_SHIFTS: _Kind(SHIFTS_PARSER, _apply_shifts),
-    ESPN_SUMMARY: _Kind(SUMMARY_PARSER, _apply_espn),
+    NHL_PBP: _Kind(PBP_PARSER, _apply_pbp, ("pbp_events", "pbp_roster")),
+    NHL_SHIFTS: _Kind(SHIFTS_PARSER, _apply_shifts, ("shifts",)),
+    ESPN_SUMMARY: _Kind(SUMMARY_PARSER, _apply_espn, ("espn_skater_toi",)),
 }
 
 
@@ -112,6 +113,10 @@ def rebuild_events(
                         f"refuses a payload that the first read accepted ({exc}); fix the "
                         "parser, or pass --allow-refused when the stricter parser is intended"
                     ) from exc
+                # The rows of an earlier parse must not outlive a refusal: a view that picks the
+                # newest observation would serve them as the rows of these bytes.
+                for table in kind.tables:
+                    conn.execute(f"DELETE FROM {table} WHERE obs_id = ?", (obs.obs_id,))
                 refusals.append(f"observation {obs.obs_id}: {exc}")
                 continue
             derived += 1
