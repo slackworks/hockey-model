@@ -148,9 +148,11 @@ def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> 
     visible rather than silent. The next refresh reads the rest.
     """
     due: list[date] = []
+    gaps = run.skipped(SCORES)
     for _, start in games:
         day = game_day_of(start)
-        if day in due:
+        # A known gap is not read, so it must not use one of the slots of the bound.
+        if day in due or score_day_url(day) in gaps:
             continue
         wait = (
             UNRESOLVED_OLD_RETRY_AFTER
