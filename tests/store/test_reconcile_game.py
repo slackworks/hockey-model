@@ -86,6 +86,7 @@ def test_a_complete_game_after_the_last_revisit_is_reconciled(conn: sqlite3.Conn
         "goals_by_player": True,
         "roster": True,
         "situation": True,
+        "game_state": True,
         "espn_teams": True,
         "shift_lengths": True,
     }
@@ -328,3 +329,15 @@ def test_a_goal_with_no_owner_team_fails_the_team_check(conn: sqlite3.Connection
     notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
     entry = next(n for n in notes if n["check"] == "goals_by_team")
     assert entry["detail"]["found"]["null"] == 1
+
+
+def test_a_play_by_play_that_is_still_live_fails_the_game_state_check(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    pbp, _ = _store(conn, LATE)
+    conn.execute("UPDATE pbp_events SET game_state = 'LIVE' WHERE obs_id = ?", (pbp,))
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    assert _checks(conn)["game_state"] is False

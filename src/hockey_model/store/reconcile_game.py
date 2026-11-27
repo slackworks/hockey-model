@@ -15,6 +15,7 @@ from hockey_model.reconcile import (
     CheckResult,
     SituationEvent,
     check_espn_teams,
+    check_game_state,
     check_goals_by_player,
     check_goals_by_team,
     check_roster,
@@ -108,6 +109,13 @@ def _situation_check(conn: sqlite3.Connection, built: GameStints) -> CheckResult
     return check_situation(events, built.stints.stints)
 
 
+def _state_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
+    found = conn.execute(
+        "SELECT DISTINCT game_state FROM pbp_events WHERE obs_id = ?", (inputs.pbp_obs,)
+    )
+    return check_game_state({state for (state,) in found})
+
+
 def _espn_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
     """Check the teams of the newest ESPN summary of the game.
 
@@ -168,6 +176,7 @@ def _checks(conn: sqlite3.Connection, built: GameStints, inputs: GameInputs) -> 
             zero_length=built.stints.zero_length, negative_length=built.stints.negative_length
         ),
         _situation_check(conn, built),
+        _state_check(conn, inputs),
     ]
     return [*results, _espn_check(conn, inputs)]
 

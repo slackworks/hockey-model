@@ -10,6 +10,7 @@ import json
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.stints import Stint, stints_around
 
 SHOOTOUT = "SO"
@@ -155,6 +156,16 @@ def status_of(results: Sequence[CheckResult], *, settled: bool) -> str:
     if not settled:
         return "provisional"
     return "reconciled" if all(r.passed for r in results) else "incomplete"
+
+
+def check_game_state(states: Collection[str]) -> CheckResult:
+    """The play-by-play of a final game says that the game is final.
+
+    A feed that was read in play has the state ``LIVE`` or ``CRIT``, and it holds a part of the
+    game. The state is one value for the whole feed, so more than one value is a fault.
+    """
+    final = len(states) == 1 and next(iter(states)) in FINAL_STATES
+    return CheckResult("game_state", final, {} if final else {"states": sorted(states)})
 
 
 def check_shift_lengths(*, zero_length: int, negative_length: int) -> CheckResult:

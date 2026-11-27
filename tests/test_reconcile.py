@@ -6,6 +6,7 @@ from hockey_model.reconcile import (
     CheckResult,
     SituationEvent,
     check_espn_teams,
+    check_game_state,
     check_goals_by_player,
     check_goals_by_team,
     check_roster,
@@ -200,3 +201,19 @@ def test_a_goal_with_no_team_is_counted_apart_and_fails_the_check() -> None:
     result = check_goals_by_team({HOME: 3, AWAY: 3, None: 1}, HOME, AWAY, (3, 3), "REG")
     assert not result.passed
     assert result.detail["found"] == {HOME: 3, AWAY: 3, None: 1}
+
+
+@pytest.mark.parametrize("state", ["FINAL", "OFF"])
+def test_a_final_game_state_passes(state: str) -> None:
+    result = check_game_state({state})
+    assert result.passed
+    assert result.detail == {}
+
+
+@pytest.mark.parametrize(
+    "states", [{"LIVE"}, {"CRIT"}, {"PRE"}, {"FUT"}, {"OFF", "LIVE"}, set(), {""}]
+)
+def test_a_game_state_that_is_not_final_fails_the_check(states: set[str]) -> None:
+    result = check_game_state(states)
+    assert not result.passed
+    assert result.detail == {"states": sorted(states)}
