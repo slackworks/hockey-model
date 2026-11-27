@@ -34,6 +34,8 @@ The work of a module is the sum of `durations_by_key` over its mutants in the `.
 | sources.teams, sources.errors, sources.shape_errors, sources.sanitize | 58 | 10 |
 
 The total is 39,221 s of mutant work.
+`sources.policy` and `sources.starters` hold no function, so mutmut makes no mutant for them.
+They stay in shard 1, because the partition check needs every module that `only_mutate` names.
 
 ## Wall time of a shard
 
