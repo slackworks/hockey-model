@@ -32,10 +32,16 @@ class GameInputs:
 class GameStints:
     """The inputs of one game and the stints that they gave."""
 
-    game_id: int
-    pbp_obs: int
-    shift_obs: int
+    inputs: GameInputs
     stints: Stints
+
+    @property
+    def pbp_obs(self) -> int:
+        return self.inputs.pbp_obs
+
+    @property
+    def shift_obs(self) -> int:
+        return self.inputs.shift_obs
 
 
 def _latest_observation(conn: sqlite3.Connection, game_id: int, source: str) -> int | None:
@@ -130,4 +136,4 @@ def build_game_stints(conn: sqlite3.Connection, game_id: int) -> GameStints | No
     except HockeyModelError as exc:
         raise StoreError(f"game {game_id}: {exc}") from exc
     write_stints(conn, inputs, stints)
-    return GameStints(game_id, inputs.pbp_obs, inputs.shift_obs, stints)
+    return GameStints(inputs, stints)

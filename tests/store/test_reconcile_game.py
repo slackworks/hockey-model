@@ -1,0 +1,199 @@
+"""Tests for the reconciliation of one stored game (#35)."""
+
+import json
+import sqlite3
+from collections.abc import Iterator
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from seeding import add_game
+
+from hockey_model.sources.espn_summary import EspnSummary, parse_summary
+from hockey_model.sources.nhl import BOXSCORE_PARSER, parse_boxscore
+from hockey_model.sources.nhl_events import parse_pbp
+from hockey_model.sources.nhl_shifts import parse_shifts
+from hockey_model.store.archive import OK, Fetch, record_observation
+from hockey_model.store.boxscore_revisions import record_revision
+from hockey_model.store.db import connect
+from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
+from hockey_model.store.reconcile_game import reconcile_game
+from hockey_model.store.source_reads import BOXSCORES, ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
+
+FIXTURES = Path(__file__).parent.parent / "fixtures"
+GAME = 2025020709
+START = datetime(2026, 1, 10, 1, 0, tzinfo=UTC)
+EARLY = START + timedelta(days=1)
+LATE = START + timedelta(days=15)
+
+
+@pytest.fixture
+def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
+    connection = connect(tmp_path / "store.db")
+    add_game(connection, GAME, START.isoformat(), home="EDM", away="LAK", score=(3, 4))
+    connection.execute("UPDATE games SET last_period = 'SO'")
+    yield connection
+    connection.close()
+
+
+def _json(name: str) -> object:
+    return json.loads((FIXTURES / name).read_text())
+
+
+def _obs(conn: sqlite3.Connection, source: str, when: datetime) -> int:
+    return record_observation(
+        conn, Fetch(source, "https://example.test/u", when, OK, f"{source}:1", str(GAME), b"{}")
+    )
+
+
+def _store(conn: sqlite3.Connection, when: datetime, *, events=None) -> tuple[int, int]:
+    pbp, shift = _obs(conn, NHL_PBP, when), _obs(conn, NHL_SHIFTS, when)
+    rows = parse_pbp(_json("nhl/pbp_2025020709.json"), GAME)
+    write_pbp(conn, pbp, rows if events is None else replace(rows, events=events))
+    write_shifts(conn, shift, parse_shifts(_json("nhl/shifts_2025020709.json"), GAME))
+    return pbp, shift
+
+
+def _boxscore(conn: sqlite3.Connection) -> None:
+    body = (FIXTURES / "nhl" / "boxscore_2025020709.json").read_bytes()
+    fetch = Fetch(BOXSCORES, "https://example.test/b", LATE, OK, BOXSCORE_PARSER, str(GAME), body)
+    obs = record_observation(conn, fetch)
+    record_revision(conn, GAME, parse_boxscore(json.loads(body)), obs)
+
+
+def _status(conn: sqlite3.Connection) -> list[tuple]:
+    return conn.execute("SELECT * FROM event_status ORDER BY pbp_obs, shift_obs").fetchall()
+
+
+def _checks(conn: sqlite3.Connection) -> dict[str, bool]:
+    notes = json.loads(conn.execute("SELECT notes FROM latest_event_status").fetchone()[0])
+    return {n["check"]: n["passed"] for n in notes}
+
+
+def test_a_complete_game_after_the_last_revisit_is_reconciled(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    pbp, shift = _store(conn, LATE)
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "reconciled"
+    row = _status(conn)[0]
+    assert row[:4] == (GAME, pbp, shift, "reconciled")
+    assert row[4] == "2026-01-25T01:00:00.000000+00:00"
+    assert _checks(conn) == {
+        "goals_by_team": True,
+        "goals_by_player": True,
+        "roster": True,
+        "situation": True,
+        "dropped_shifts": True,
+    }
+
+
+def test_a_game_read_before_the_last_revisit_is_provisional(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, EARLY)
+    result = reconcile_game(conn, GAME, EARLY)
+    assert result is not None
+    assert result.status == "provisional"
+    assert all(_checks(conn).values())
+
+
+def test_a_missing_goal_makes_a_settled_game_incomplete_and_names_the_checks(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    events = parse_pbp(_json("nhl/pbp_2025020709.json"), GAME).events
+    first_goal = next(i for i, e in enumerate(events) if e.type == "goal")
+    _store(conn, LATE, events=events[:first_goal] + events[first_goal + 1 :])
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    checks = _checks(conn)
+    assert checks["goals_by_team"] is False
+    assert checks["goals_by_player"] is False
+
+
+def test_a_missing_goal_leaves_the_game_provisional_before_the_last_revisit(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    events = parse_pbp(_json("nhl/pbp_2025020709.json"), GAME).events
+    first_goal = next(i for i, e in enumerate(events) if e.type == "goal")
+    _store(conn, EARLY, events=events[:first_goal] + events[first_goal + 1 :])
+    result = reconcile_game(conn, GAME, EARLY)
+    assert result is not None
+    assert result.status == "provisional"
+    assert _checks(conn)["goals_by_team"] is False
+
+
+def test_a_game_with_no_boxscore_fails_the_player_check_with_a_reason(
+    conn: sqlite3.Connection,
+) -> None:
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
+    entry = next(n for n in notes if n["check"] == "goals_by_player")
+    assert entry == {
+        "check": "goals_by_player",
+        "passed": False,
+        "detail": {"reason": "the game has no boxscore"},
+    }
+
+
+def test_a_game_with_no_final_score_fails_the_team_check(conn: sqlite3.Connection) -> None:
+    conn.execute("UPDATE games SET state = 'LIVE', home_score = NULL, away_score = NULL")
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    assert _checks(conn)["goals_by_team"] is False
+
+
+def _espn(conn: sqlite3.Connection, summary: EspnSummary) -> None:
+    obs = record_observation(
+        conn, Fetch(ESPN_SUMMARY, "https://example.test/e", LATE, OK, "espn_summary:1", str(GAME))
+    )
+    write_espn(conn, obs, GAME, summary)
+
+
+def test_an_espn_summary_of_the_two_teams_passes_the_team_check(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    _espn(conn, parse_summary(_json("espn/summary_401803060.json"), "401803060"))
+    reconcile_game(conn, GAME, LATE)
+    assert _checks(conn)["espn_teams"] is True
+
+
+def test_an_espn_summary_of_another_team_fails_the_team_check(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    summary = parse_summary(_json("espn/summary_401803060.json"), "401803060")
+    skaters = tuple(replace(s, team="CGY") if s.team == "LAK" else s for s in summary.skaters)
+    _espn(conn, EspnSummary(skaters))
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    assert _checks(conn)["espn_teams"] is False
+
+
+def test_a_game_with_no_espn_summary_has_no_team_check(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    assert "espn_teams" not in _checks(conn)
+
+
+def test_a_second_run_replaces_the_row_of_the_same_pair(conn: sqlite3.Connection) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    reconcile_game(conn, GAME, LATE + timedelta(hours=1))
+    rows = _status(conn)
+    assert len(rows) == 1
+    assert rows[0][4] == "2026-01-25T02:00:00.000000+00:00"
+
+
+def test_a_game_with_no_shift_rows_gives_no_status(conn: sqlite3.Connection) -> None:
+    pbp = _obs(conn, NHL_PBP, LATE)
+    write_pbp(conn, pbp, parse_pbp(_json("nhl/pbp_2025020709.json"), GAME))
+    assert reconcile_game(conn, GAME, LATE) is None
+    assert _status(conn) == []
