@@ -196,22 +196,34 @@ def _write_status(
     )
 
 
+def _forget(conn: sqlite3.Connection, game_id: int) -> None:
+    """Delete every stint and every status of a game."""
+    for table in ("stints", "event_status"):
+        conn.execute(f"DELETE FROM {table} WHERE game_id = ?", (game_id,))
+
+
 def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> GameStatus | None:
     """Build the stints of a game, check them, and store the status. None means no inputs.
 
     The caller owns the transaction. A second call for the same pair of observations replaces
-    the stints and the status of that pair.
+    the stints and the status of that pair. A call that raises a store error deletes the stints
+    and the status of the game, because a status that its inputs no longer support is a claim.
     """
-    built = build_game_stints(conn, game_id)
-    if built is None:
-        return None
-    inputs = built.inputs
-    results = _checks(conn, built, inputs)
-    status = status_of(results, settled=_is_settled(conn, inputs))
+    try:
+        built = build_game_stints(conn, game_id)
+        if built is None:
+            return None
+        inputs = built.inputs
+        results = _checks(conn, built, inputs)
+        status = status_of(results, settled=_is_settled(conn, inputs))
+    except StoreError:
+        # No status means that the game is unknown. The old one must not outlive inputs that
+        # no longer reconcile.
+        _forget(conn, game_id)
+        raise
     game = GameStatus(game_id, inputs.pbp_obs, inputs.shift_obs, status, tuple(results))
-    notes = notes_json(results)
     write_stints(conn, built)
-    _write_status(conn, game, notes, now)
+    _write_status(conn, game, notes_json(results), now)
     return game
 
 

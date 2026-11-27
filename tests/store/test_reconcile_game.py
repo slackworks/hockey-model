@@ -19,7 +19,7 @@ from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observatio
 from hockey_model.store.boxscore_revisions import record_revision
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
-from hockey_model.store.reconcile_game import reconcile_game
+from hockey_model.store.reconcile_game import reconcile_game, reconcile_games
 from hockey_model.store.source_reads import BOXSCORES, ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -341,3 +341,49 @@ def test_a_play_by_play_that_is_still_live_fails_the_game_state_check(
     assert result is not None
     assert result.status == "incomplete"
     assert _checks(conn)["game_state"] is False
+
+
+def _served(conn: sqlite3.Connection) -> tuple[int, int]:
+    stints = conn.execute("SELECT COUNT(*) FROM latest_stints").fetchone()[0]
+    return stints, conn.execute("SELECT COUNT(*) FROM latest_event_status").fetchone()[0]
+
+
+def test_a_rerun_that_fails_removes_the_old_status_and_stints_of_the_game(
+    conn: sqlite3.Connection,
+) -> None:
+    """The probe of the review: the first run is reconciled, and the inputs stop parsing."""
+    _boxscore(conn)
+    _store(conn, LATE)
+    first = reconcile_game(conn, GAME, LATE)
+    assert first is not None
+    assert first.status == "reconciled"
+    assert _served(conn)[1] == 1
+    conn.execute("UPDATE games SET start_utc = 'garbage'")
+    with pytest.raises(StoreError, match="garbage"):
+        reconcile_game(conn, GAME, LATE)
+    assert _served(conn) == (0, 0)
+    assert _status(conn) == []
+
+
+def test_a_rerun_that_fails_in_the_builder_removes_the_old_status_too(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    conn.execute("UPDATE shifts SET team = 'CGY' WHERE rowid = (SELECT MIN(rowid) FROM shifts)")
+    with pytest.raises(StoreError, match="neither the home team"):
+        reconcile_game(conn, GAME, LATE)
+    assert _served(conn) == (0, 0)
+
+
+def test_a_failed_game_loses_its_status_and_another_game_keeps_its_own(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    reconcile_game(conn, GAME, LATE)
+    conn.execute("UPDATE games SET start_utc = 'garbage'")
+    report = reconcile_games(conn, LATE)
+    assert report.failed
+    assert _served(conn) == (0, 0)
