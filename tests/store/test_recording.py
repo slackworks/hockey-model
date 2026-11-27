@@ -280,3 +280,58 @@ def test_the_reading_defaults_to_no_parser_and_kept_bytes() -> None:
     reading = Reading("nhl_score:1")
     assert reading.keep_body is True
     assert reading.expected_absence is None
+
+
+ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/summary?event=1"
+
+
+def _summary_run(conn: sqlite3.Connection, body: bytes) -> RefreshRun:
+    return RefreshRun(conn, _OneBody(body), NOW)
+
+
+def _stored(conn: sqlite3.Connection) -> list[tuple[str, bytes | None, str | None]]:
+    rows = conn.execute("SELECT status, sha256, error FROM observations ORDER BY obs_id").fetchall()
+    return [
+        (status, None if sha is None else payload_bytes(conn, sha), error)
+        for status, sha, error in rows
+    ]
+
+
+def test_a_summary_body_that_is_not_json_is_not_archived(conn: sqlite3.Connection) -> None:
+    """The market keys may sit in bytes that the cleaner cannot read, so none are kept."""
+    run = _summary_run(conn, b'{"pickcenter": [1], "odds": "\xff')
+    unit = lambda stamp: len(run.client.get("espn_summary", ESPN_SUMMARY_URL))  # noqa: E731
+    run.attempt("espn_summary", ESPN_SUMMARY_URL, unit, Reading("espn_summary:1", key="2025020709"))
+    ((status, body, error),) = _stored(conn)
+    assert (status, body) == ("ok", None)
+    assert error is not None
+    assert "not archived" in error
+
+
+def test_a_summary_body_nested_too_deep_for_the_cleaner_is_not_archived(
+    conn: sqlite3.Connection,
+) -> None:
+    run = _summary_run(conn, b"[" * 5000 + b"]" * 5000)
+    unit = lambda stamp: len(run.client.get("espn_summary", ESPN_SUMMARY_URL))  # noqa: E731
+    run.attempt("espn_summary", ESPN_SUMMARY_URL, unit, Reading("espn_summary:1", key="2025020709"))
+    ((status, body, _),) = _stored(conn)
+    assert (status, body) == ("ok", None)
+
+
+def test_a_summary_body_loses_its_market_keys_before_the_archive(conn: sqlite3.Connection) -> None:
+    payload = with_market_fields(json.loads(fixture("espn/summary_401803060.json")))
+    run = _summary_run(conn, json.dumps(payload).encode())
+    unit = lambda stamp: len(run.client.get("espn_summary", ESPN_SUMMARY_URL))  # noqa: E731
+    run.attempt("espn_summary", ESPN_SUMMARY_URL, unit, Reading("espn_summary:1", key="2025020709"))
+    ((status, body, error),) = _stored(conn)
+    assert (status, error) == ("ok", None)
+    assert body is not None
+    for key in (b"pickcenter", b"odds", b"againstTheSpread"):
+        assert key not in body
+    assert conn.execute("SELECT key FROM observations").fetchone() == ("2025020709",)
+
+
+@pytest.mark.parametrize("key", ["", "12", "20250207090", "٢٠٢٥٠٢٠٧٠٩", "abcdefghij"])
+def test_a_reading_key_must_be_a_game_id(key: str) -> None:
+    with pytest.raises(StoreError, match="not an NHL game id"):
+        Reading("espn_summary:1", key=key)
