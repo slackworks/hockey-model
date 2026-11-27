@@ -102,6 +102,9 @@ class RefreshRun:
     # True once a step stopped because the time budget ran out. It is the only reason that
     # makes a stopped backfill a budget stall, so a source failure is never blamed on the budget.
     timed_out: bool = False
+    # The count of reads that found an event feed not published yet. A read of that kind is
+    # no failure, so a loop that counts failures compares this count before and after a unit.
+    unpublished: int = 0
     # The boxscores this refresh already read, so one game costs one request per refresh.
     boxscores_read: set[int] = field(default_factory=set)
     # The time of the newest read of the clock, for the progress lines.

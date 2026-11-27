@@ -10,17 +10,16 @@ Design: docs/design/pbp-shift-dataset.md
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
+from functools import partial
 
 from hockey_model import progress as progress_log
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import PBP_PARSER, fetch_pbp, pbp_url
 from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, fetch_shifts, shifts_url
-from hockey_model.sources.shape_errors import SourcePendingError
 from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS
-from hockey_model.store.db import StoreError
+from hockey_model.store.event_unit import Writer, event_unit
 from hockey_model.store.event_writes import write_pbp, write_shifts
-from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
 from hockey_model.store.refresh_nhl import RETRY_FAILED_AFTER
 from hockey_model.store.refresh_revisit import revisit_source
@@ -34,8 +33,6 @@ FIRST_READ_DAYS = max(REVISIT_AFTER_DAYS)
 # A refresh reconciles at most this many games that have events and no status.
 MAX_PENDING_RECONCILES = 100
 
-Writer = Callable[[sqlite3.Connection, int], None]
-
 
 @dataclass(frozen=True, slots=True)
 class _Kind:
@@ -43,15 +40,15 @@ class _Kind:
 
     parser: str
     url: Callable[[int], str]
-    fetch: Callable[[HttpClient, int], Writer]
+    fetch: Callable[[int, HttpClient], Writer]
 
 
-def _fetch_pbp(client: HttpClient, game_id: int) -> Writer:
+def _fetch_pbp(game_id: int, client: HttpClient) -> Writer:
     rows = fetch_pbp(client, game_id)
     return lambda conn, obs_id: write_pbp(conn, obs_id, rows)
 
 
-def _fetch_shifts(client: HttpClient, game_id: int) -> Writer:
+def _fetch_shifts(game_id: int, client: HttpClient) -> Writer:
     rows = fetch_shifts(client, game_id)
     return lambda conn, obs_id: write_shifts(conn, obs_id, rows)
 
@@ -60,40 +57,6 @@ _KINDS = {
     NHL_PBP: _Kind(PBP_PARSER, pbp_url, _fetch_pbp),
     NHL_SHIFTS: _Kind(SHIFTS_PARSER, shifts_url, _fetch_shifts),
 }
-
-
-def _unit(
-    run: RefreshRun, source: str, game_id: int, pending: list[int]
-) -> tuple[Callable[[datetime], int], Reading]:
-    """Return the unit that reads one game of ``source``, and how its bytes are archived.
-
-    The unit adds the game to ``pending`` when the feed is not published yet.
-    """
-    kind = _KINDS[source]
-    held: list[Writer] = []
-
-    def unit(_stamp: datetime) -> int:
-        held.clear()
-        held.append(kind.fetch(run.client, game_id))
-        return 1
-
-    def derive(conn: sqlite3.Connection, obs_id: int) -> None:
-        if len(held) != 1:
-            raise StoreError(
-                f"derive {source} {game_id}: the unit ended with no parsed rows; "
-                "the derive hook runs only after a good unit"
-            )
-        held[0](conn, obs_id)
-        run.reconcile_in_unit(game_id)
-
-    def not_yet(failure: Exception) -> str | None:
-        """Say that a feed is not published yet. Such a read never counts toward a known gap."""
-        if isinstance(failure, SourcePendingError):
-            pending.append(game_id)
-            return f"{source}: game {game_id}: {failure}; the next refresh reads it again"
-        return None
-
-    return unit, Reading(kind.parser, expected_absence=not_yet, derive=derive)
 
 
 def games_missing_events(run: RefreshRun, source: str) -> list[int]:
@@ -114,11 +77,11 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
     The read stops after three failed units in a row, and when the time budget is spent. A game
     whose last read failed a day ago or less is left for the next refresh.
     """
-    url_of = _KINDS[source].url
+    kind = _KINDS[source]
+    url_of = kind.url
     gaps = run.skipped(source)
     failures = 0
     gapped = waiting = 0
-    pending: list[int] = []
     for index, game_id in enumerate(game_ids):
         left = len(game_ids) - index
         if failures >= MAX_UNIT_FAILURES:
@@ -134,11 +97,13 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
         elif failed_since(run.conn, source, url, run.now - RETRY_FAILED_AFTER):
             waiting += 1
         else:
-            unit, reading = _unit(run, source, game_id, pending)
+            unit, reading = event_unit(
+                run, source, game_id, kind.parser, partial(kind.fetch, game_id)
+            )
+            before = run.unpublished
             ok = run.attempt(source, url, unit, reading)
             # The host answered for a feed that is not published yet, so the read is no failure.
-            failures = failures if pending else (0 if ok else failures + 1)
-            pending.clear()
+            failures = failures if run.unpublished > before else (0 if ok else failures + 1)
         progress_log.advance()
     _note_skips(run, source, gapped, waiting)
 
