@@ -19,6 +19,9 @@ MISSING_IN_COPY = ("scripts", "specs", ".github")
 # A module reaches the guard by calling the helper, directly or through the import.
 _GUARD = re.compile(r"require_path\(")
 _ROOT = re.compile(r"parents\[\d\]")
+# The repo-root scripts path that tests/report_script_support.py exports. A module imports it
+# and names no quoted directory, so the check above cannot see the read (#323).
+_SCRIPTS_CONSTANT = re.compile(r"\bSCRIPTS\b")
 # A test module that calls one of these never names a repo-root path itself, because the
 # helper resolves it. The helper guards the read (#155). Listing the names here makes that
 # promise checkable: a new helper that reads a repo-root path must guard it or join this set.
@@ -36,11 +39,19 @@ def _has_guard(text: str) -> bool:
 
 
 def _unguarded_reads(path: Path) -> list[str]:
-    """Return each missing-in-copy directory that ``path`` names without a guard."""
+    """Return each missing-in-copy directory that ``path`` names without a guard.
+
+    A module names ``scripts`` in two ways: a quoted directory name next to a ``parents[N]``
+    walk, or the ``SCRIPTS`` constant that ``report_script_support`` exports. The constant is a
+    repo-root path with no guard, so a module that uses it must call ``require_path`` itself.
+    """
     text = path.read_text(encoding="utf-8")
-    if _has_guard(text) or not _ROOT.search(text):
+    if _has_guard(text):
         return []
-    return [name for name in MISSING_IN_COPY if f'"{name}"' in text]
+    named = [name for name in MISSING_IN_COPY if f'"{name}"' in text] if _ROOT.search(text) else []
+    if _SCRIPTS_CONSTANT.search(text) and "scripts" not in named:
+        named.append("scripts")
+    return named
 
 
 @pytest.mark.parametrize("path", _collected_modules(), ids=lambda p: str(p.relative_to(ROOT)))

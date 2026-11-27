@@ -4,8 +4,11 @@ import json
 import subprocess
 from pathlib import Path
 
+from mutation_copy import require_path
 from report_script_support import DAY, SCRIPTS, TAG, _env
 
+# A mutation copy holds no scripts/ directory, so the module skips there (#323).
+RELEASE_GAP = require_path(SCRIPTS / "release-gap.sh")
 NEWEST_AT = "2026-11-04T10:00:00.000000+00:00"
 
 
@@ -27,7 +30,7 @@ def _gap(fakes: Path, tmp_path: Path, newest_file: str, assets: list[str]) -> st
         FAKE_ASSETS="\n".join(assets),
         FAKE_REMOTE_DIR=str(remote),
     )
-    script = f'source "{SCRIPTS}/release-gap.sh"; release_gap "{TAG}" "{work}" "{DAY}"'
+    script = f'source "{RELEASE_GAP}"; release_gap "{TAG}" "{work}" "{DAY}"'
     result = subprocess.run(
         ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
     )
