@@ -29,6 +29,36 @@ SOURCE_FAILURES = (SourceError, SourceShapeError, SourceParseError, StoreError)
 MAX_UNIT_FAILURES = 3
 
 
+class DeriveError(HockeyModelError):
+    """Raised when the rows that a good unit derives cannot be written.
+
+    The bug is local, so it is not a source failure: the unit rolls back, no failed read is
+    recorded, and the refresh stops with the cause named.
+    """
+
+
+def _derive(
+    derive: Callable[[sqlite3.Connection, int], None],
+    conn: sqlite3.Connection,
+    observed: list[int],
+    where: tuple[str, str],
+) -> None:
+    """Run the derive hook of a unit on the observation that holds its bytes.
+
+    The hook takes one observation, so a unit with a hook makes exactly one request.
+    """
+    source, url = where
+    if len(observed) != 1:
+        raise DeriveError(
+            f"derive {source} {url}: the unit made {len(observed)} recorded request(s), and a "
+            "unit with a derive hook makes exactly one; split the unit by request"
+        )
+    try:
+        derive(conn, observed[0])
+    except StoreError as exc:
+        raise DeriveError(f"derive {source} {url}: {exc}") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class RefreshReport:
     """What one refresh wrote, what failed, and what the reader of the data must credit."""
@@ -135,8 +165,8 @@ class RefreshRun:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
                 observed = self._observe(capture, recorded.records, None)
-                if reading.derive is not None and observed:
-                    reading.derive(self.conn, observed[-1])
+                if reading.derive is not None:
+                    _derive(reading.derive, self.conn, observed, (source, url))
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:
