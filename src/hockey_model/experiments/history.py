@@ -166,15 +166,17 @@ def deleted_record_ids(present: list[str], repo_root: Path) -> list[str]:
 
 
 def _deletions(repo_root: Path) -> list[tuple[str, str]]:
-    """Return ``(commit, record_id)`` for each deletion on the first-parent line of HEAD.
+    """Return ``(commit, record_id)`` for each deletion in every commit reachable from HEAD.
 
-    A merge commit lists the files that it removed from its first parent, so a record that
-    only a merge deleted, and a record that a side branch deleted, both show up.
+    A deletion on a side branch that a merge brought in shows up here, because a merge
+    commit does not repeat it on the first-parent line (#319). Each deletion is read in its
+    own commit, so ``_was_outlived`` compares it with that commit's parent. A merge shows what
+    it removed from its first parent, so a deletion that only the merge made is listed too.
     """
     log = _git(
         [
             "log",
-            "--first-parent",
+            "--diff-merges=first-parent",
             "--no-renames",
             "--diff-filter=D",
             "--name-only",
