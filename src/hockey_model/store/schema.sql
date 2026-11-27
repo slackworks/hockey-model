@@ -193,8 +193,8 @@ CREATE TABLE goalie_game_revisions (
 );
 
 -- The play-by-play, shift chart, and ESPN summary of a game (#35). Each derived row names the
--- observation that gave it, so a rebuild replaces the rows of one observation. A stint names the
--- play-by-play and the shift chart that it came from. Design: docs/design/pbp-shift-dataset.md
+-- observation that gave it, so a rebuild replaces the rows of one observation.
+-- Design: docs/design/pbp-shift-dataset.md
 
 CREATE TABLE pbp_roster (
     obs_id INTEGER NOT NULL REFERENCES observations (obs_id),

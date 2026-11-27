@@ -394,3 +394,22 @@ def test_a_feed_with_no_game_state_is_a_named_error() -> None:
     del payload["gameState"]
     with pytest.raises(SourceParseError, match="gameState"):
         parse_pbp(payload, GAME)
+
+
+@pytest.mark.parametrize("value", [0, "", [], False])
+def test_a_details_value_of_the_wrong_type_is_a_named_error_even_when_it_is_falsy(
+    value: object,
+) -> None:
+    payload = load()
+    payload["plays"][3]["details"] = value
+    with pytest.raises(SourceParseError, match="details"):
+        parse_pbp(payload, GAME)
+
+
+def test_a_play_with_null_or_no_details_has_no_details() -> None:
+    payload = load()
+    payload["plays"][3]["details"] = None
+    del payload["plays"][4]["details"]
+    events = parse_pbp(payload, GAME).events
+    assert (events[3].x, events[3].goalie_in_net) == (None, None)
+    assert (events[4].x, events[4].goalie_in_net) == (None, None)

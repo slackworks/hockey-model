@@ -222,7 +222,8 @@ def _parse_event(raw: object, codes: Mapping[int, str], home: str) -> EventRow:
     period, period_type = _period(play, where)
     seconds = clock_seconds(field(SOURCE, play, "timeInPeriod", where), where)
     kind = str_field(SOURCE, play, "typeDescKey", where)
-    details = as_mapping(SOURCE, play.get("details") or {}, f"{where} details")
+    raw_details = play.get("details")
+    details = {} if raw_details is None else as_mapping(SOURCE, raw_details, f"{where} details")
     owner_id = _optional_int(details, "eventOwnerTeamId", where)
     if owner_id is not None and owner_id not in codes:
         raise SourceParseError(SOURCE, f"{where} names unknown team id {owner_id}")

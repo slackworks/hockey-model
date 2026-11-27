@@ -130,6 +130,7 @@ Each check writes its result into `event_status.notes`.
 3. Each skater's merged shift time is within `TOI_TOLERANCE_S` of `skater_games.toi_seconds`. Measure the differences on the first 500 backfilled games, set the constant at the 99th percentile, rounded up to 5 seconds, and freeze it in that pull request.
 4. In the ESPN sample, stint time by strength is within `STRENGTH_TOI_TOLERANCE_S` of `PPTOI`, `SHTOI`, and `ESTOI`, and the merged shift count equals `SHFT`. Set the tolerance in the same way.
 5. A stint with fewer skaters than `situation_code` gives, at an event inside it, marks the game `incomplete`. No player is added.
+6. The two teams of the ESPN summary are the two teams of the NHL game that the observation key names. The parser checks that the summary lists two teams, and the refresh step maps an ESPN event to an NHL game, so a wrong map would store rows under the wrong game. A mismatch marks the game `incomplete`. Tracked in #35.
 
 Status: `provisional` until the last revisit (`REVISIT_AFTER_DAYS` of the archive design). Then `reconciled` when every check passed, else `incomplete`.
 

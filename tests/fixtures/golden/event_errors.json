@@ -171,6 +171,7 @@
     "SourceParseError: read nhl_pbp data: play 354 field 'drawnByPlayerId' must be an integer, got None",
     "SourceParseError: read nhl_pbp data: play 354 field 'drawnByPlayerId' must be an integer, got []",
     "SourceParseError: read nhl_pbp data: play 53 details must be an object, got int",
+    "SourceParseError: read nhl_pbp data: play 53 details must be an object, got list",
     "SourceParseError: read nhl_pbp data: play 53 details must be an object, got str",
     "SourceParseError: read nhl_pbp data: play 53 field 'eventOwnerTeamId' is out of range: -1",
     "SourceParseError: read nhl_pbp data: play 53 field 'eventOwnerTeamId' is out of range: 9223372036854775808",
