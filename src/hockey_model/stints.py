@@ -103,15 +103,6 @@ def _stint(
     )
 
 
-def _same_players(a: Stint, b: Stint) -> bool:
-    return (a.home_skaters, a.away_skaters, a.home_goalies, a.away_goalies) == (
-        b.home_skaters,
-        b.away_skaters,
-        b.home_goalies,
-        b.away_goalies,
-    )
-
-
 def _period_stints(
     period: int, intervals: Sequence[Interval], goalies: frozenset[int], home: str
 ) -> list[Stint]:
@@ -133,7 +124,7 @@ def _period_stints(
             continue
         stint = _stint((period, low, high), active.values(), goalies, home)
         previous = stints[-1] if stints else None
-        if previous is not None and previous.end == low and _same_players(previous, stint):
+        if previous is not None and previous.end == low and _players(previous) == _players(stint):
             stints[-1] = Stint(period, previous.start, high, *_players(previous))
         else:
             stints.append(stint)

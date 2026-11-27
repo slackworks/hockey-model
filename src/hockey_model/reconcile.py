@@ -104,18 +104,14 @@ def check_roster(shift_players: Iterable[int], positions: Mapping[int, str]) -> 
     return CheckResult("roster", passed, detail)
 
 
-def _skaters_of(code: str) -> tuple[int, int]:
-    """Return the home and the away skaters that a situation code names."""
-    return int(code[2]), int(code[1])
-
-
 def _situation_failure(event: SituationEvent, stints: Sequence[Stint]) -> dict[str, object] | None:
     if event.code is None:
         return None
     around = stints_around(stints, event.period, event.second)
     if not around:
         return {"event": event.event_id, "reason": "no stint holds the event"}
-    home, away = _skaters_of(event.code)
+    # The four digits are the away goalie, the away skaters, the home skaters, the home goalie.
+    home, away = int(event.code[2]), int(event.code[1])
     if any(len(s.home_skaters) >= home and len(s.away_skaters) >= away for s in around):
         return None
     owner = around[0]
