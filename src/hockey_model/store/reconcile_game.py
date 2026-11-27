@@ -6,6 +6,7 @@ Design: docs/design/pbp-shift-dataset.md
 """
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -22,8 +23,9 @@ from hockey_model.reconcile import (
 )
 from hockey_model.store.archive import OK, SHAPE_ERROR
 from hockey_model.store.boxscore_revisions import LATEST, boxscore_rows
+from hockey_model.store.db import StoreError
 from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
-from hockey_model.store.source_reads import ESPN_SUMMARY
+from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
 from hockey_model.store.stint_build import GameInputs, GameStints, build_game_stints
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
@@ -160,3 +162,57 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
     notes = notes_json(results, dropped_shifts=len(built.stints.dropped))
     _write_status(conn, game, notes, now)
     return game
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileReport:
+    """What ``reconcile_games`` did: the games it read and the status that each one got."""
+
+    games: int
+    provisional: int
+    reconciled: int
+    incomplete: int
+    skipped: tuple[int, ...]
+    failed: tuple[str, ...]
+
+
+def _game_ids(conn: sqlite3.Connection) -> list[int]:
+    found = conn.execute(
+        "SELECT DISTINCT CAST(key AS INTEGER) FROM observations"
+        " WHERE source IN (?, ?) AND key IS NOT NULL ORDER BY 1",
+        (NHL_PBP, NHL_SHIFTS),
+    )
+    return [game_id for (game_id,) in found]
+
+
+def reconcile_games(
+    conn: sqlite3.Connection, now: datetime, game_ids: Sequence[int] | None = None
+) -> ReconcileReport:
+    """Reconcile each named game, or each game with a play-by-play or a shift chart.
+
+    A game with no inputs is skipped, and a game that raises a store error is named in
+    ``failed``, so one bad game does not stop the rest. The run is one transaction.
+    """
+    ids = _game_ids(conn) if game_ids is None else list(game_ids)
+    counts = {"provisional": 0, "reconciled": 0, "incomplete": 0}
+    skipped: list[int] = []
+    failed: list[str] = []
+    with conn:
+        for game_id in ids:
+            try:
+                game = reconcile_game(conn, game_id, now)
+            except StoreError as exc:
+                failed.append(str(exc))
+                continue
+            if game is None:
+                skipped.append(game_id)
+            else:
+                counts[game.status] += 1
+    return ReconcileReport(
+        len(ids),
+        counts["provisional"],
+        counts["reconciled"],
+        counts["incomplete"],
+        tuple(skipped),
+        tuple(failed),
+    )

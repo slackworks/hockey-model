@@ -1,4 +1,4 @@
-"""The ``store`` command group: ``upgrade`` the file, ``rebuild`` rows, and list ``gaps``."""
+"""The ``store`` command group: ``upgrade``, ``rebuild``, ``reconcile``, and list ``gaps``."""
 
 import argparse
 import sqlite3
@@ -10,6 +10,7 @@ from pathlib import Path
 from hockey_model.live_gaps import live_gap_report
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.rebuild import rebuild_source
+from hockey_model.store.reconcile_game import reconcile_games
 from hockey_model.store.upgrade import upgrade_store
 
 
@@ -44,6 +45,14 @@ def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
         "--allow-refused",
         action="store_true",
         help="drop a payload that an earlier parser accepted and this parser refuses",
+    )
+    reconcile = sub.add_parser(
+        "reconcile",
+        help="build the stints and store the reconciliation status of each stored game",
+    )
+    _add_db(reconcile, "store file to read and write; default is HOCKEY_MODEL_DB")
+    reconcile.add_argument(
+        "--game", type=int, default=None, help="one NHL game id; the default is every game"
     )
     gaps = sub.add_parser(
         "gaps", help="list the feeds that are known gaps, as JSON, and say which are too old"
@@ -90,15 +99,33 @@ def _rebuild(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
         conn.close()
 
 
+def _reconcile(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
+    if not db_path.is_file():
+        raise StoreError(
+            f"store reconcile: there is no store file at {str(db_path)!r}; set HOCKEY_MODEL_DB "
+            "or pass --db, and run `hockey-model store upgrade` first"
+        )
+    conn: sqlite3.Connection = connect(db_path)
+    try:
+        games = None if args.game is None else [args.game]
+        report = reconcile_games(conn, datetime.now(UTC), games)
+    finally:
+        conn.close()
+    return asdict(report), 1 if report.failed else 0
+
+
 def run_store_group(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
     """Run a ``store`` subcommand and return its JSON payload and exit code."""
     if args.store_command == "upgrade":
         return asdict(upgrade_store(db_path, if_missing=args.if_missing)), 0
     if args.store_command == "rebuild":
         return _rebuild(args, db_path)
+    if args.store_command == "reconcile":
+        return _reconcile(args, db_path)
     if args.store_command == "gaps":
         return _gaps(args, db_path)
     raise StoreError(
         "store: name a subcommand, such as `hockey-model store upgrade`, "
-        "`hockey-model store rebuild`, or `hockey-model store gaps --live`"
+        "`hockey-model store rebuild`, `hockey-model store reconcile`, or "
+        "`hockey-model store gaps --live`"
     )
