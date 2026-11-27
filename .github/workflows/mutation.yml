@@ -11,7 +11,7 @@ on:
       step_minutes:
         description: >-
           Minutes that each shard may run mutmut, a whole number from 1 to 345. Leave it empty for
-          the scheduled limit of 60 minutes. A longer limit lets a shard finish, so that its per-mutant
+          the scheduled limit of 75 minutes. A longer limit lets a shard finish, so that its per-mutant
           durations size the shard table (#293).
         required: false
         type: string
@@ -74,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

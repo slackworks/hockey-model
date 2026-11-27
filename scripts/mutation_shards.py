@@ -47,24 +47,26 @@ RESULT_FIELDS = (
     "estimated_durations_by_key",
 )
 # Balanced from the per-mutant durations that CI records in each .meta file, not from the file
-# count. Each shard holds about 7850 s of mutant work, which is about 40 minutes of wall time.
-# The work of each module, the fit, and the reason for five shards:
+# count. Each shard holds about 6700 s of mutant work, which is about 35 minutes of wall time.
+# The work of each module, the fit, and the reason for six shards:
 # docs/design/mutation-shard-times.md
 SHARDS: tuple[tuple[str, ...], ...] = (
-    ("experiments.models", "backtest.golden"),
+    ("game_model.logistic",),
+    ("experiments.models", "sources.moneypuck", "sources.payload"),
+    ("backtest.runner", "json_schema", "game_model.elo", "sources.http"),
+    ("backtest.metrics", "backtest.season_key", "backtest.shards"),
     (
-        "game_model.logistic",
+        "backtest.row_cache",
         "sources.nhl",
-        "sources.moneypuck",
+        "backtest.units",
         "sources.errors",
         "sources.policy",
         "sources.sanitize",
         "sources.shape_errors",
         "sources.starters",
+        "sources.teams",
     ),
-    ("backtest.metrics", "json_schema", "sources.daily_faceoff", "game_model.elo", "sources.teams"),
-    ("backtest.row_codec", "backtest.season_key", "sources.espn", "sources.payload"),
-    ("backtest.row_cache", "backtest.runner", "backtest.shards", "backtest.units", "sources.http"),
+    ("backtest.row_codec", "sources.espn", "sources.daily_faceoff", "backtest.golden"),
 )
 
 

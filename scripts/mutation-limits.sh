@@ -4,7 +4,7 @@
 # Usage: mutation-limits.sh [STEP_MINUTES]
 #
 # STEP_MINUTES is the number of minutes that one shard may run mutmut. An empty value or no value
-# gives the scheduled limit of 60 minutes. A whole number from 1 to 345 gives that step limit.
+# gives the scheduled limit of 75 minutes. A whole number from 1 to 345 gives that step limit.
 # The job limit is always 15 minutes longer than the step limit, for the setup and the upload of
 # the results. GitHub stops a job at 360 minutes.
 #
@@ -16,7 +16,7 @@
 # Diagnostics go to stderr, so the output is safe to append to GITHUB_OUTPUT.
 set -euo pipefail
 
-readonly DEFAULT_STEP=60
+readonly DEFAULT_STEP=75
 readonly MAX_STEP=345
 readonly JOB_MARGIN=15
 
