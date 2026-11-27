@@ -9,8 +9,10 @@ import sqlite3
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
+from hockey_model.store.db import StoreError
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.timestamps import parse_iso_utc
+from hockey_model.types import HockeyModelError
 
 
 def _due_at(start: datetime, newest_read: datetime, after_days: Sequence[int]) -> datetime | None:
@@ -20,6 +22,17 @@ def _due_at(start: datetime, newest_read: datetime, after_days: Sequence[int]) -
         if newest_read < point:
             return point
     return None
+
+
+def _times(game_id: int, start: str, newest: str) -> tuple[datetime, datetime]:
+    """Return the start of the game and the time of its newest good read, as times."""
+    try:
+        return parse_iso_utc(start), parse_iso_utc(newest)
+    except (ValueError, HockeyModelError) as exc:
+        raise StoreError(
+            f"read the revisit times of game {game_id}: start {start!r} or read {newest!r} is "
+            f"not a stored UTC time ({exc}); repair the row in games or observations"
+        ) from exc
 
 
 def boxscores_due(conn: sqlite3.Connection, now: datetime, after_days: Sequence[int]) -> list[int]:
@@ -36,7 +49,7 @@ def boxscores_due(conn: sqlite3.Connection, now: datetime, after_days: Sequence[
     )
     due: list[tuple[datetime, int]] = []
     for game_id, start, newest in cursor:
-        point = _due_at(parse_iso_utc(start), parse_iso_utc(newest), after_days)
+        point = _due_at(*_times(int(game_id), start, newest), after_days)
         if point is not None and point <= now:
             due.append((point, int(game_id)))
     return [game_id for _, game_id in sorted(due)]

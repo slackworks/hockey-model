@@ -1,5 +1,6 @@
 """The revisit step of a refresh: read final boxscores again, to keep each correction (#82)."""
 
+from hockey_model.sources.nhl import boxscore_url
 from hockey_model.store.boxscore_revisit import boxscores_due
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import (
@@ -17,7 +18,14 @@ def revisit_boxscores(run: RefreshRun) -> None:
     and a wait after a failed read. A game left out by the bound is named in the notes, and the
     next refresh reads it.
     """
-    due = boxscores_due(run.conn, run.now, REVISIT_AFTER_DAYS)
+    gaps = run.skipped(BOXSCORES)
+    # A known gap would use a slot of the bound and then be dropped, so the bound counts only the
+    # games that a read can reach.
+    due = [
+        game_id
+        for game_id in boxscores_due(run.conn, run.now, REVISIT_AFTER_DAYS)
+        if boxscore_url(game_id) not in gaps
+    ]
     if len(due) > MAX_REVISITS:
         run.notes.append(
             f"{BOXSCORES}: {len(due) - MAX_REVISITS} boxscore revisit(s) wait for the next "

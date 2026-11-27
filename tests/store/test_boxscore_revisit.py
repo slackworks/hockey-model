@@ -9,10 +9,11 @@ import pytest
 from refresh_support import FakeClient
 from seeding import add_game
 
+from hockey_model.sources.nhl import boxscore_url
 from hockey_model.store import refresh_revisit
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_revisit import boxscores_due
-from hockey_model.store.db import connect
+from hockey_model.store.db import StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.source_reads import BOXSCORES
 
@@ -97,3 +98,30 @@ def test_a_refresh_reads_at_most_the_bound_and_names_the_rest(
     boxscores = [u for u in client.urls if "/boxscore" in u]
     assert len(boxscores) == 1
     assert any("revisit(s) wait for the next refresh" in note for note in report.notes)
+
+
+def test_a_known_gap_does_not_use_a_slot_of_the_bound(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_revisit, "MAX_REVISITS", 1)
+    refresh(conn, FakeClient(), now=datetime(2026, 1, 10, 21, 0, tzinfo=UTC))
+    now = datetime(2026, 1, 14, 9, 0, tzinfo=UTC)
+    first, second, *_ = boxscores_due(conn, now, AFTER_DAYS)
+    for stamp in ("2026-01-11T00:00:00.000000+00:00", "2026-01-12T00:00:00.000000+00:00"):
+        conn.execute(
+            "INSERT INTO source_reads (source, url, fetched_at, ok, error, permanent)"
+            " VALUES (?, ?, ?, 0, 'HTTP 503', 0)",
+            (BOXSCORES, boxscore_url(first), stamp),
+        )
+    client = FakeClient()
+    refresh(conn, client, now=now)
+    assert [u for u in client.urls if "/boxscore" in u] == [boxscore_url(second)]
+
+
+def test_a_stored_time_that_is_not_a_time_names_the_game(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO games (game_id, state, start_utc, fetched_at) VALUES (7, 'OFF', 'soon', 'x')"
+    )
+    _read(conn, 7, START)
+    with pytest.raises(StoreError, match="game 7"):
+        boxscores_due(conn, START + timedelta(days=30), AFTER_DAYS)
