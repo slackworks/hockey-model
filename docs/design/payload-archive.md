@@ -56,7 +56,7 @@ CREATE TABLE boxscore_revisions (
     derivation INTEGER NOT NULL,      -- 1 for the first parse of the payloads; a rebuild adds the next
     revision INTEGER NOT NULL,        -- 1 for the first final boxscore of the derivation
     obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
-    parser TEXT NOT NULL,             -- 'nhl_boxscore:1', or 'legacy:unavailable' for a row with no bytes
+    parser TEXT NOT NULL,             -- 'nhl_boxscore:2', or 'legacy:unavailable' for a row with no bytes
     fetched_at TEXT NOT NULL,         -- the time of the observation, never a time of the rebuild
     completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'incomplete')),
     identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched', 'unverified')),

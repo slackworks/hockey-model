@@ -12,7 +12,7 @@ from refresh_support import BOX_URL, MAIN_GAME, FakeClient
 from seeding import add_game, drop_revision_tables
 
 from hockey_model.sources.errors import SourceError
-from hockey_model.sources.nhl import BoxscoreRows, parse_boxscore
+from hockey_model.sources.nhl import BOXSCORE_PARSER, BoxscoreRows, parse_boxscore
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import (
     FIRST,
@@ -70,7 +70,7 @@ def test_the_first_read_of_a_final_game_is_revision_one_of_its_observation(
         (MAIN_GAME,),
     ).fetchone()
     assert row[0] == 1
-    assert row[2:5] == ("nhl_boxscore:1", "complete", "matched")
+    assert row[2:5] == (BOXSCORE_PARSER, "complete", "matched")
     obs = conn.execute(
         "SELECT source, key, status, sha256 FROM observations WHERE obs_id = ?", (row[1],)
     ).fetchone()

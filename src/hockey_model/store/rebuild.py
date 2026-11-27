@@ -10,14 +10,16 @@ from hockey_model.store.source_reads import BOXSCORES
 REBUILDABLE = (BOXSCORES,)
 
 
-def rebuild_source(conn: sqlite3.Connection, source: str, parser: str) -> RebuildReport:
+def rebuild_source(
+    conn: sqlite3.Connection, source: str, parser: str, *, allow_refused: bool = False
+) -> RebuildReport:
     """Parse the archived payloads of ``source`` again with ``parser``, and report what changed.
 
     The command makes no network request. Raises ``StoreError`` for a source that has no derived
     rows to rebuild, and for a parser that is not the one the code holds.
     """
     if source == BOXSCORES:
-        return rebuild_boxscores(conn, parser)
+        return rebuild_boxscores(conn, parser, allow_refused=allow_refused)
     raise StoreError(
         f"rebuild {source!r}: this source has no rows to rebuild; "
         f"pass --source one of {', '.join(REBUILDABLE)}"

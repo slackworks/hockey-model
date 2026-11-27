@@ -11,7 +11,7 @@ import pytest
 from refresh_support import BOX_URL, MAIN_GAME, FakeClient
 from seeding import add_game, drop_revision_tables
 
-from hockey_model.sources.nhl import BoxscoreRows, parse_boxscore
+from hockey_model.sources.nhl import BOXSCORE_PARSER, BoxscoreRows, parse_boxscore
 from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import boxscore_rebuild
 from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observation
@@ -24,8 +24,8 @@ from hockey_model.store.upgrade import upgrade_store
 from hockey_model.store_cli import run_store_command
 
 DAY_ONE = datetime(2026, 1, 10, 21, 0, tzinfo=UTC)
-PARSER = "nhl_boxscore:1"
-NEXT_PARSER = "nhl_boxscore:2"
+PARSER = BOXSCORE_PARSER
+NEXT_PARSER = "nhl_boxscore:99"
 URL = f"{BOX_URL}{MAIN_GAME}/boxscore"
 
 
@@ -194,7 +194,7 @@ def test_a_legacy_revision_carries_into_the_new_derivation(
 def test_a_rebuild_refuses_a_stale_parser_and_an_unknown_source(
     conn: sqlite3.Connection,
 ) -> None:
-    with pytest.raises(StoreError, match="--parser nhl_boxscore:1"):
+    with pytest.raises(StoreError, match=f"--parser {BOXSCORE_PARSER}"):
         rebuild_source(conn, BOXSCORES, "nhl_boxscore:0")
     with pytest.raises(StoreError, match="nhl_boxscores"):
         rebuild_source(conn, "espn_starters", PARSER)
@@ -206,7 +206,12 @@ def test_the_store_command_prints_the_report(tmp_path: Path) -> None:
     refresh(store, FakeClient(), now=DAY_ONE)
     store.close()
     args = argparse.Namespace(
-        command="store", store_command="rebuild", db=str(path), source=BOXSCORES, parser=PARSER
+        command="store",
+        store_command="rebuild",
+        db=str(path),
+        source=BOXSCORES,
+        parser=PARSER,
+        allow_refused=False,
     )
     payload, code = run_store_command(args)
     assert code == 0
@@ -222,6 +227,7 @@ def test_the_store_command_names_a_missing_store(tmp_path: Path) -> None:
         db=str(tmp_path / "none.db"),
         source=BOXSCORES,
         parser=PARSER,
+        allow_refused=False,
     )
     with pytest.raises(StoreError, match="no store file"):
         run_store_command(args)
@@ -265,3 +271,54 @@ def test_a_damaged_payload_row_names_the_game_and_the_observation(
     conn.commit()
     with pytest.raises(StoreError, match=rf"rebuild {BOXSCORES} game \d+ observation \d+"):
         rebuild_source(conn, BOXSCORES, PARSER)
+
+
+def _duplicate_player_payload() -> bytes:
+    body = json.loads(FakeClient().get("nhl", URL))
+    forwards = body["playerByGameStats"]["homeTeam"]["forwards"]
+    forwards.append(dict(forwards[0]))
+    return json.dumps(body).encode()
+
+
+def test_a_payload_that_an_older_parser_accepted_needs_allow_refused_to_leave(
+    conn: sqlite3.Connection,
+) -> None:
+    """The stricter parser (#82) refuses a repeated player that version 1 stored as ok."""
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    record_observation(
+        conn,
+        Fetch(
+            BOXSCORES,
+            URL,
+            DAY_ONE,
+            OK,
+            "nhl_boxscore:1",
+            str(MAIN_GAME),
+            _duplicate_player_payload(),
+        ),
+    )
+    with pytest.raises(StoreError, match="--allow-refused"):
+        rebuild_source(conn, BOXSCORES, PARSER)
+    assert conn.execute("SELECT MAX(derivation) FROM boxscore_revisions").fetchone() == (1,)
+
+
+def test_allow_refused_drops_the_payload_and_names_it(conn: sqlite3.Connection) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    record_observation(
+        conn,
+        Fetch(
+            BOXSCORES,
+            URL,
+            DAY_ONE,
+            OK,
+            "nhl_boxscore:1",
+            str(MAIN_GAME),
+            _duplicate_player_payload(),
+        ),
+    )
+    report = rebuild_source(conn, BOXSCORES, PARSER, allow_refused=True)
+    assert report.rejected == 1
+    assert "twice" in report.refused[0]
+    latest = boxscore_rows(conn, MAIN_GAME, policy=LATEST)
+    assert latest is not None
+    assert latest.revision == 1

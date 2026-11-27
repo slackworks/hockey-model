@@ -40,6 +40,11 @@ def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
         required=True,
         help="the parser of this code, as name:version; a stale name is refused",
     )
+    rebuild.add_argument(
+        "--allow-refused",
+        action="store_true",
+        help="drop a payload that an earlier parser accepted and this parser refuses",
+    )
     gaps = sub.add_parser(
         "gaps", help="list the feeds that are known gaps, as JSON, and say which are too old"
     )
@@ -78,7 +83,9 @@ def _rebuild(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
         )
     conn: sqlite3.Connection = connect(db_path)
     try:
-        return asdict(rebuild_source(conn, args.source, args.parser)), 0
+        return asdict(
+            rebuild_source(conn, args.source, args.parser, allow_refused=args.allow_refused)
+        ), 0
     finally:
         conn.close()
 

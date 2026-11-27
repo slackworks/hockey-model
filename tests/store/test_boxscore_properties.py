@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 from refresh_support import MAIN_GAME, SCORE_TEAMS, FakeClient
 from seeding import add_game
 
-from hockey_model.sources.nhl import BoxscoreRows, parse_boxscore
+from hockey_model.sources.nhl import BOXSCORE_PARSER, BoxscoreRows, parse_boxscore
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_rebuild import rebuild_boxscores
 from hockey_model.store.boxscore_revisions import (
@@ -28,7 +28,7 @@ from hockey_model.store.source_reads import BOXSCORES
 
 START = datetime(2026, 1, 10, 18, 0, tzinfo=UTC)
 FIRST_READ = datetime(2026, 1, 10, 21, 0, tzinfo=UTC)
-PARSER = "nhl_boxscore:1"
+PARSER = BOXSCORE_PARSER
 HOME, AWAY = SCORE_TEAMS[MAIN_GAME]
 # The skater whose goals a timeline changes: the first home forward of the main boxscore.
 FIRST_PLAYER = int(

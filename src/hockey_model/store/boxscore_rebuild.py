@@ -75,13 +75,16 @@ def _chain(
     game_id: int,
     derivation: int,
     previous: list[BoxscoreRevision],
+    *,
+    allow_refused: bool,
 ) -> tuple[list[BoxscoreRevision], list[str]]:
     """Return the revisions that the archive gives under the current parser, and the refusals.
 
     A revision with no bytes cannot be parsed again, so it carries over as it stands. A payload
     that the first read accepted and the parser refuses now is a parser regression: the rebuild
-    stops and names it, so a bad parser never replaces a good derivation. A payload that was a
-    ``shape_error`` and stays one is a refusal in the report.
+    stops and names it, so a bad parser never replaces a good derivation. ``allow_refused`` says
+    that the stricter parser is intended: the payload then leaves the derivation, and the report
+    names it. A payload that was a ``shape_error`` and stays one is a refusal in the report.
     """
     chain = [replace(r, derivation=derivation) for r in previous if r.parser == LEGACY_PARSER]
     refused: list[str] = []
@@ -91,11 +94,11 @@ def _chain(
         try:
             rows = _parsed(conn, game_id, obs, obs.sha256)
         except (SourceParseError, SourceShapeError) as exc:
-            if obs.status == OK:
+            if obs.status == OK and not allow_refused:
                 raise StoreError(
                     f"rebuild {BOXSCORES} game {game_id} observation {obs.obs_id}: the parser "
                     f"{BOXSCORE_PARSER} refuses a payload that the first read accepted ({exc}); "
-                    "fix the parser before the rebuild"
+                    "fix the parser, or pass --allow-refused when the stricter parser is intended"
                 ) from exc
             refused.append(f"game {game_id} observation {obs.obs_id}: {exc}")
             continue
@@ -112,12 +115,15 @@ def _same_chain(a: list[BoxscoreRevision], b: list[BoxscoreRevision]) -> bool:
     )
 
 
-def rebuild_boxscores(conn: sqlite3.Connection, parser: str) -> RebuildReport:
+def rebuild_boxscores(
+    conn: sqlite3.Connection, parser: str, *, allow_refused: bool = False
+) -> RebuildReport:
     """Write a new derivation for each game whose archived payloads parse differently now.
 
     ``parser`` must name the parser that the code holds, so a stale command line fails loud.
     The whole rebuild is one transaction. A game whose derivation would equal its newest one
-    is left alone, so a second run with the same parser changes nothing.
+    is left alone, so a second run with the same parser changes nothing. ``allow_refused`` lets
+    a payload that an earlier parser accepted and this parser refuses leave the derivation.
     """
     if parser != BOXSCORE_PARSER:
         raise StoreError(
@@ -138,7 +144,9 @@ def rebuild_boxscores(conn: sqlite3.Connection, parser: str) -> RebuildReport:
         for game_id in keys:
             newest = newest_derivation(conn, game_id)
             previous = [] if newest is None else derivation_revisions(conn, game_id, newest)
-            chain, refused = _chain(conn, game_id, (newest or 0) + 1, previous)
+            chain, refused = _chain(
+                conn, game_id, (newest or 0) + 1, previous, allow_refused=allow_refused
+            )
             refusals.extend(refused)
             if not chain or _same_chain(chain, previous):
                 unchanged += 1
