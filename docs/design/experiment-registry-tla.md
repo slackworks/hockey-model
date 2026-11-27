@@ -169,7 +169,7 @@ The model has a linear history.
 A path log follows one parent when a merge keeps the other side, so a branch that held a result could drop out of the history of a record.
 A merge commit also lists no file names, so a record that only the merge deleted was not a deleted record.
 The history of a record now runs with `--full-history`.
-The deletion log runs on the first-parent line, where a merge shows the files that it removed.
+The deletion log reads every commit reachable from HEAD, and a merge shows the files that it removed from its first parent (#319).
 The model does not cover merge commits that change a record.
 
 ### 5. Gaps that remain

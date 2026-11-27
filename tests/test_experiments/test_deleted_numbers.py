@@ -244,3 +244,20 @@ def test_a_new_record_in_the_commit_that_deletes_an_unrun_record_is_no_loss(
     register(registry_dir, {"id": "0003-new", "look_number": 1, "title": "Another title"})
     _commit(repo, "replace it")
     assert check_all(repo_root=repo)["ok"] is True
+
+
+def test_a_deletion_on_a_side_branch_survives_a_non_fast_forward_merge(
+    repo: Path, registry_dir: Path
+) -> None:
+    """A side branch deletes the unrun record and reuses its number (#319)."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m", "start")
+    default = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    _git(repo, "checkout", "-q", "-b", "side")
+    _register_two(repo, registry_dir)
+    _remove(repo, "0001-unrun")
+    register(registry_dir, {"id": "0001-other", "look_number": 1})
+    _commit(repo, "replace the unrun record")
+    _git(repo, "checkout", "-q", default)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge the side branch", "side")
+    assert deleted_record_ids(["0001-other", "0002-ran"], repo) == ["0001-unrun"]
+    assert check_all(repo_root=repo)["ok"] is False

@@ -392,3 +392,71 @@ def test_the_publish_rule_holds_for_any_set_of_files_already_on_the_release(
         assert name in uploads[0]
     for name in names:
         assert not uploads or name not in uploads[0]
+
+
+@pytest.mark.parametrize(
+    ("write", "step"),
+    [
+        ("create", "the creation of the release v0.1.0"),
+        ("upload", "the upload of 2 file(s) to v0.1.0"),
+    ],
+)
+def test_a_failed_write_names_its_step_and_exits_1(
+    fakes: Path, tmp_path: Path, write: str, step: str
+) -> None:
+    build(tmp_path)
+    # An existing release makes the run upload; a missing one makes it create (#348).
+    existing = TAG if write == "upload" else ""
+    result = publish(fakes, tmp_path, FAKE_WRITE_FAIL=write, FAKE_RELEASES=f"{existing}\n")
+    assert result.returncode == 1
+    assert f"publish-release: {step} failed" in result.stderr
+
+
+def test_a_failed_write_with_no_draft_deletes_nothing(fakes: Path, tmp_path: Path) -> None:
+    # A failed write that left no draft must not delete a release or a tag (#350).
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_WRITE_FAIL="create")
+    assert result.returncode == 1
+    assert not any(c.startswith("gh release delete") for c in _calls(tmp_path))
+
+
+def test_a_failed_create_deletes_the_draft_it_left_and_keeps_the_tag(
+    fakes: Path, tmp_path: Path
+) -> None:
+    """A create that fails leaves a draft; the run deletes it without deleting the tag (#350)."""
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_WRITE_FAIL="create", FAKE_DRAFT_AFTER_CREATE=TAG)
+    assert result.returncode == 1
+    assert "deleted the draft of v0.1.0" in result.stderr
+    deletes = [c for c in _calls(tmp_path) if c.startswith("gh release delete")]
+    assert deletes == [f"gh release delete {TAG} --yes"]
+
+
+def test_a_failed_draft_list_after_a_failed_create_says_what_to_delete(
+    fakes: Path, tmp_path: Path
+) -> None:
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_WRITE_FAIL="create", FAKE_LIST_FAIL_AFTER_CREATE="1")
+    assert result.returncode == 1
+    assert "cannot list drafts; delete any draft of v0.1.0 by hand" in result.stderr
+
+
+def test_a_failed_draft_delete_says_what_to_delete(fakes: Path, tmp_path: Path) -> None:
+    build(tmp_path)
+    result = publish(
+        fakes,
+        tmp_path,
+        FAKE_WRITE_FAIL="create",
+        FAKE_DRAFT_AFTER_CREATE=TAG,
+        FAKE_DELETE_FAIL="1",
+    )
+    assert result.returncode == 1
+    assert "cannot delete the draft of v0.1.0; delete it by hand" in result.stderr
+
+
+def test_a_failed_upload_never_deletes_the_published_release(fakes: Path, tmp_path: Path) -> None:
+    """An upload fails on a published release, so no delete may run (#350)."""
+    build(tmp_path)
+    result = publish(fakes, tmp_path, FAKE_WRITE_FAIL="upload", FAKE_RELEASES=f"{TAG}\n")
+    assert result.returncode == 1
+    assert not any(c.startswith("gh release delete") for c in _calls(tmp_path))

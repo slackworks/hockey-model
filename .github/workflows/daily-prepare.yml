@@ -45,21 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-        run: |
-          if [[ "$EVENT" != "schedule" ]]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          pending="$(bash scripts/manual-prepare-pending.sh)" || {
-            echo "::error::The lookup of manual daily-prepare runs failed, so this run stops."
-            exit 1
-          }
-          if [[ "$pending" == "yes" ]]; then
-            echo "::warning::A manual daily-prepare run waits or runs, so this run stands aside."
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash scripts/prepare-stand-aside.sh
 
   # The skip check is its own job because it is short and it holds the store group (#311). The
   # report gate reads the timeout of the job that holds the group, so a prepared day holds it
@@ -127,8 +113,38 @@ jobs:
     outputs:
       rebuild: ${{ steps.check.outputs.rebuild }}
 
-  prepare:
+  # The gate checks before skip joins the store group. A manual run can start after that, while
+  # skip holds the group, and its prepare then waits in the group. When skip asks for a rebuild,
+  # the scheduled prepare would join and cancel the waiting manual job, because the group has
+  # queue: single (#335). This job checks again right before that join. It has no group, so it
+  # never queues, and it runs only when a rebuild is about to join. A few seconds remain between
+  # this check and the join, the same race the gate job accepts. A forced run skips the skip
+  # job, so the condition starts with !cancelled().
+  hold:
     needs: [gate, skip]
+    if: >-
+      !cancelled()
+      && needs.gate.outputs.go == 'true'
+      && (inputs.force == true || needs.skip.outputs.rebuild == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      go: ${{ steps.manual.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: manual
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: bash scripts/prepare-stand-aside.sh
+
+  prepare:
+    needs: [gate, skip, hold]
     # A manual run with force goes straight here, because it always rebuilds. Any other run
     # rebuilds only when the skip check found that the day needs it. A skipped job fails the
     # jobs that need it, and a forced run skips the check job, so the condition names a status
@@ -137,6 +153,7 @@ jobs:
       !cancelled()
       && needs.gate.outputs.go == 'true'
       && (inputs.force == true || needs.skip.outputs.rebuild == 'true')
+      && needs.hold.outputs.go == 'true'
     # The same group as daily-report, so only one run writes the cached store at a time.
     concurrency:
       group: hockey-model-store

@@ -142,6 +142,22 @@ def fakes(tmp_path: Path) -> Path:
         '  echo "release not found" >&2\n'
         "  exit 1\n"
         "fi\n"
+        # FAKE_DRAFT_AFTER_CREATE is the draft a failed create leaves: once a create call has run,
+        # the list names it. FAKE_LIST_FAIL_AFTER_CREATE makes that list fail. FAKE_DELETE_FAIL
+        # makes a delete fail. None of these change the answers before the create.
+        'if [[ "$1 $2" == "release delete" && -n "${FAKE_DELETE_FAIL:-}" ]]; then\n'
+        '  echo "delete boom" >&2; exit 1\n'
+        "fi\n"
+        'if [[ "$1 $2" == "release list" ]] && [[ -n "${FAKE_DRAFT_AFTER_CREATE:-}" ||'
+        ' -n "${FAKE_LIST_FAIL_AFTER_CREATE:-}" ]]; then\n'
+        '  if grep -q "^gh release create" "$FAKE_CALLS"; then\n'
+        '    if [[ -n "${FAKE_LIST_FAIL_AFTER_CREATE:-}" ]]; then\n'
+        '      echo "list boom" >&2; exit 1\n'
+        "    fi\n"
+        '    echo "${FAKE_DRAFT_AFTER_CREATE:-}"\n'
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
         # FAKE_DRAFTS lists tag names, one per line, and each one is a draft. The --json form
         # answers the shape that gh prints: one object per release.
         'if [[ "$1 $2" == "release list" ]]; then\n'
