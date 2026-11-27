@@ -111,21 +111,30 @@ def check_roster(shift_players: Iterable[int], positions: Mapping[int, str]) -> 
 COUNT_NAMES = ("home", "away", "home_goalies", "away_goalies")
 
 
-def _expected_counts(code: str) -> tuple[int, int, int, int]:
-    """Return the home skaters, away skaters, home goalies, and away goalies of a code.
+def _expected_counts(code: str) -> dict[str, int]:
+    """Return the skaters and goalies of each team that a situation code gives.
 
     The four digits are the away goalie, the away skaters, the home skaters, and the home goalie.
     """
-    return int(code[2]), int(code[1]), int(code[3]), int(code[0])
+    return {
+        "home": int(code[2]),
+        "away": int(code[1]),
+        "home_goalies": int(code[3]),
+        "away_goalies": int(code[0]),
+    }
 
 
-def _counts(stint: Stint) -> tuple[int, int, int, int]:
-    return (
-        len(stint.home_skaters),
-        len(stint.away_skaters),
-        len(stint.home_goalies),
-        len(stint.away_goalies),
-    )
+def _counts(stint: Stint) -> dict[str, int]:
+    return {
+        "home": len(stint.home_skaters),
+        "away": len(stint.away_skaters),
+        "home_goalies": len(stint.home_goalies),
+        "away_goalies": len(stint.away_goalies),
+    }
+
+
+def _holds(found: dict[str, int], expected: dict[str, int]) -> bool:
+    return all(found[name] >= expected[name] for name in COUNT_NAMES)
 
 
 def _situation_failure(event: SituationEvent, stints: Sequence[Stint]) -> dict[str, object] | None:
@@ -135,13 +144,9 @@ def _situation_failure(event: SituationEvent, stints: Sequence[Stint]) -> dict[s
     if not around:
         return {"event": event.event_id, "reason": "no stint holds the event"}
     expected = _expected_counts(event.code)
-    if any(all(f >= e for f, e in zip(_counts(s), expected, strict=True)) for s in around):
+    if any(_holds(_counts(s), expected) for s in around):
         return None
-    return {
-        "event": event.event_id,
-        "expected": dict(zip(COUNT_NAMES, expected, strict=True)),
-        "found": dict(zip(COUNT_NAMES, _counts(around[0]), strict=True)),
-    }
+    return {"event": event.event_id, "expected": expected, "found": _counts(around[0])}
 
 
 def check_situation(events: Sequence[SituationEvent], stints: Sequence[Stint]) -> CheckResult:
