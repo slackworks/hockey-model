@@ -264,7 +264,9 @@ def fake_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mod: ModuleType
         '    [[ -n "${FAKE_CHILD_PID:-}" ]] && { sleep 60 & echo $! > "$FAKE_CHILD_PID"; };'
         '    sleep "${FAKE_SLEEP:-0}";'
         '    exit "${FAKE_RUN_RC:-0}";;\n'
-        '  results) printf "%s" "$FAKE_RESULTS";;\n'
+        # The real mutmut lists a killed mutant only for ``results --all true``.
+        '  results) if [[ "$2 $3" == "--all true" ]]; then printf "%s" "$FAKE_RESULTS";'
+        '    else printf "%s" "$FAKE_RESULTS" | { grep -v ": killed" || true; }; fi;;\n'
         '  show) printf "%s" "$FAKE_SHOW";;\n'
         "esac\n",
         encoding="utf-8",

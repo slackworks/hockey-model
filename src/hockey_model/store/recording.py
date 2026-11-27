@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING
@@ -98,12 +99,14 @@ class Reading:
     that can change a parsed row gets a new version. ``keep_body`` is False for a file that the
     store keeps at the row level only, so its observation says that the fetch ran and no bytes
     of it are kept. ``expected_absence`` turns a failure into a note when the resource does not
-    exist yet.
+    exist yet. ``derive`` runs after a good unit, in the same transaction, with the id of the
+    observation that holds the bytes of the unit. A source with versioned rows writes them there.
     """
 
     parser: str
     expected_absence: Callable[[Exception], str | None] | None = None
     keep_body: bool = True
+    derive: Callable[[sqlite3.Connection, int], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

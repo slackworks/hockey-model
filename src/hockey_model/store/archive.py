@@ -162,6 +162,32 @@ def payload_bytes(conn: sqlite3.Connection, sha256: str) -> bytes:
     return found
 
 
+def observation_of(conn: sqlite3.Connection, obs_id: int) -> Observation:
+    """Return the observation ``obs_id``, or raise naming it."""
+    row = conn.execute(
+        "SELECT source, url, key, fetched_at, status, sha256, parser, error"
+        " FROM observations WHERE obs_id = ?",
+        (obs_id,),
+    ).fetchone()
+    if row is None:
+        raise StoreError(
+            f"read observation {obs_id}: the store holds no observation with that id; "
+            "write the observation before the rows that name it"
+        )
+    source, url, key, fetched_at, status, sha256, parser, error = row
+    return Observation(
+        obs_id,
+        source,
+        url,
+        None if key is None else str(key),
+        parse_iso_utc(fetched_at),
+        status,
+        sha256,
+        parser,
+        error,
+    )
+
+
 def observations_for(
     conn: sqlite3.Connection, source: str, key: str | None, *, before: datetime | None = None
 ) -> list[Observation]:

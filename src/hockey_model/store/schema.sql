@@ -148,6 +148,50 @@ CREATE TABLE observations (
     error TEXT
 );
 
+-- One row for each distinct state of a final boxscore that a source gave (#82). ``derivation``
+-- names one parse of the archived payloads: 1 is the first, and a ``store rebuild`` adds the
+-- next. ``revision`` counts the states inside one derivation, and a revision comes from the
+-- observation ``obs_id``. A revision that an upgrade wrote has no bytes: its parser is
+-- ``legacy:unavailable``. ``skater_games`` and ``goalie_games`` keep the first final rows.
+CREATE TABLE boxscore_revisions (
+    game_id INTEGER NOT NULL,
+    derivation INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    obs_id INTEGER NOT NULL REFERENCES observations (obs_id),
+    parser TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'incomplete')),
+    identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched', 'unverified')),
+    PRIMARY KEY (game_id, derivation, revision)
+);
+
+CREATE TABLE skater_game_revisions (
+    game_id INTEGER NOT NULL,
+    derivation INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    nhl_id INTEGER NOT NULL,
+    toi_seconds INTEGER,
+    goals INTEGER,
+    assists INTEGER,
+    PRIMARY KEY (game_id, derivation, revision, nhl_id),
+    FOREIGN KEY (game_id, derivation, revision)
+        REFERENCES boxscore_revisions (game_id, derivation, revision)
+);
+
+CREATE TABLE goalie_game_revisions (
+    game_id INTEGER NOT NULL,
+    derivation INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    nhl_id INTEGER NOT NULL,
+    toi_seconds INTEGER,
+    started INTEGER,
+    PRIMARY KEY (game_id, derivation, revision, nhl_id),
+    FOREIGN KEY (game_id, derivation, revision)
+        REFERENCES boxscore_revisions (game_id, derivation, revision)
+);
+
 -- Indexes for the as-of reads, which filter by time, team, and player.
 CREATE INDEX IF NOT EXISTS games_start ON games (start_utc);
 CREATE INDEX IF NOT EXISTS goalie_games_team ON goalie_games (team, started);

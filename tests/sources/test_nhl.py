@@ -247,6 +247,25 @@ def test_parse_boxscore_rejects_two_starters_for_one_team() -> None:
         parse_boxscore(payload)
 
 
+def test_parse_boxscore_rejects_a_player_that_a_side_lists_twice() -> None:
+    """One player id on one line of the store: a repeated id would break the primary key."""
+    payload = load(f"boxscore_{BOX_ID}.json")
+    forwards = payload["playerByGameStats"]["homeTeam"]["forwards"]
+    forwards.append(dict(forwards[0]))
+    with pytest.raises(SourceParseError, match="skater .* twice") as caught:
+        parse_boxscore(payload)
+    assert caught.value.source == "nhl"
+    assert caught.value.detail.startswith(f"boxscore {BOX_ID} lists skater ")
+
+
+def test_parse_boxscore_rejects_a_goalie_that_a_side_lists_twice() -> None:
+    payload = load(f"boxscore_{BOX_ID}.json")
+    goalies = payload["playerByGameStats"]["homeTeam"]["goalies"]
+    goalies.append({**goalies[0], "starter": False})
+    with pytest.raises(SourceParseError, match="goalie .* twice"):
+        parse_boxscore(payload)
+
+
 def _side(payload: dict, key: str) -> dict:
     return payload["playerByGameStats"][key]
 

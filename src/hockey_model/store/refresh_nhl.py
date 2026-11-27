@@ -1,7 +1,7 @@
 """The NHL steps of a refresh: score days, then boxscores."""
 
 import sqlite3
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import date, datetime, timedelta
 from typing import NamedTuple
 
@@ -18,6 +18,7 @@ from hockey_model.sources.nhl import (
     score_day_url,
 )
 from hockey_model.sources.shape_errors import SourceParseError
+from hockey_model.store.boxscore_revisions import record_revision
 from hockey_model.store.db import StoreError
 from hockey_model.store.nhl_writes import game_is_missing_boxscore, write_boxscore, write_games
 from hockey_model.store.reads import game_row, unresolved_games
@@ -66,6 +67,11 @@ UNRESOLVED_OLD_AFTER = timedelta(days=14)
 UNRESOLVED_OLD_RETRY_AFTER = timedelta(days=7)
 # At most this many unresolved days are read again in one refresh, oldest first.
 MAX_UNRESOLVED_DAYS = 10
+# A final boxscore is read again this many days after its game started, when no read has come
+# since. The NHL corrects a boxscore after the game, and each correction is a new revision.
+REVISIT_AFTER_DAYS = (2, 14)
+# At most this many boxscores are read again in one refresh, the oldest due first.
+MAX_REVISITS = 100
 
 
 def _day_of(url: str) -> date:
@@ -142,9 +148,11 @@ def _unresolved_days_due(run: RefreshRun, games: list[tuple[int, datetime]]) -> 
     visible rather than silent. The next refresh reads the rest.
     """
     due: list[date] = []
+    gaps = run.skipped(SCORES)
     for _, start in games:
         day = game_day_of(start)
-        if day in due:
+        # A known gap is not read, so it must not use one of the slots of the bound.
+        if day in due or score_day_url(day) in gaps:
             continue
         wait = (
             UNRESOLVED_OLD_RETRY_AFTER
@@ -337,6 +345,32 @@ def _boxscore_worklist(run: RefreshRun, game_ids: list[int]) -> list[int]:
     return [g for g in unique if boxscore_url(g) not in gaps]
 
 
+def _boxscore_unit(run: RefreshRun, game_id: int) -> tuple[Callable[[datetime], int], Reading]:
+    """Return the unit that reads one boxscore, and how its bytes are archived and versioned.
+
+    The unit writes the first-final rows. The reading then writes the revision, once the
+    observation that holds the bytes has an id.
+    """
+    held: BoxscoreRows | None = None
+
+    def unit(stamp: datetime) -> int:
+        nonlocal held
+        held = fetch_boxscore(run.client, game_id)
+        check_boxscore_identity(run.conn, game_id, held)
+        write_boxscore(run.conn, game_id, held, stamp)
+        return 1
+
+    def derive(conn: sqlite3.Connection, obs_id: int) -> None:
+        if held is None:
+            raise StoreError(
+                f"derive boxscore {game_id}: the unit ended with no parsed rows; "
+                "the derive hook runs only after a good unit"
+            )
+        record_revision(conn, game_id, held, obs_id)
+
+    return unit, Reading(BOXSCORE_PARSER, derive=derive)
+
+
 def read_boxscores(
     run: RefreshRun, game_ids: list[int], recent: Collection[int] = ()
 ) -> ReadResult:
@@ -368,13 +402,8 @@ def read_boxscores(
             progress_log.advance()
             continue
 
-        def unit(stamp: datetime, game_id: int = game_id) -> int:
-            rows = fetch_boxscore(run.client, game_id)
-            check_boxscore_identity(run.conn, game_id, rows)
-            write_boxscore(run.conn, game_id, rows, stamp)
-            return 1
-
-        ok = run.attempt(BOXSCORES, url, unit, Reading(BOXSCORE_PARSER))
+        unit, reading = _boxscore_unit(run, game_id)
+        ok = run.attempt(BOXSCORES, url, unit, reading)
         failures = 0 if ok else failures + 1
         clean = clean and ok
         if ok and _after_read(run, game_id, unresolved):

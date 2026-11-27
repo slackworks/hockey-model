@@ -192,8 +192,15 @@ def restore_unblocked_columns(conn: sqlite3.Connection) -> None:
 
 def drop_archive_tables(conn: sqlite3.Connection) -> None:
     """Remove the tables that the 8->9 step adds, so a store can pass for an older version."""
+    drop_revision_tables(conn)
     conn.execute("DROP TABLE IF EXISTS observations")
     conn.execute("DROP TABLE IF EXISTS payloads")
+
+
+def drop_revision_tables(conn: sqlite3.Connection) -> None:
+    """Remove the tables that the 9->10 step adds, so a store can pass for version 9."""
+    for table in ("goalie_game_revisions", "skater_game_revisions", "boxscore_revisions"):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
 def with_market_fields(payload: object) -> object:

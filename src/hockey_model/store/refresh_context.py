@@ -4,14 +4,14 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 from hockey_model import progress
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
-from hockey_model.store.archive import record_observation
+from hockey_model.store.archive import OK, STORE_ERROR, record_observation
 from hockey_model.store.db import StoreError
 from hockey_model.store.recording import (
     Capture,
@@ -27,6 +27,36 @@ from hockey_model.types import HockeyModelError
 SOURCE_FAILURES = (SourceError, SourceShapeError, SourceParseError, StoreError)
 # A source that fails this many units in a row stops, so a dead host does not cost hours.
 MAX_UNIT_FAILURES = 3
+
+
+class DeriveError(HockeyModelError):
+    """Raised when the rows that a good unit derives cannot be written.
+
+    The bug is local, so it is not a source failure: the unit rolls back, no failed read is
+    recorded, and the refresh stops with the cause named.
+    """
+
+
+def _derive(
+    derive: Callable[[sqlite3.Connection, int], None],
+    conn: sqlite3.Connection,
+    observed: list[int],
+    where: tuple[str, str],
+) -> None:
+    """Run the derive hook of a unit on the observation that holds its bytes.
+
+    The hook takes one observation, so a unit with a hook makes exactly one request.
+    """
+    source, url = where
+    if len(observed) != 1:
+        raise DeriveError(
+            f"derive {source} {url}: the unit made {len(observed)} recorded request(s), and a "
+            "unit with a derive hook makes exactly one; split the unit by request"
+        )
+    try:
+        derive(conn, observed[0])
+    except StoreError as exc:
+        raise DeriveError(f"derive {source} {url}: {exc}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +164,19 @@ class RefreshRun:
             with self.conn:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
-                self._observe(capture, recorded.records, None)
+                observed = self._observe(capture, recorded.records, None)
+                if reading.derive is not None:
+                    _derive(reading.derive, self.conn, observed, (source, url))
+        except DeriveError as exc:
+            # The unit rolled back, so the rows are gone. The bytes that reached the hook stay in
+            # the archive, because the next read can bring different bytes. The error is local,
+            # so no failed read is recorded, and the refresh stops until the code is fixed.
+            with self.conn:
+                for fetch in capture.fetches(recorded.records, exc):
+                    # The status is not ok, so a revisit that failed here is still due.
+                    failed = replace(fetch, status=STORE_ERROR, error=str(exc))
+                    record_observation(self.conn, failed if fetch.status == OK else fetch)
+            raise
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:
@@ -156,14 +198,13 @@ class RefreshRun:
 
     def _observe(
         self, capture: Capture, records: list[RecordedFetch], failure: Exception | None
-    ) -> None:
-        """Write one observation for each request that the unit made.
+    ) -> list[int]:
+        """Write one observation for each request that the unit made, and return their ids.
 
         A failed unit writes them after its rollback, with the failure status and the bytes
         that did arrive, so a shape failure keeps the payload that caused it (#82).
         """
-        for fetch in capture.fetches(records, failure):
-            record_observation(self.conn, fetch)
+        return [record_observation(self.conn, fetch) for fetch in capture.fetches(records, failure)]
 
     def report(self) -> RefreshReport:
         """Return the final report of this run."""

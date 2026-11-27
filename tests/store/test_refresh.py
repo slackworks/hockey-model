@@ -25,12 +25,13 @@ from seeding import add_game, utc
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT, TEAM_GAMES_URL, goalie_games_url
-from hockey_model.sources.nhl import score_day_url
+from hockey_model.sources.nhl import BOXSCORE_PARSER, score_day_url
 from hockey_model.store.db import connect
 from hockey_model.store.nhl_writes import games_missing_boxscore
 from hockey_model.store.refresh import refresh, refresh_starters
 from hockey_model.store.refresh_nhl import MAX_UNRESOLVED_DAYS, UNRESOLVED_RETRY_AFTER
 from hockey_model.store.source_reads import record_read
+from hockey_model.store.timestamps import iso_utc
 from hockey_model.types import HockeyModelError
 
 
@@ -62,7 +63,7 @@ def test_a_refresh_names_the_parser_of_every_source_it_reads(conn: sqlite3.Conne
         "espn_injuries": {"espn_injuries:2"},
         "espn_starters": {"espn_scoreboard:2"},
         "moneypuck": {"moneypuck_team:1", "moneypuck_goalie:1"},
-        "nhl_boxscores": {"nhl_boxscore:1"},
+        "nhl_boxscores": {BOXSCORE_PARSER},
         "nhl_scores": {"nhl_score:2"},
     }
 
@@ -684,6 +685,43 @@ def test_a_run_reads_a_bounded_number_of_unresolved_days(conn: sqlite3.Connectio
     assert len(old_days) == MAX_UNRESOLVED_DAYS
     # The days left out by the bound are named, so the backlog is not silent.
     assert any("wait for the next refresh" in note for note in report.notes)
+
+
+def test_a_known_gap_day_does_not_use_a_slot_of_the_unresolved_bound(
+    conn: sqlite3.Connection,
+) -> None:
+    for offset in range(MAX_UNRESOLVED_DAYS + 5):
+        day = date(2025, 12, 1) + timedelta(days=offset)
+        add_game(
+            conn,
+            8000 + offset,
+            f"{day.isoformat()}T18:00",
+            state="LIVE",
+            fetched_at=utc(f"{day.isoformat()}T20:00"),
+        )
+        if offset > 0:
+            record_read(
+                conn,
+                "nhl_scores",
+                score_day_url(day),
+                utc(f"{day.isoformat()}T00:00") + timedelta(days=2),
+            )
+    gap_day = date(2025, 12, 1)
+    for hours in (0, 24):
+        conn.execute(
+            "INSERT INTO source_reads (source, url, fetched_at, ok, error, permanent)"
+            " VALUES ('nhl_scores', ?, ?, 0, 'HTTP 500', 0)",
+            (score_day_url(gap_day), iso_utc(utc("2025-12-10T00:00") + timedelta(hours=hours))),
+        )
+    add_game(conn, 9002, "2026-01-09T18:00", state="OFF", fetched_at=utc("2026-01-10T00:00"))
+    conn.commit()
+    client = FakeClient()
+    refresh(conn, client, now=NOW)
+    old_days = [
+        u for u in client.urls if u.startswith(SCORE_URL) and u[len(SCORE_URL) :] < "2026-01-08"
+    ]
+    assert len(old_days) == MAX_UNRESOLVED_DAYS
+    assert f"{SCORE_URL}{gap_day.isoformat()}" not in old_days
 
 
 def test_an_explicit_backfill_reads_an_old_unresolved_day(conn: sqlite3.Connection) -> None:

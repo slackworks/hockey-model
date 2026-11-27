@@ -11,7 +11,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from refresh_support import FakeClient, fixture
-from seeding import with_market_fields
+from seeding import drop_archive_tables, with_market_fields
 
 from hockey_model.sources.sanitize import strip_market_fields
 from hockey_model.store.archive import (
@@ -263,8 +263,7 @@ def test_the_archive_tables_reach_a_version_8_store(tmp_path: Path) -> None:
     """The 8->9 step adds the two tables and the index, and keeps every row."""
     path = tmp_path / "v8.db"
     conn = connect(path)
-    conn.execute("DROP TABLE observations")
-    conn.execute("DROP TABLE payloads")
+    drop_archive_tables(conn)
     conn.execute("UPDATE schema_version SET version = 8")
     conn.execute(
         "INSERT INTO games (game_id, season, start_utc, fetched_at) VALUES (1, 2026, 'z', 'z')"

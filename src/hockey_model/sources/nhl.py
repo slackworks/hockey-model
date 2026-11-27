@@ -24,7 +24,7 @@ NHL_BASE = "https://api-web.nhle.com/v1"
 # The parser name that an archived payload records. Change the version when a parser change can
 # change a parsed row.
 SCORE_PARSER = "nhl_score:2"
-BOXSCORE_PARSER = "nhl_boxscore:1"
+BOXSCORE_PARSER = "nhl_boxscore:2"
 # Regular season and playoffs. Preseason (1), All-Star (4), and national teams (9, 19) are out.
 GAME_TYPES_KEPT = frozenset({2, 3})
 FINAL_STATES = frozenset({"FINAL", "OFF"})
@@ -235,6 +235,21 @@ def _parse_goalies(side: Mapping[str, object], team: str, out: BoxscoreRows) -> 
         )
 
 
+def _check_unique(rows: BoxscoreRows, where: str) -> None:
+    """Raise when a skater line or a goalie line names the same player twice.
+
+    The store keys a line on the game and the player, so a repeated id has no row to take.
+    """
+    for kind, lines in (("skater", rows.skaters), ("goalie", rows.goalies)):
+        seen: set[int] = set()
+        for line in lines:
+            if line.nhl_id in seen:
+                raise SourceParseError(
+                    SOURCE, f"{where} lists {kind} {line.nhl_id} twice; one line per player"
+                )
+            seen.add(line.nhl_id)
+
+
 def _check_sides(rows: BoxscoreRows, where: str) -> None:
     """Raise unless both declared teams have skater lines and one starting goalie.
 
@@ -275,6 +290,7 @@ def parse_boxscore(payload: object) -> BoxscoreRows:
     for key, code in codes.items():
         side = as_mapping(SOURCE, field(SOURCE, stats, key, where), f"{where} stats {key}")
         _parse_side(side, code, out)
+    _check_unique(out, where)
     _check_sides(out, where)
     return out
 
