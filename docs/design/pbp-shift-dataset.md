@@ -86,6 +86,9 @@ CREATE TABLE event_status (
 ```
 
 Add views `latest_pbp_events`, `latest_shifts`, and `latest_stints` that pick the rows of the newest observation of each game.
+The newest observation is the newest one of the game with the status `ok` or `shape_error`, by fetch time and then by observation id (view `latest_event_observations`).
+A fetch that the parser refused is the newest one, so its game has no rows, and the view never serves an older fetch in its place.
+A fetch that failed to answer (`http_error`, `store_error`) does not count.
 
 Role map for `player1` to `player3` (verify on the fixtures, and change the map if a feed key differs):
 

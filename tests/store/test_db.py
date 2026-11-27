@@ -140,6 +140,7 @@ VIEWS = [
     "latest_mp_team_games",
     "latest_mp_goalie_games",
     "latest_players",
+    "latest_event_observations",
     "latest_pbp_events",
     "latest_shifts",
 ]

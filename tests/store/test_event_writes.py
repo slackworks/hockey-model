@@ -13,7 +13,14 @@ from seeding import add_game, drop_event_tables
 from hockey_model.sources.espn_summary import parse_summary
 from hockey_model.sources.nhl_events import parse_pbp
 from hockey_model.sources.nhl_shifts import ShiftRow, ShiftRows, parse_shifts
-from hockey_model.store.archive import OK, Fetch, is_market_source, record_observation
+from hockey_model.store.archive import (
+    HTTP_ERROR,
+    OK,
+    SHAPE_ERROR,
+    Fetch,
+    is_market_source,
+    record_observation,
+)
 from hockey_model.store.db import SCHEMA_VERSION, connect
 from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
 from hockey_model.store.recording import key_of
@@ -184,3 +191,38 @@ def test_the_upgrade_from_version_ten_adds_empty_tables_and_keeps_every_row(
         assert upgraded.execute("SELECT COUNT(*) FROM games").fetchone() == (1,)
     finally:
         upgraded.close()
+
+
+def _fetch(conn: sqlite3.Connection, when: datetime, status: str, body: bytes | None) -> int:
+    fetch = Fetch(NHL_PBP, "https://example.test/u", when, status, "nhl_pbp:1", str(GAME), body)
+    return record_observation(conn, fetch)
+
+
+def test_a_refused_newer_fetch_leaves_no_rows_in_the_view(conn: sqlite3.Connection) -> None:
+    """The view must not serve an older fetch when the newest one has bytes and no rows."""
+    write_pbp(conn, _fetch(conn, T1, OK, b"{}"), _pbp())
+    _fetch(conn, T2, SHAPE_ERROR, b'{"plays": []}')
+    assert conn.execute("SELECT COUNT(obs_id) FROM pbp_events").fetchone() != (0,)
+    assert conn.execute("SELECT COUNT(obs_id) FROM latest_pbp_events").fetchone() == (0,)
+
+
+def test_a_fetch_that_gave_no_bytes_does_not_hide_the_rows_of_an_earlier_one(
+    conn: sqlite3.Connection,
+) -> None:
+    first = _fetch(conn, T1, OK, b"{}")
+    write_pbp(conn, first, _pbp())
+    _fetch(conn, T2, HTTP_ERROR, None)
+    assert conn.execute("SELECT MIN(obs_id) FROM latest_pbp_events").fetchone() == (first,)
+
+
+def test_the_view_picks_by_fetch_time_and_not_by_insert_order(conn: sqlite3.Connection) -> None:
+    """An import inserts an old fetch after a new one, so the new obs_id is the older fetch."""
+    newer = _fetch(conn, T2, OK, b"{}")
+    older = _fetch(conn, T1, OK, b"{}")
+    rows = _pbp()
+    write_pbp(conn, newer, replace(rows, events=rows.events[:5]))
+    write_pbp(conn, older, rows)
+    assert conn.execute("SELECT COUNT(obs_id), MIN(obs_id) FROM latest_pbp_events").fetchone() == (
+        5,
+        newer,
+    )
