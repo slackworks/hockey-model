@@ -377,8 +377,9 @@ def test_a_game_read_since_the_archive_began_points_at_its_own_observation(
     store = connect(path)
     try:
         observations = store.execute(
-            "SELECT obs_id, parser, sha256 IS NOT NULL FROM observations WHERE key = ?",
-            (str(MAIN_GAME),),
+            "SELECT obs_id, parser, sha256 IS NOT NULL FROM observations"
+            " WHERE key = ? AND source = ?",
+            (str(MAIN_GAME), BOXSCORES),
         ).fetchall()
         assert observations == [(observations[0][0], BOXSCORE_PARSER, 1)]
         first = boxscore_rows(store, MAIN_GAME, policy=FIRST)

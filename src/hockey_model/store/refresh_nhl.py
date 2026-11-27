@@ -24,6 +24,7 @@ from hockey_model.store.nhl_writes import game_is_missing_boxscore, write_boxsco
 from hockey_model.store.reads import game_row, unresolved_games
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
+from hockey_model.store.refresh_reconcile import reconcile_in_unit
 from hockey_model.store.source_reads import (
     BOXSCORES,
     SCORES,
@@ -364,6 +365,7 @@ def _boxscore_unit(run: RefreshRun, game_id: int) -> tuple[Callable[[datetime], 
                 "the derive hook runs only after a good unit"
             )
         record_revision(conn, game_id, held, obs_id)
+        reconcile_in_unit(run, conn, game_id)
 
     return unit, Reading(BOXSCORE_PARSER, derive=derive)
 

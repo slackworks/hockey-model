@@ -16,6 +16,7 @@ NOW = datetime(2026, 1, 10, 10, 0, tzinfo=UTC)
 SCORE_URL = "https://api-web.nhle.com/v1/score/"
 BOX_URL = "https://api-web.nhle.com/v1/gamecenter/"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
+SHIFTS_URL = "https://api.nhle.com/stats/rest/en/shiftcharts"
 
 
 def fixture(name: str) -> bytes:
@@ -45,10 +46,8 @@ class FakeClient(HttpClient):
         return body
 
     def _fixture_for(self, source: str, url: str) -> bytes:
-        if url.startswith(SCORE_URL):
-            return self._score_day(url)
-        if url.startswith(BOX_URL):
-            return self._boxscore(int(url.split("/")[-2]))
+        if url.startswith((SCORE_URL, BOX_URL, SHIFTS_URL)):
+            return self._nhl(url)
         if url == TEAM_GAMES_URL:
             return fixture("moneypuck/all_teams_sample.csv")
         if "seasonPlayersSummary" in url:
@@ -60,6 +59,14 @@ class FakeClient(HttpClient):
         if "dailyfaceoff" in url:
             return fixture("daily_faceoff/starting_goalies.html")
         raise SourceError(source, url, "HTTP 404")
+
+    def _nhl(self, url: str) -> bytes:
+        if url.startswith(SCORE_URL):
+            return self._score_day(url)
+        if url.startswith(SHIFTS_URL):
+            return self._shifts(int(url.rsplit("=", 1)[1]))
+        game_id = int(url.split("/")[-2])
+        return self._pbp(game_id) if url.endswith("/play-by-play") else self._boxscore(game_id)
 
     @staticmethod
     def _boxscore(game_id: int) -> bytes:
@@ -78,6 +85,26 @@ class FakeClient(HttpClient):
                     for entry in group:
                         entry["playerId"] += (game_id % 1000) * 100_000_000
                         entry["name"]["default"] += f" {game_id}"
+        return json.dumps(payload).encode()
+
+    @staticmethod
+    def _pbp(game_id: int) -> bytes:
+        """The fixture play-by-play, with the id and teams of the game that the URL names."""
+        payload = json.loads(fixture("nhl/pbp_2025020709.json"))
+        payload["id"] = game_id
+        if game_id in SCORE_TEAMS:
+            payload["homeTeam"]["abbrev"], payload["awayTeam"]["abbrev"] = SCORE_TEAMS[game_id]
+        return json.dumps(payload).encode()
+
+    @staticmethod
+    def _shifts(game_id: int) -> bytes:
+        """The fixture shift chart, with the id and team codes of the game that the URL names."""
+        payload = json.loads(fixture("nhl/shifts_2025020709.json"))
+        home, away = SCORE_TEAMS.get(game_id, ("EDM", "LAK"))
+        codes = {"EDM": home, "LAK": away}
+        for row in payload["data"]:
+            row["gameId"] = game_id
+            row["teamAbbrev"] = codes[row["teamAbbrev"]]
         return json.dumps(payload).encode()
 
     @staticmethod
