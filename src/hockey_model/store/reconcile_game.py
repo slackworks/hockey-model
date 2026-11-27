@@ -24,6 +24,7 @@ from hockey_model.reconcile import (
     notes_json,
     status_of,
 )
+from hockey_model.stints import GOALIE
 from hockey_model.store.archive import OK, SHAPE_ERROR
 from hockey_model.store.boxscore_revisions import COMPLETE, LATEST, MISMATCHED, boxscore_rows
 from hockey_model.store.db import StoreError
@@ -93,7 +94,7 @@ def _player_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
         return CheckResult("goals_by_player", False, {"reason": reason})
     scored: dict[int, int] = {}
     for _, scorer in _goals(conn, inputs.pbp_obs):
-        if scorer is not None and inputs.positions.get(scorer) != "G":
+        if scorer is not None and inputs.positions.get(scorer) != GOALIE:
             scored[scorer] = scored.get(scorer, 0) + 1
     boxed = {s.nhl_id: s.goals for s in revision.skaters if s.goals > 0}
     return check_goals_by_player(scored, boxed)
