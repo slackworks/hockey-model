@@ -50,11 +50,6 @@ _SPENT = {
 }
 
 
-def _repo_root() -> Path:
-    """Return the repository root, so the test works from any working directory."""
-    return Path(_git(Path(__file__).parent, "rev-parse", "--show-toplevel").strip())
-
-
 def _git(root: Path, *args: str) -> str:
     """Run git in the fixture repository and return its standard output."""
     result = subprocess.run(
@@ -178,7 +173,7 @@ class TestCheckAll:
 
     def test_check_all_accepts_the_real_registry(self):
         """The records committed in the repository pass their own checker."""
-        root = _repo_root()
+        root = Path(__file__).resolve().parents[2]
         require_path(root / "experiments")
         result = check_all(repo_root=root)
         assert result["ok"] is True, result["errors"]
