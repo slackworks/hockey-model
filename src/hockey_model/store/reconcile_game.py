@@ -26,7 +26,13 @@ from hockey_model.reconcile import (
 )
 from hockey_model.stints import GOALIE
 from hockey_model.store.archive import OK, SHAPE_ERROR
-from hockey_model.store.boxscore_revisions import COMPLETE, LATEST, MISMATCHED, boxscore_rows
+from hockey_model.store.boxscore_revisions import (
+    COMPLETE,
+    LATEST,
+    MISMATCHED,
+    BoxscoreRevision,
+    boxscore_rows,
+)
 from hockey_model.store.db import StoreError
 from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
@@ -74,6 +80,17 @@ def _goals(conn: sqlite3.Connection, pbp_obs: int) -> list[tuple[str | None, int
     ).fetchall()
 
 
+def _newest_revision(conn: sqlite3.Connection, game_id: int) -> BoxscoreRevision | None:
+    """Return the newest boxscore revision of a game, or raise a store error that names it."""
+    try:
+        return boxscore_rows(conn, game_id, policy=LATEST)
+    except HockeyModelError as exc:
+        raise StoreError(
+            f"game {game_id}: a boxscore revision has a time that does not parse ({exc}); "
+            "fix the row, or read the boxscore again"
+        ) from exc
+
+
 def _team_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
     goals: dict[str | None, int] = {}
     for owner, _ in _goals(conn, inputs.pbp_obs):
@@ -83,7 +100,7 @@ def _team_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
 
 
 def _player_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
-    revision = boxscore_rows(conn, inputs.game_id, policy=LATEST)
+    revision = _newest_revision(conn, inputs.game_id)
     if revision is None:
         return CheckResult("goals_by_player", False, {"reason": "the game has no boxscore"})
     if revision.completeness != COMPLETE:
@@ -170,7 +187,7 @@ def _is_settled(conn: sqlite3.Connection, inputs: GameInputs) -> bool:
         (inputs.pbp_obs, inputs.shift_obs),
     )
     times = [_stored_time(inputs.game_id, text) for (text,) in reads]
-    revision = boxscore_rows(conn, inputs.game_id, policy=LATEST)
+    revision = _newest_revision(conn, inputs.game_id)
     if revision is not None:
         times.append(revision.fetched_at)
     return min(times) >= last
