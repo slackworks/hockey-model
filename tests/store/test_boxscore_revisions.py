@@ -288,3 +288,22 @@ def test_a_game_already_in_the_legacy_revision_adds_no_revision_for_equal_rows(
         assert record_revision(store, 11, rows, obs_id) is None
     finally:
         store.close()
+
+
+def test_a_revisit_with_a_repeated_player_is_a_shape_error_and_adds_no_revision(
+    conn: sqlite3.Connection,
+) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    payload = _boxscore()
+    forwards = payload["playerByGameStats"]["homeTeam"]["forwards"]
+    forwards.append(dict(forwards[0]))
+    client = FakeClient({URL: json.dumps(payload).encode()})
+    report = refresh(conn, client, now=DAY_FOUR)
+    assert report.errors
+    assert conn.execute(
+        "SELECT COUNT(*) FROM boxscore_revisions WHERE game_id = ?", (MAIN_GAME,)
+    ).fetchone() == (1,)
+    assert conn.execute(
+        "SELECT status FROM observations WHERE source = ? AND key = ? ORDER BY obs_id DESC LIMIT 1",
+        (BOXSCORES, str(MAIN_GAME)),
+    ).fetchone() == ("shape_error",)
