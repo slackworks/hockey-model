@@ -6,6 +6,7 @@ the report step passes to the script.
 """
 
 import re
+import runpy
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,9 @@ from workflow_support import job_condition
 
 WORKFLOW = require_path(
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "mutation.yml"
+)
+_SHARDS_SCRIPT = require_path(
+    Path(__file__).resolve().parents[1] / "scripts" / "mutation_shards.py"
 )
 
 
@@ -178,3 +182,34 @@ def test_the_report_passes_the_gate_result_to_the_script() -> None:
     report = _job("report")
     assert "GATE_RESULT: ${{ needs.gate.result }}" in report
     assert '--gate-result "$GATE_RESULT"' in report
+
+
+def test_the_shard_limits_come_from_the_gate_that_validates_them() -> None:
+    """The gate checks step_minutes once, and the shard job reads what the gate prints (#293)."""
+    gate, shard = _job("gate"), _job("shard")
+    assert 'bash scripts/mutation-limits.sh "$STEP_MINUTES" >> "$GITHUB_OUTPUT"' in gate
+    assert "STEP_MINUTES: ${{ inputs.step_minutes }}" in gate
+    assert "timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_minutes) }}" in shard
+    assert "timeout-minutes: ${{ fromJSON(needs.gate.outputs.step_minutes) }}" in shard
+    assert "inputs." not in shard, "the shard job must not read the raw input"
+
+
+def test_the_limits_step_runs_before_a_manual_run_can_leave_the_gate() -> None:
+    gate = _job("gate")
+    assert gate.index("id: limits") < gate.index("id: manual")
+
+
+def test_the_input_is_a_string_that_is_not_required() -> None:
+    text = _text()
+    inputs = text[text.index("  workflow_dispatch:\n") : text.index("\npermissions:")]
+    assert "      step_minutes:\n" in inputs
+    assert "required: false" in inputs
+    assert "type: string" in inputs
+
+
+def test_the_matrix_names_each_shard_of_the_table() -> None:
+    """A shard in the table that the matrix lacks never runs, and its modules get no result."""
+    table = runpy.run_path(str(_SHARDS_SCRIPT))["SHARDS"]
+    found = re.search(r"matrix:\n\s+shard: \[([0-9, ]+)\]", _job("shard"))
+    assert found is not None, "the shard job has no `shard: [..]` matrix"
+    assert [int(item) for item in found.group(1).split(",")] == list(range(len(table)))

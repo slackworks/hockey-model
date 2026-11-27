@@ -6,23 +6,40 @@ raises ``FileNotFoundError`` there, and the run aborts (#253). The guard skips i
 In a normal checkout the same missing path is a broken test, and the guard fails (#198).
 """
 
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from mutation_copy import in_mutation_copy, require_path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
-def test_a_copy_path_is_a_mutation_copy() -> None:
-    assert in_mutation_copy(Path("/work/repo/mutants/tests/test_x.py"))
-    assert in_mutation_copy(Path("/work/repo/mutants/src/hockey_model/x.py"))
+def _repo(tmp_path: Path, *parts: str) -> Path:
+    """Return a path under a fake repo root that holds a pyproject.toml."""
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    return tmp_path.joinpath(*parts)
 
 
-def test_a_checkout_path_is_not_a_mutation_copy() -> None:
-    assert not in_mutation_copy(Path("/work/repo/tests/test_x.py"))
-    assert not in_mutation_copy(Path("/work/repo/src/hockey_model/mutants.py"))
-    assert not in_mutation_copy(Path("/work/repo/tests/test_mutants.py"))
+def test_a_copy_path_is_a_mutation_copy(tmp_path: Path) -> None:
+    assert in_mutation_copy(_repo(tmp_path, "mutants", "tests", "test_x.py"))
+    assert in_mutation_copy(_repo(tmp_path, "mutants", "src", "hockey_model", "x.py"))
+
+
+def test_a_checkout_path_is_not_a_mutation_copy(tmp_path: Path) -> None:
+    assert not in_mutation_copy(_repo(tmp_path, "tests", "test_x.py"))
+    assert not in_mutation_copy(_repo(tmp_path, "src", "hockey_model", "mutants.py"))
+    assert not in_mutation_copy(_repo(tmp_path, "tests", "test_mutants.py"))
+
+
+def test_a_checkout_under_a_folder_named_mutants_is_not_a_mutation_copy(tmp_path: Path) -> None:
+    """A clone at ``~/mutants/repo`` must fail a missing script, and not skip it (#323)."""
+    checkout = tmp_path / "mutants" / "repo"
+    (checkout / "tests").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("", encoding="utf-8")
+    assert not in_mutation_copy(checkout / "tests" / "test_x.py")
 
 
 @pytest.mark.parametrize("missing", ["no_such_script.py", "gone.sh"])
@@ -50,3 +67,25 @@ def test_a_present_script_is_returned() -> None:
 
 def test_a_present_directory_is_returned() -> None:
     assert require_path(SCRIPTS) == SCRIPTS
+
+
+_FOLDERS = st.lists(
+    st.text(alphabet="abcxyz019_", min_size=1, max_size=5).filter(lambda name: name != "mutants"),
+    max_size=3,
+)
+
+
+@given(_FOLDERS, _FOLDERS)
+def test_a_mutants_folder_is_a_copy_only_while_its_parent_holds_pyproject(
+    above: list[str], below: list[str]
+) -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder).joinpath(*above)
+        copy_file = root / "mutants" / Path(*below) / "test_x.py"
+        copy_file.parent.mkdir(parents=True)
+        plain_file = root / Path(*below) / "test_x.py"
+        plain_file.parent.mkdir(parents=True, exist_ok=True)
+        assert not in_mutation_copy(copy_file)
+        (root / "pyproject.toml").write_text("", encoding="utf-8")
+        assert in_mutation_copy(copy_file)
+        assert not in_mutation_copy(plain_file)

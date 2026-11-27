@@ -21,6 +21,7 @@ from experiment_support import (
     register,
     seed,
 )
+from mutation_copy import require_path
 from seeding import add_game
 
 from hockey_model.backtest.runner import MODEL_ACTUAL, BacktestReport, ScoredRun
@@ -47,11 +48,6 @@ _SPENT = {
         "csv_hash": "0" * 64,
     },
 }
-
-
-def _repo_root() -> Path:
-    """Return the repository root, so the test works from any working directory."""
-    return Path(_git(Path(__file__).parent, "rev-parse", "--show-toplevel").strip())
 
 
 def _git(root: Path, *args: str) -> str:
@@ -177,7 +173,9 @@ class TestCheckAll:
 
     def test_check_all_accepts_the_real_registry(self):
         """The records committed in the repository pass their own checker."""
-        result = check_all(repo_root=_repo_root())
+        root = Path(__file__).resolve().parents[2]
+        require_path(root / "experiments")
+        result = check_all(repo_root=root)
         assert result["ok"] is True, result["errors"]
         ids = [entry["id"] for entry in result["records"]]
         assert "0001-v1-forward-test" in ids
