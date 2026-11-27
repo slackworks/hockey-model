@@ -15,7 +15,7 @@ from hockey_model.sources.nhl import BOXSCORE_PARSER, parse_boxscore
 from hockey_model.sources.nhl_events import parse_pbp
 from hockey_model.sources.nhl_shifts import parse_shifts
 from hockey_model.store import reconcile_game as reconcile_module
-from hockey_model.store.archive import OK, Fetch, record_observation
+from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import record_revision
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.event_writes import write_espn, write_pbp, write_shifts
@@ -86,6 +86,7 @@ def test_a_complete_game_after_the_last_revisit_is_reconciled(conn: sqlite3.Conn
         "goals_by_player": True,
         "roster": True,
         "situation": True,
+        "espn_teams": True,
         "dropped_shifts": True,
     }
 
@@ -176,11 +177,40 @@ def test_an_espn_summary_of_another_team_fails_the_team_check(conn: sqlite3.Conn
     assert _checks(conn)["espn_teams"] is False
 
 
-def test_a_game_with_no_espn_summary_has_no_team_check(conn: sqlite3.Connection) -> None:
+def test_a_game_with_no_espn_summary_notes_that_the_team_check_was_skipped(
+    conn: sqlite3.Connection,
+) -> None:
     _boxscore(conn)
     _store(conn, LATE)
     reconcile_game(conn, GAME, LATE)
-    assert "espn_teams" not in _checks(conn)
+    notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
+    entry = next(n for n in notes if n["check"] == "espn_teams")
+    assert entry == {
+        "check": "espn_teams",
+        "passed": True,
+        "detail": {"skipped": "no ESPN summary is stored for the game"},
+    }
+
+
+def test_a_refused_newest_espn_summary_fails_the_team_check(conn: sqlite3.Connection) -> None:
+    """An older summary of the wrong team must not be forgotten when a newer one is refused."""
+    _boxscore(conn)
+    _store(conn, LATE)
+    summary = parse_summary(_json("espn/summary_401803060.json"), "401803060")
+    wrong = EspnSummary(
+        tuple(replace(s, team="CGY") if s.team == "LAK" else s for s in summary.skaters)
+    )
+    _espn(conn, wrong)
+    when = LATE + timedelta(hours=1)
+    refused = Fetch(ESPN_SUMMARY, "u", when, SHAPE_ERROR, "espn_summary:1", str(GAME), b"{}")
+    record_observation(conn, refused)
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    notes = json.loads(conn.execute("SELECT notes FROM event_status").fetchone()[0])
+    entry = next(n for n in notes if n["check"] == "espn_teams")
+    assert entry["passed"] is False
+    assert entry["detail"] == {"reason": "the newest ESPN summary has no rows"}
 
 
 def test_a_second_run_replaces_the_row_of_the_same_pair(conn: sqlite3.Connection) -> None:

@@ -103,17 +103,27 @@ def _situation_check(conn: sqlite3.Connection, built: GameStints) -> CheckResult
     return check_situation(events, built.stints.stints)
 
 
-def _espn_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult | None:
-    """Check the teams of the newest ESPN summary of the game, or return None when it has none."""
-    teams = conn.execute(
-        "SELECT DISTINCT t.team FROM espn_skater_toi t WHERE t.obs_id = ("
-        " SELECT o.obs_id FROM observations o"
+def _espn_check(conn: sqlite3.Connection, inputs: GameInputs) -> CheckResult:
+    """Check the teams of the newest ESPN summary of the game.
+
+    A game with no summary has no check to run, and the notes say so. A newest summary that was
+    refused has no rows, and the check fails, because an older summary would hide the refusal.
+    """
+    newest = conn.execute(
+        "SELECT o.obs_id FROM observations o"
         " WHERE o.source = ? AND o.key = ? AND o.status IN (?, ?)"
-        " ORDER BY o.fetched_at DESC, o.obs_id DESC LIMIT 1)",
+        " ORDER BY o.fetched_at DESC, o.obs_id DESC LIMIT 1",
         (ESPN_SUMMARY, str(inputs.game_id), OK, SHAPE_ERROR),
+    ).fetchone()
+    if newest is None:
+        skipped = {"skipped": "no ESPN summary is stored for the game"}
+        return CheckResult("espn_teams", True, skipped)
+    teams = conn.execute(
+        "SELECT DISTINCT team FROM espn_skater_toi WHERE obs_id = ?", (newest[0],)
     ).fetchall()
     if not teams:
-        return None
+        reason = {"reason": "the newest ESPN summary has no rows"}
+        return CheckResult("espn_teams", False, reason)
     return check_espn_teams([team for (team,) in teams], inputs.home, inputs.away)
 
 
@@ -151,8 +161,7 @@ def _checks(conn: sqlite3.Connection, built: GameStints, inputs: GameInputs) -> 
         check_roster((i.player_id for i in inputs.intervals), inputs.positions),
         _situation_check(conn, built),
     ]
-    espn = _espn_check(conn, inputs)
-    return results if espn is None else [*results, espn]
+    return [*results, _espn_check(conn, inputs)]
 
 
 def _write_status(
