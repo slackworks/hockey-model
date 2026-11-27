@@ -101,6 +101,7 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
     url_of = _KINDS[source].url
     gaps = run.skipped(source)
     failures = 0
+    gapped = waiting = 0
     for index, game_id in enumerate(game_ids):
         left = len(game_ids) - index
         if failures >= MAX_UNIT_FAILURES:
@@ -111,12 +112,25 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
             run.timed_out = True
             return
         url = url_of(game_id)
-        if url in gaps or failed_since(run.conn, source, url, run.now - RETRY_FAILED_AFTER):
-            progress_log.advance()
-            continue
-        unit, reading = _unit(run, source, game_id)
-        failures = 0 if run.attempt(source, url, unit, reading) else failures + 1
+        if url in gaps:
+            gapped += 1
+        elif failed_since(run.conn, source, url, run.now - RETRY_FAILED_AFTER):
+            waiting += 1
+        else:
+            unit, reading = _unit(run, source, game_id)
+            failures = 0 if run.attempt(source, url, unit, reading) else failures + 1
         progress_log.advance()
+    _note_skips(run, source, gapped, waiting)
+
+
+def _note_skips(run: RefreshRun, source: str, gapped: int, waiting: int) -> None:
+    """Name the games that a read left aside, so a game that stays out of the dataset is seen."""
+    if gapped:
+        run.notes.append(f"{source}: {gapped} game(s) skipped, because every read failed")
+    if waiting:
+        run.notes.append(
+            f"{source}: {waiting} game(s) skipped, because the last read failed a day ago or less"
+        )
 
 
 def _read_source(run: RefreshRun, source: str) -> None:

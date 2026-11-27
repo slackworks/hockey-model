@@ -181,16 +181,19 @@ def test_a_game_whose_reads_failed_twice_is_a_known_gap(conn: sqlite3.Connection
     refresh(conn, FakeClient(failing), now=NOW)
     refresh(conn, FakeClient(failing), now=NOW + timedelta(days=1))
     client = FakeClient()
-    refresh(conn, client, now=NOW + timedelta(days=2))
+    report = refresh(conn, client, now=NOW + timedelta(days=2))
     assert pbp_url(GAME) not in client.urls
     assert GAME not in _games(conn, "pbp_events")
+    assert "nhl_pbp: 1 game(s) skipped, because every read failed" in report.notes
 
 
 def test_a_failed_read_is_not_tried_again_within_a_day(conn: sqlite3.Connection) -> None:
     refresh(conn, FakeClient(_failing(pbp_url(GAME))), now=NOW)
     client = FakeClient()
-    refresh(conn, client, now=NOW + timedelta(hours=2))
+    report = refresh(conn, client, now=NOW + timedelta(hours=2))
     assert pbp_url(GAME) not in client.urls
+    waited = "nhl_pbp: 1 game(s) skipped, because the last read failed a day ago or less"
+    assert waited in report.notes
 
 
 def test_a_revisit_bound_names_the_games_left_for_the_next_refresh(
