@@ -14,12 +14,12 @@ from enum import Enum
 
 from hockey_model.sources.nhl import BoxscoreRows, GoalieRow, SkaterRow
 from hockey_model.store.archive import Observation, observation_of
+from hockey_model.store.db import StoreError
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 
 COMPLETE = "complete"
 INCOMPLETE = "incomplete"
 MATCHED = "matched"
-MISMATCHED = "mismatched"
 # The parser of a revision that an upgrade wrote from rows that kept no bytes.
 LEGACY_PARSER = "legacy:unavailable"
 
@@ -109,7 +109,14 @@ def _select(policy: Policy | AsOf) -> tuple[str, list[object]]:
     """Return the SQL tail that picks one revision of a derivation, and its parameters."""
     if isinstance(policy, AsOf):
         return " AND fetched_at <= ? ORDER BY revision DESC", [iso_utc(policy.instant)]
-    return (" ORDER BY revision" + (" DESC" if policy is LATEST else "")), []
+    if policy is Policy.LATEST:
+        return " ORDER BY revision DESC", []
+    if policy is Policy.FIRST:
+        return " ORDER BY revision", []
+    raise StoreError(
+        f"read boxscore revision: policy {policy!r} is not FIRST, LATEST, or AsOf(instant); "
+        "pass one of those, so a forecast never reads a revision by accident"
+    )
 
 
 def _load(
@@ -158,16 +165,18 @@ def boxscore_rows(
     the store held it then. The rows are the rows of that one revision, so two revisions never
     mix. ``derivation`` pins one parse of the payloads. The default is the newest parse.
     """
-    chosen = newest_derivation(conn, game_id) if derivation is None else derivation
+    tail, params = _select(policy)
+    newest = newest_derivation(conn, game_id)
+    chosen = newest if derivation is None else derivation
     if chosen is None:
         return None
-    tail, params = _select(policy)
+    if derivation is not None and not (newest and 1 <= derivation <= newest):
+        raise StoreError(
+            f"read boxscore revision: game {game_id} has no derivation {derivation}; "
+            "pass a derivation that the store holds for the game, or none for the newest"
+        )
     found = _load(conn, game_id, chosen, tail + " LIMIT 1", params)
     return found[0] if found else None
-
-
-def _newest_revision(conn: sqlite3.Connection, game_id: int) -> BoxscoreRevision | None:
-    return boxscore_rows(conn, game_id, policy=LATEST)
 
 
 def insert_revision(conn: sqlite3.Connection, revision: BoxscoreRevision) -> None:
@@ -245,7 +254,7 @@ def record_revision(
     adds no revision and returns None: the observation alone records that the source repeated
     itself. The caller checks the identity of the boxscore before it calls this.
     """
-    newest = _newest_revision(conn, game_id)
+    newest = boxscore_rows(conn, game_id, policy=Policy.LATEST)
     candidate = revision_of(
         rows,
         observation_of(conn, obs_id),

@@ -351,17 +351,22 @@ def _boxscore_unit(run: RefreshRun, game_id: int) -> tuple[Callable[[datetime], 
     The unit writes the first-final rows. The reading then writes the revision, once the
     observation that holds the bytes has an id.
     """
-    held: list[BoxscoreRows] = []
+    held: BoxscoreRows | None = None
 
     def unit(stamp: datetime) -> int:
-        rows = fetch_boxscore(run.client, game_id)
-        check_boxscore_identity(run.conn, game_id, rows)
-        write_boxscore(run.conn, game_id, rows, stamp)
-        held.append(rows)
+        nonlocal held
+        held = fetch_boxscore(run.client, game_id)
+        check_boxscore_identity(run.conn, game_id, held)
+        write_boxscore(run.conn, game_id, held, stamp)
         return 1
 
     def derive(conn: sqlite3.Connection, obs_id: int) -> None:
-        record_revision(conn, game_id, held[-1], obs_id)
+        if held is None:
+            raise StoreError(
+                f"derive boxscore {game_id}: the unit ended with no parsed rows; "
+                "the derive hook runs only after a good unit"
+            )
+        record_revision(conn, game_id, held, obs_id)
 
     return unit, Reading(BOXSCORE_PARSER, derive=derive)
 

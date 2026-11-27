@@ -21,7 +21,7 @@ from hockey_model.store.boxscore_revisions import (
     boxscore_rows,
     record_revision,
 )
-from hockey_model.store.db import SCHEMA_VERSION, connect
+from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.upgrade import upgrade_store
@@ -339,3 +339,20 @@ def test_the_upgrade_marks_a_stray_team_mismatched_and_a_missing_game_unverified
         assert found == {13: "complete/mismatched", 14: "incomplete/unverified"}
     finally:
         store.close()
+
+
+def test_a_policy_that_is_not_one_of_the_three_is_refused(conn: sqlite3.Connection) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    with pytest.raises(StoreError, match="not FIRST, LATEST, or AsOf"):
+        boxscore_rows(conn, MAIN_GAME, policy=DAY_ONE)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("derivation", [0, 2, -1])
+def test_a_pinned_derivation_that_the_game_lacks_is_refused(
+    conn: sqlite3.Connection, derivation: int
+) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    with pytest.raises(StoreError, match=f"no derivation {derivation}"):
+        boxscore_rows(conn, MAIN_GAME, policy=LATEST, derivation=derivation)
+    with pytest.raises(StoreError, match="no derivation"):
+        boxscore_rows(conn, 1234567890, policy=LATEST, derivation=1)
