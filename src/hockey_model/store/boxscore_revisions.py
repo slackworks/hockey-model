@@ -161,9 +161,11 @@ def boxscore_rows(
     """Return one revision of the boxscore of ``game_id``, or None when the policy finds none.
 
     ``FIRST`` and ``LATEST`` pick the oldest and the newest revision. ``AsOf(instant)`` picks the
-    newest revision that was fetched at or before ``instant``, so a forecast reads the boxscore as
-    the store held it then. The rows are the rows of that one revision, so two revisions never
-    mix. ``derivation`` pins one parse of the payloads. The default is the newest parse.
+    newest revision that was fetched at or before ``instant``: the information that the store held
+    then. The rows are the rows of that one revision, so two revisions never mix. ``derivation``
+    pins one parse of the payloads. The default is the newest parse, which can be a rebuild that
+    ran after ``instant``, so an exact replay of an earlier forecast records ``(derivation,
+    revision)`` and pins the derivation.
     """
     tail, params = _select(policy)
     newest = newest_derivation(conn, game_id)
