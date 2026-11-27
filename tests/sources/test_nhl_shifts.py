@@ -106,13 +106,6 @@ def test_an_unknown_team_code_is_a_named_error() -> None:
         parse_shifts(payload, GAME)
 
 
-def test_a_period_below_one_is_a_named_error() -> None:
-    payload = load()
-    _shift(payload)["period"] = 0
-    with pytest.raises(SourceParseError, match="period must be 1 or more"):
-        parse_shifts(payload, GAME)
-
-
 def test_a_shift_number_that_is_not_an_integer_is_a_named_error() -> None:
     payload = load()
     _shift(payload)["shiftNumber"] = "one"
@@ -120,9 +113,40 @@ def test_a_shift_number_that_is_not_an_integer_is_a_named_error() -> None:
         parse_shifts(payload, GAME)
 
 
-def test_an_empty_chart_has_no_shift() -> None:
-    rows = parse_shifts({"data": [], "total": 0}, GAME)
-    assert (rows.shifts, rows.rows) == ((), 0)
+def test_an_empty_chart_is_a_named_error() -> None:
+    with pytest.raises(SourceParseError, match="lists no shift"):
+        parse_shifts({"data": [], "total": 0}, GAME)
+
+
+def test_a_chart_with_only_goal_rows_is_a_named_error() -> None:
+    payload = load()
+    payload["data"] = [r for r in payload["data"] if r["typeCode"] == 505]
+    with pytest.raises(SourceParseError, match="lists no shift"):
+        parse_shifts(payload, GAME)
+
+
+@pytest.mark.parametrize("value", [-1, 2**63, 10**30])
+def test_a_player_id_outside_the_store_range_is_a_named_error(value: int) -> None:
+    payload = load()
+    _shift(payload)["playerId"] = value
+    with pytest.raises(SourceParseError, match="out of range"):
+        parse_shifts(payload, GAME)
+
+
+@pytest.mark.parametrize("value", ["20:01", "99:59"])
+def test_a_clock_past_the_period_is_a_named_error(value: str) -> None:
+    payload = load()
+    _shift(payload)["endTime"] = value
+    with pytest.raises(SourceParseError, match="past the limit"):
+        parse_shifts(payload, GAME)
+
+
+@pytest.mark.parametrize("period", [0, 21, 10**20])
+def test_a_period_outside_the_range_is_a_named_error(period: int) -> None:
+    payload = load()
+    _shift(payload)["period"] = period
+    with pytest.raises(SourceParseError, match="period must be"):
+        parse_shifts(payload, GAME)
 
 
 def test_the_parser_does_not_change_its_input() -> None:

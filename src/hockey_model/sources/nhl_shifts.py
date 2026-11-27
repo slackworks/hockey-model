@@ -9,7 +9,12 @@ Design: docs/design/pbp-shift-dataset.md
 from dataclasses import dataclass
 
 from hockey_model.sources.http import HttpClient
-from hockey_model.sources.nhl_events import clock_seconds, game_second
+from hockey_model.sources.nhl_events import (
+    MAX_PERIOD,
+    bounded_int,
+    clock_seconds,
+    game_second,
+)
 from hockey_model.sources.payload import (
     as_list,
     as_mapping,
@@ -60,15 +65,15 @@ def _parse_shift(raw: object, game_id: int) -> ShiftRow | None:
     if team not in NHL_TEAM_CODES:
         raise SourceShapeError(SOURCE, team)
     period = int_field(SOURCE, row, "period", where)
-    if period < 1:
-        raise SourceParseError(SOURCE, f"{where} period must be 1 or more, got {period}")
+    if not 1 <= period <= MAX_PERIOD:
+        raise SourceParseError(SOURCE, f"{where} period must be 1 to {MAX_PERIOD}, got {period}")
     start = clock_seconds(field(SOURCE, row, "startTime", where), where)
     end = clock_seconds(field(SOURCE, row, "endTime", where), where)
     number = row.get("shiftNumber")
-    if number is not None and (isinstance(number, bool) or not isinstance(number, int)):
-        raise SourceParseError(SOURCE, f"{where} shiftNumber must be an integer, got {number!r}")
+    if number is not None:
+        number = bounded_int(SOURCE, row, "shiftNumber", where)
     return ShiftRow(
-        int_field(SOURCE, row, "playerId", where),
+        bounded_int(SOURCE, row, "playerId", where),
         team,
         period,
         game_second(period, start),
@@ -80,14 +85,18 @@ def _parse_shift(raw: object, game_id: int) -> ShiftRow | None:
 def parse_shifts(payload: object, game_id: int) -> ShiftRows:
     """Return the shifts of one game from a shift chart payload.
 
-    A row of another game, a team code that the maps do not know, and a clock that is not
-    ``MM:SS`` raise a named error. An interval with no length is kept: the stint step drops it
-    and records it, because a parser must not decide what a feed fault means.
+    A row of another game, a team code that the maps do not know, a clock that is not ``MM:SS``,
+    and a chart with no shift raise a named error. An interval with no length is kept: the stint
+    step drops it and records it, because a parser must not decide what a feed fault means.
     """
     top = as_mapping(SOURCE, payload, "the shift chart")
     data = as_list(SOURCE, field(SOURCE, top, "data", "the shift chart"), "the shift chart data")
-    parsed = (_parse_shift(raw, game_id) for raw in data)
-    return ShiftRows(game_id, tuple(s for s in parsed if s is not None), len(data))
+    shifts = tuple(s for s in (_parse_shift(raw, game_id) for raw in data) if s is not None)
+    if not shifts:
+        raise SourceParseError(
+            SOURCE, f"shift chart of game {game_id} lists no shift; the chart may not exist yet"
+        )
+    return ShiftRows(game_id, shifts, len(data))
 
 
 def shifts_url(game_id: int) -> str:
