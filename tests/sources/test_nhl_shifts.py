@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from hockey_model.sources.http import HttpClient
+from hockey_model.sources.nhl_events import MAX_PERIOD
 from hockey_model.sources.nhl_shifts import (
     SHIFTS_PARSER,
     fetch_shifts,
@@ -174,3 +175,22 @@ def test_fetch_reads_the_shift_chart_url_of_the_game() -> None:
     assert shifts_url(GAME) == (
         f"https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={GAME}"
     )
+
+
+def test_a_period_at_the_limit_is_read() -> None:
+    payload = load()
+    _shift(payload)["period"] = MAX_PERIOD
+    assert MAX_PERIOD in {s.period for s in parse_shifts(payload, GAME).shifts}
+
+
+def test_each_shift_keeps_the_shift_number_of_its_row() -> None:
+    payload = load()
+    numbers = [r["shiftNumber"] for r in payload["data"] if r["typeCode"] == 517]
+    parsed = [s.shift_number for s in parse_shifts(payload, GAME).shifts]
+    assert any(n is not None for n in numbers)
+    assert parsed == numbers
+
+
+def test_a_fetch_of_a_body_that_is_not_json_names_the_source() -> None:
+    with pytest.raises(SourceParseError, match="^read nhl_shifts data: "):
+        fetch_shifts(_Client(b"not json"), GAME)

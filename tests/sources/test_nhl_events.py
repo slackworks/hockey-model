@@ -8,6 +8,7 @@ import pytest
 
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import (
+    MAX_PERIOD,
     PBP_PARSER,
     clock_seconds,
     fetch_pbp,
@@ -324,3 +325,53 @@ def test_an_event_type_with_no_player_keys_in_the_map_keeps_its_type_and_no_play
     shot["typeDescKey"] = "failed-shot-attempt"
     found = next(e for e in parse_pbp(payload, GAME).events if e.event_id == shot["eventId"])
     assert (found.type, found.players) == ("failed-shot-attempt", (None, None, None))
+
+
+def test_a_period_at_the_limit_is_read_and_one_past_it_is_a_named_error() -> None:
+    payload = load()
+    descriptor = payload["plays"][3]["periodDescriptor"]
+    descriptor["number"] = MAX_PERIOD
+    descriptor["periodType"] = "OT"
+    event = parse_pbp(payload, GAME).events[3]
+    assert event.period == MAX_PERIOD
+    assert event.game_second == game_second(MAX_PERIOD, event.period_second)
+    descriptor["number"] = MAX_PERIOD + 1
+    with pytest.raises(SourceParseError, match="not a known period"):
+        parse_pbp(payload, GAME)
+
+
+def test_each_event_keeps_the_coordinates_and_the_goalie_of_its_play() -> None:
+    payload = load()
+    details = {p["eventId"]: p.get("details", {}) for p in payload["plays"]}
+    events = parse_pbp(payload, GAME).events
+    assert any(e.y is not None for e in events)
+    assert any(e.goalie_in_net is not None for e in events)
+    for event in events:
+        raw = details[event.event_id]
+        assert (event.x, event.y) == (raw.get("xCoord"), raw.get("yCoord"))
+        assert event.goalie_in_net == raw.get("goalieInNetId")
+
+
+def test_each_event_keeps_the_situation_code_of_its_play() -> None:
+    payload = load()
+    codes = {p["eventId"]: p.get("situationCode") for p in payload["plays"]}
+    events = parse_pbp(payload, GAME).events
+    assert any(e.situation_code is not None for e in events)
+    assert all(e.situation_code == codes[e.event_id] for e in events)
+
+
+def test_an_offensive_zone_event_is_at_the_end_of_the_rink_that_its_team_attacks() -> None:
+    events = parse_pbp(load(), GAME).events
+    zone = [
+        (e.x, e.attack_x_sign)
+        for e in events
+        if e.zone == "O" and e.x and e.attack_x_sign is not None
+    ]
+    assert len(zone) > 20
+    assert {sign for _, sign in zone} == {-1, 1}
+    assert all(x * sign > 0 for x, sign in zone)
+
+
+def test_a_fetch_of_a_body_that_is_not_json_names_the_source() -> None:
+    with pytest.raises(SourceParseError, match="^read nhl_pbp data: "):
+        fetch_pbp(_Client(b"not json"), GAME)
