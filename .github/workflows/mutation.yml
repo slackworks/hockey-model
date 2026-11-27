@@ -7,6 +7,13 @@ on:
     # Mondays at 07:00 UTC.
     - cron: "0 7 * * 1"
   workflow_dispatch:
+    inputs:
+      step_minutes:
+        description: >-
+          Minutes that each shard may run mutmut. Leave it empty for the scheduled limit. A longer
+          limit lets a shard finish, so that its per-mutant durations size the shard table (#293).
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -54,7 +61,8 @@ jobs:
     needs: gate
     if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A run that sets step_minutes is a measurement run, so the job limit is the GitHub maximum.
+    timeout-minutes: ${{ inputs.step_minutes && 360 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +79,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - name: Run mutation shard
-        timeout-minutes: 25
+        timeout-minutes: ${{ fromJSON(inputs.step_minutes || '25') }}
         env:
           SHARD: ${{ matrix.shard }}
         run: |
