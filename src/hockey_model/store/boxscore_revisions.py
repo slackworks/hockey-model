@@ -16,6 +16,7 @@ from hockey_model.sources.nhl import BoxscoreRows, GoalieRow, SkaterRow
 from hockey_model.store.archive import Observation, observation_of
 from hockey_model.store.db import StoreError
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
+from hockey_model.types import HockeyModelError
 
 COMPLETE = "complete"
 INCOMPLETE = "incomplete"
@@ -120,6 +121,17 @@ def _select(policy: Policy | AsOf) -> tuple[str, list[object]]:
     )
 
 
+def _revision_time(game_id: int, revision: int, text: str) -> datetime:
+    """Parse the time that a revision row stores, or raise a store error that names the row."""
+    try:
+        return parse_iso_utc(text)
+    except HockeyModelError as exc:
+        raise StoreError(
+            f"game {game_id}: boxscore revision {revision} has a time that does not parse "
+            f"({exc}); fix the row, or read the boxscore again"
+        ) from exc
+
+
 def _load(
     conn: sqlite3.Connection, game_id: int, derivation: int, tail: str, params: list[object]
 ) -> list[BoxscoreRevision]:
@@ -136,7 +148,7 @@ def _load(
             revision,
             obs_id,
             parser,
-            parse_iso_utc(fetched_at),
+            _revision_time(game_id, revision, fetched_at),
             completeness,
             identity,
             *_lines(conn, game_id, derivation, revision),

@@ -445,3 +445,16 @@ def test_a_revisit_whose_derive_fails_is_still_due_after_the_fix(
     monkeypatch.undo()
     refresh(conn, FakeClient(), now=DAY_FOUR)
     assert MAIN_GAME not in boxscores_due(conn, DAY_FOUR, REVISIT_AFTER_DAYS)
+
+
+def test_a_revision_with_a_bad_stored_time_raises_a_store_error_that_names_it(
+    tmp_path: Path,
+) -> None:
+    store = connect(tmp_path / "store.db")
+    try:
+        refresh(store, FakeClient(), now=DAY_ONE)
+        store.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
+        with pytest.raises(StoreError, match=rf"game {MAIN_GAME}: boxscore revision 1 .*garbage"):
+            boxscore_rows(store, MAIN_GAME, policy=LATEST)
+    finally:
+        store.close()
