@@ -153,7 +153,11 @@ def _stored_time(game_id: int, text: str) -> datetime:
 
 
 def _is_settled(conn: sqlite3.Connection, inputs: GameInputs) -> bool:
-    """Return True when both observations were read after the last revisit day of the game."""
+    """Return True when every input was read after the last revisit day of the game.
+
+    The inputs are the play-by-play, the shift chart, and the newest boxscore revision. A game
+    with no boxscore revision fails the player check, so it is judged on the other two.
+    """
     start = conn.execute(
         "SELECT start_utc FROM games WHERE game_id = ? ORDER BY fetched_at DESC LIMIT 1",
         (inputs.game_id,),
@@ -165,7 +169,11 @@ def _is_settled(conn: sqlite3.Connection, inputs: GameInputs) -> bool:
         "SELECT fetched_at FROM observations WHERE obs_id IN (?, ?)",
         (inputs.pbp_obs, inputs.shift_obs),
     )
-    return min(_stored_time(inputs.game_id, text) for (text,) in reads) >= last
+    times = [_stored_time(inputs.game_id, text) for (text,) in reads]
+    revision = boxscore_rows(conn, inputs.game_id, policy=LATEST)
+    if revision is not None:
+        times.append(revision.fetched_at)
+    return min(times) >= last
 
 
 def _checks(conn: sqlite3.Connection, built: GameStints, inputs: GameInputs) -> list[CheckResult]:

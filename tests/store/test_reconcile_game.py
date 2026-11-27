@@ -56,9 +56,9 @@ def _store(conn: sqlite3.Connection, when: datetime, *, events=None) -> tuple[in
     return pbp, shift
 
 
-def _boxscore(conn: sqlite3.Connection) -> None:
+def _boxscore(conn: sqlite3.Connection, when: datetime = LATE) -> None:
     body = (FIXTURES / "nhl" / "boxscore_2025020709.json").read_bytes()
-    fetch = Fetch(BOXSCORES, "https://example.test/b", LATE, OK, BOXSCORE_PARSER, str(GAME), body)
+    fetch = Fetch(BOXSCORES, "https://example.test/b", when, OK, BOXSCORE_PARSER, str(GAME), body)
     obs = record_observation(conn, fetch)
     record_revision(conn, GAME, parse_boxscore(json.loads(body)), obs)
 
@@ -404,3 +404,24 @@ def test_a_shift_chart_with_no_goalie_shift_cannot_reach_reconciled(
     assert checks["situation"] is False
     assert checks["roster"] is True
     assert checks["shift_lengths"] is True
+
+
+def test_a_boxscore_read_before_the_last_revisit_keeps_the_game_provisional(
+    conn: sqlite3.Connection,
+) -> None:
+    """The play-by-play and the shifts are late, and the boxscore is the early one."""
+    _boxscore(conn, EARLY)
+    _store(conn, LATE)
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "provisional"
+
+
+def test_a_boxscore_read_after_the_last_revisit_settles_the_game(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn, LATE + timedelta(days=1))
+    _store(conn, LATE)
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "reconciled"
