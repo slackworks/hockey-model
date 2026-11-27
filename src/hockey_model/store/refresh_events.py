@@ -16,6 +16,7 @@ from hockey_model import progress as progress_log
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import PBP_PARSER, fetch_pbp, pbp_url
 from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, fetch_shifts, shifts_url
+from hockey_model.sources.shape_errors import SourcePendingError
 from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS
 from hockey_model.store.db import StoreError
 from hockey_model.store.event_writes import write_pbp, write_shifts
@@ -77,7 +78,13 @@ def _unit(run: RefreshRun, source: str, game_id: int) -> tuple[Callable[[datetim
         held[0](conn, obs_id)
         run.reconcile_in_unit(game_id)
 
-    return unit, Reading(kind.parser, derive=derive)
+    def not_yet(failure: Exception) -> str | None:
+        """Say that a feed is not published yet. Such a read never counts toward a known gap."""
+        if isinstance(failure, SourcePendingError):
+            return f"{source}: game {game_id}: {failure}; the next refresh reads it again"
+        return None
+
+    return unit, Reading(kind.parser, expected_absence=not_yet, derive=derive)
 
 
 def games_missing_events(run: RefreshRun, source: str) -> list[int]:

@@ -20,7 +20,7 @@ from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_events import events, read_events
 from hockey_model.store.refresh_nhl import read_boxscores
-from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS
+from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS, abandoned_urls
 
 SCORED = 14
 GAME = 2025020709
@@ -259,3 +259,28 @@ def test_a_game_without_a_status_is_reconciled_again_in_the_next_refresh(
     events(last)
     assert [row[0] for row in _status(conn)] == ["reconciled"]
     assert last.notes == []
+
+
+def _unpublished(source: str) -> dict[str, bytes | Exception]:
+    """The feed of a game that the NHL has not published yet: no shift, or no play."""
+    if source == NHL_SHIFTS:
+        return {shifts_url(GAME): b'{"data": [], "total": 0}'}
+    body = json.loads(fixture("nhl/pbp_2025020709.json"))
+    body["plays"] = []
+    return {pbp_url(GAME): json.dumps(body).encode()}
+
+
+@pytest.mark.parametrize("source", [NHL_PBP, NHL_SHIFTS])
+def test_a_feed_that_is_not_published_yet_never_becomes_a_known_gap(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    url = (pbp_url if source == NHL_PBP else shifts_url)(GAME)
+    for days in range(4):
+        report = refresh(conn, FakeClient(_unpublished(source)), now=NOW + timedelta(days=days))
+        assert report.errors == ()
+        assert any("may not" in note and str(GAME) in note for note in report.notes)
+    assert url not in abandoned_urls(conn, source)
+    client = FakeClient()
+    refresh(conn, client, now=NOW + timedelta(days=4))
+    assert url in client.urls
+    assert GAME in _games(conn, "pbp_events" if source == NHL_PBP else "shifts")

@@ -23,7 +23,7 @@ from hockey_model.sources.payload import (
     int_field,
     str_field,
 )
-from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
+from hockey_model.sources.shape_errors import SourceParseError, SourcePendingError, SourceShapeError
 from hockey_model.team_codes import NHL_TEAM_CODES
 
 SOURCE = "nhl_shifts"
@@ -93,7 +93,7 @@ def parse_shifts(payload: object, game_id: int) -> ShiftRows:
     data = as_list(SOURCE, field(SOURCE, top, "data", "the shift chart"), "the shift chart data")
     shifts = tuple(s for s in (_parse_shift(raw, game_id) for raw in data) if s is not None)
     if not shifts:
-        raise SourceParseError(
+        raise SourcePendingError(
             SOURCE, f"shift chart of game {game_id} lists no shift; the chart may not exist yet"
         )
     return ShiftRows(game_id, shifts, len(data))
