@@ -14,6 +14,7 @@ from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import boxscore_url
 from hockey_model.sources.nhl_events import pbp_url
 from hockey_model.sources.nhl_shifts import shifts_url
+from hockey_model.store import refresh_events
 from hockey_model.store.db import connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
@@ -146,3 +147,55 @@ def test_a_new_boxscore_revision_that_cannot_reconcile_removes_the_status(
     assert len(later.errors) == 1
     assert "garbage" in str(later.errors[0])
     assert _status(conn) == []
+
+
+def _failing(url: str) -> dict[str, bytes | Exception]:
+    return {url: SourceError("nhl_pbp", url, "HTTP 503")}
+
+
+def test_three_failed_units_in_a_row_stop_the_source(conn: sqlite3.Connection) -> None:
+    failing: dict[str, bytes | Exception] = {
+        pbp_url(game_id): SourceError("nhl_pbp", pbp_url(game_id), "HTTP 503")
+        for game_id in range(2025020697, 2025020711)
+    }
+    report = refresh(conn, FakeClient(failing), now=NOW)
+    assert len(report.errors) == 3
+    assert any("nhl_pbp: stopped after 3 failed reads; 11 not tried" in n for n in report.notes)
+    assert _games(conn, "pbp_events") == set()
+    assert len(_games(conn, "shifts")) == SCORED
+
+
+def test_a_spent_time_budget_stops_the_read(conn: sqlite3.Connection) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW, deadline=NOW)
+    read_events(run, NHL_PBP, [GAME])
+    assert run.timed_out
+    assert any("time ran out; 1 not tried" in note for note in run.notes)
+    assert _games(conn, "pbp_events") == set()
+
+
+def test_a_game_whose_reads_failed_twice_is_a_known_gap(conn: sqlite3.Connection) -> None:
+    failing = _failing(pbp_url(GAME))
+    refresh(conn, FakeClient(failing), now=NOW)
+    refresh(conn, FakeClient(failing), now=NOW + timedelta(days=1))
+    client = FakeClient()
+    refresh(conn, client, now=NOW + timedelta(days=2))
+    assert pbp_url(GAME) not in client.urls
+    assert GAME not in _games(conn, "pbp_events")
+
+
+def test_a_failed_read_is_not_tried_again_within_a_day(conn: sqlite3.Connection) -> None:
+    refresh(conn, FakeClient(_failing(pbp_url(GAME))), now=NOW)
+    client = FakeClient()
+    refresh(conn, client, now=NOW + timedelta(hours=2))
+    assert pbp_url(GAME) not in client.urls
+
+
+def test_a_revisit_bound_names_the_games_left_for_the_next_refresh(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh(conn, FakeClient(), now=NOW)
+    monkeypatch.setattr(refresh_events, "MAX_REVISITS", 2)
+    report = refresh(conn, FakeClient(), now=NOW + timedelta(days=3))
+    assert any("12 revisit(s) wait for the next refresh" in n for n in report.notes)
+    assert _observations(conn, NHL_PBP, 2025020697) == 2
+    assert _observations(conn, NHL_PBP, 2025020710) == 1

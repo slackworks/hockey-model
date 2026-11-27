@@ -17,7 +17,6 @@ from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import PBP_PARSER, fetch_pbp, pbp_url
 from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, fetch_shifts, shifts_url
 from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS, reads_due
-from hockey_model.store.db import StoreError
 from hockey_model.store.event_writes import write_pbp, write_shifts
 from hockey_model.store.recording import Reading
 from hockey_model.store.refresh_context import MAX_UNIT_FAILURES, RefreshRun
@@ -61,20 +60,17 @@ _KINDS = {
 def _unit(run: RefreshRun, source: str, game_id: int) -> tuple[Callable[[datetime], int], Reading]:
     """Return the unit that reads one game of ``source``, and how its bytes are archived."""
     kind = _KINDS[source]
-    held: Writer | None = None
+    held: list[Writer] = []
 
     def unit(_stamp: datetime) -> int:
-        nonlocal held
-        held = kind.fetch(run.client, game_id)
+        held.clear()
+        held.append(kind.fetch(run.client, game_id))
         return 1
 
     def derive(conn: sqlite3.Connection, obs_id: int) -> None:
-        if held is None:
-            raise StoreError(
-                f"derive {source} {game_id}: the unit ended with no parsed rows; "
-                "the derive hook runs only after a good unit"
-            )
-        held(conn, obs_id)
+        # The hook runs after a good unit only, so the list holds exactly one writer.
+        (write,) = held
+        write(conn, obs_id)
         reconcile_in_unit(run, conn, game_id)
 
     return unit, Reading(kind.parser, derive=derive)
