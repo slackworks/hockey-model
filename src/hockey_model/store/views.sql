@@ -62,3 +62,17 @@ SELECT e.* FROM pbp_events e JOIN latest_event_observations l ON e.obs_id = l.ob
 DROP VIEW IF EXISTS latest_shifts;
 CREATE VIEW latest_shifts AS
 SELECT s.* FROM shifts s JOIN latest_event_observations l ON s.obs_id = l.obs_id;
+
+-- The stints and the status of the newest pair of observations of a game (#35). A pair is old
+-- when either of its observations has a newer one.
+DROP VIEW IF EXISTS latest_stints;
+CREATE VIEW latest_stints AS
+SELECT s.* FROM stints s
+WHERE s.pbp_obs IN (SELECT obs_id FROM latest_event_observations)
+  AND s.shift_obs IN (SELECT obs_id FROM latest_event_observations);
+
+DROP VIEW IF EXISTS latest_event_status;
+CREATE VIEW latest_event_status AS
+SELECT t.* FROM event_status t
+WHERE t.pbp_obs IN (SELECT obs_id FROM latest_event_observations)
+  AND t.shift_obs IN (SELECT obs_id FROM latest_event_observations);

@@ -143,6 +143,8 @@ VIEWS = [
     "latest_event_observations",
     "latest_pbp_events",
     "latest_shifts",
+    "latest_stints",
+    "latest_event_status",
 ]
 
 

@@ -270,3 +270,34 @@ CREATE INDEX IF NOT EXISTS mp_goalie_games_player ON mp_goalie_games (nhl_id);
 CREATE INDEX IF NOT EXISTS starter_reads_game ON starter_reads (game_id, team);
 CREATE INDEX IF NOT EXISTS injury_reads_time ON injury_reads (fetched_at);
 CREATE INDEX IF NOT EXISTS observations_key ON observations (source, key, fetched_at);
+
+-- A stint is a span of one period with one set of players on the ice (#35). It names the
+-- play-by-play and the shift chart that it came from, because the roster comes from the first
+-- and the shifts from the second. The player columns hold JSON arrays of sorted player ids.
+-- An empty net is an empty array. Design: docs/design/pbp-shift-dataset.md
+CREATE TABLE stints (
+    game_id INTEGER NOT NULL,
+    pbp_obs INTEGER NOT NULL REFERENCES observations (obs_id),
+    shift_obs INTEGER NOT NULL REFERENCES observations (obs_id),
+    stint INTEGER NOT NULL,
+    period INTEGER NOT NULL,
+    start_second INTEGER NOT NULL,
+    end_second INTEGER NOT NULL,
+    home_skaters TEXT NOT NULL,
+    away_skaters TEXT NOT NULL,
+    home_goalies TEXT NOT NULL,
+    away_goalies TEXT NOT NULL,
+    PRIMARY KEY (game_id, pbp_obs, shift_obs, stint)
+);
+
+-- The result of the reconciliation checks for one pair of observations. notes is a JSON list
+-- with one entry for each check: its name, whether it passed, and the values of a failure.
+CREATE TABLE event_status (
+    game_id INTEGER NOT NULL,
+    pbp_obs INTEGER NOT NULL REFERENCES observations (obs_id),
+    shift_obs INTEGER NOT NULL REFERENCES observations (obs_id),
+    status TEXT NOT NULL CHECK (status IN ('provisional', 'reconciled', 'incomplete')),
+    checked_at TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    PRIMARY KEY (game_id, pbp_obs, shift_obs)
+);

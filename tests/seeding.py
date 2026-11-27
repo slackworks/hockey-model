@@ -205,8 +205,18 @@ EVENT_TABLES = (
 )
 
 
+STINT_TABLES = ("event_status", "stints")
+
+
+def drop_stint_tables(conn: sqlite3.Connection) -> None:
+    """Remove the tables that the 11->12 step adds, so a store can pass for version 11."""
+    for table in STINT_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 def drop_event_tables(conn: sqlite3.Connection) -> None:
-    """Remove the tables that the 10->11 step adds, so a store can pass for version 10."""
+    """Remove the tables that the 10->11 and 11->12 steps add, so a store passes for 10."""
+    drop_stint_tables(conn)
     for table in EVENT_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
 

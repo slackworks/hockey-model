@@ -35,3 +35,11 @@ def test_iso_utc_rejects_a_naive_time() -> None:
 def test_parse_iso_utc_rejects_a_naive_text() -> None:
     with pytest.raises(HockeyModelError, match="no timezone"):
         parse_iso_utc("2026-01-01T12:00:00")
+
+
+@pytest.mark.parametrize(
+    "text", ["garbage", "", "2026-13-45T00:00:00+00:00", "2026-01-01 25:00+00:00"]
+)
+def test_parse_iso_utc_names_a_text_that_is_not_a_time(text: str) -> None:
+    with pytest.raises(HockeyModelError, match=r"read store time .* not an ISO 8601 time"):
+        parse_iso_utc(text)
