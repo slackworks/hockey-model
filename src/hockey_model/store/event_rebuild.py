@@ -82,6 +82,23 @@ def _payload(conn: sqlite3.Connection, obs: Observation, sha256: str) -> object:
     return get_json_text(obs.source, raw, f"archived payload of observation {obs.obs_id}")
 
 
+def _invalidate(conn: sqlite3.Connection, source: str, obs: Observation) -> None:
+    """Drop the stints and the statuses that were built from the rows of ``obs``.
+
+    A rebuild rewrites the rows of an observation in place, so a stint or a status that names the
+    observation would describe rows that no longer exist. The next ``store reconcile`` makes
+    them again. An ESPN summary feeds the status of its game only.
+    """
+    if source == ESPN_SUMMARY:
+        if obs.key is not None and _GAME_KEY.fullmatch(obs.key):
+            conn.execute("DELETE FROM event_status WHERE game_id = ?", (int(obs.key),))
+        return
+    for table in ("stints", "event_status"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE pbp_obs = ? OR shift_obs = ?", (obs.obs_id, obs.obs_id)
+        )
+
+
 def _has_rows(conn: sqlite3.Connection, kind: _Kind, obs_id: int) -> bool:
     """Return True when an earlier parse left rows for the observation."""
     found = conn.execute(f"SELECT 1 FROM {kind.tables[0]} WHERE obs_id = ? LIMIT 1", (obs_id,))
@@ -111,6 +128,7 @@ def rebuild_events(
             if obs.sha256 is None or obs.status not in (OK, SHAPE_ERROR):
                 continue
             seen += 1
+            _invalidate(conn, source, obs)
             accepted_before = obs.status == OK or _has_rows(conn, kind, obs.obs_id)
             try:
                 kind.apply(conn, obs, _payload(conn, obs, obs.sha256))

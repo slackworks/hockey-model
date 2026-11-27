@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from seeding import add_game
 
 from hockey_model.sources.espn_summary import SUMMARY_PARSER
 from hockey_model.sources.nhl_events import PBP_PARSER, pbp_url
@@ -17,6 +18,7 @@ from hockey_model.store import event_rebuild, event_writes
 from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observation
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.rebuild import rebuild_source
+from hockey_model.store.reconcile_game import reconcile_games
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -228,3 +230,47 @@ def test_a_payload_for_another_game_than_its_key_is_a_refusal(conn: sqlite3.Conn
     report = rebuild_source(conn, NHL_PBP, PBP_PARSER)
     assert report.rejected == 1
     assert "names game" in report.refused[0]
+
+
+def _reconciled(conn: sqlite3.Connection) -> None:
+    add_game(conn, GAME, "2026-01-10T01:00:00+00:00", home="EDM", away="LAK", score=(3, 4))
+    for source in (NHL_PBP, NHL_SHIFTS):
+        _archive(conn, source)
+        rebuild_source(conn, source, SOURCES[source][0])
+    report = reconcile_games(conn, WHEN)
+    assert report.failed == ()
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM event_status").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("source", [NHL_PBP, NHL_SHIFTS])
+def test_a_rebuild_drops_the_stints_and_the_status_that_name_its_rows(
+    conn: sqlite3.Connection, source: str
+) -> None:
+    _reconciled(conn)
+    rebuild_source(conn, source, SOURCES[source][0])
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM event_status").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM latest_event_status").fetchone() == (0,)
+
+
+def test_a_rebuild_that_refuses_a_payload_drops_its_stints_and_status(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _reconciled(conn)
+    monkeypatch.setattr(event_rebuild, "parse_shifts", _refuse_shifts)
+    rebuild_source(conn, NHL_SHIFTS, SHIFTS_PARSER, allow_refused=True)
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM latest_event_status").fetchone() == (0,)
+
+
+def _refuse_shifts(payload: object, game_id: int) -> object:
+    raise SourceParseError("nhl_shifts", "the parser lost the shape of the feed")
+
+
+def test_an_espn_rebuild_drops_the_status_of_its_game(conn: sqlite3.Connection) -> None:
+    _reconciled(conn)
+    _archive(conn, ESPN_SUMMARY)
+    rebuild_source(conn, ESPN_SUMMARY, SUMMARY_PARSER)
+    assert conn.execute("SELECT COUNT(*) FROM event_status").fetchone() == (0,)
+    assert conn.execute("SELECT COUNT(*) FROM stints").fetchone()[0] > 0
