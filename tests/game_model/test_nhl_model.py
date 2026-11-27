@@ -1,9 +1,11 @@
 """Tests for the NHL game model."""
 
+import json
 import math
 import sqlite3
 import urllib.request
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from seeding import FETCHED, add_game, add_goalie, add_goalie_form, add_team_form, artifact, utc
@@ -19,7 +21,12 @@ from hockey_model.game_model.features import GoalieMode
 from hockey_model.game_model.logistic import ELO_ONLY, LogisticFit
 from hockey_model.game_model.nhl_model import LEAGUE_GOALS, NhlGameModel
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT, TEAM_GAMES_URL, goalie_games_url
-from hockey_model.store.source_reads import KNOWN_SOURCES, record_read
+from hockey_model.sources.nhl_events import parse_pbp
+from hockey_model.sources.nhl_shifts import parse_shifts
+from hockey_model.store.archive import OK, Fetch, record_observation
+from hockey_model.store.event_writes import write_pbp, write_shifts
+from hockey_model.store.reconcile_game import reconcile_games
+from hockey_model.store.source_reads import KNOWN_SOURCES, NHL_PBP, NHL_SHIFTS, record_read
 
 START = utc("2026-01-20T00:00")
 AS_OF = utc("2026-01-19T16:00")
@@ -412,3 +419,25 @@ def test_a_team_whose_moneypuck_form_lags_gets_a_note(store: sqlite3.Connection)
     assert [note for note in notes if "MoneyPuck form" in note] == [
         "MoneyPuck form is 2 stored games behind; newest MoneyPuck game 15, newest final game 18"
     ]
+
+
+def _event_payload(name: str) -> object:
+    path = Path(__file__).parent.parent / "fixtures" / "nhl" / f"{name}_2025020709.json"
+    return json.loads(path.read_text())
+
+
+def test_filled_event_tables_do_not_change_a_prediction(store: sqlite3.Connection) -> None:
+    """The model reads no event table (#35). A store with event rows predicts as it did before."""
+    season(store)
+    before = model(store).predict(GAME, AS_OF, 0.8)
+    game = 2025020709
+    add_game(store, game, "2026-01-10T01:00:00+00:00", home="EDM", away="LAK")
+    pbp = record_observation(store, Fetch(NHL_PBP, "u", FETCHED, OK, "nhl_pbp:1", str(game)))
+    shift = record_observation(
+        store, Fetch(NHL_SHIFTS, "u", FETCHED, OK, "nhl_shifts:1", str(game))
+    )
+    write_pbp(store, pbp, parse_pbp(_event_payload("pbp"), game))
+    write_shifts(store, shift, parse_shifts(_event_payload("shifts"), game))
+    reconcile_games(store, FETCHED)
+    assert store.execute("SELECT COUNT(*) FROM stints").fetchone()[0] > 0
+    assert model(store).predict(GAME, AS_OF, 0.8) == before
