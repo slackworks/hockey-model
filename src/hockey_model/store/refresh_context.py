@@ -134,7 +134,9 @@ class RefreshRun:
             with self.conn:
                 written = unit(stamp)
                 record_read(self.conn, source, url, stamp)
-                self._observe(capture, recorded.records, None)
+                observed = self._observe(capture, recorded.records, None)
+                if reading.derive is not None and observed:
+                    reading.derive(self.conn, observed[-1])
         except SOURCE_FAILURES as exc:
             absent = reading.expected_absence(exc) if reading.expected_absence else None
             if absent is not None:
@@ -156,14 +158,13 @@ class RefreshRun:
 
     def _observe(
         self, capture: Capture, records: list[RecordedFetch], failure: Exception | None
-    ) -> None:
-        """Write one observation for each request that the unit made.
+    ) -> list[int]:
+        """Write one observation for each request that the unit made, and return their ids.
 
         A failed unit writes them after its rollback, with the failure status and the bytes
         that did arrive, so a shape failure keeps the payload that caused it (#82).
         """
-        for fetch in capture.fetches(records, failure):
-            record_observation(self.conn, fetch)
+        return [record_observation(self.conn, fetch) for fetch in capture.fetches(records, failure)]
 
     def report(self) -> RefreshReport:
         """Return the final report of this run."""

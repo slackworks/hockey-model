@@ -129,6 +129,69 @@ _ARCHIVE_V9 = (
     "CREATE INDEX IF NOT EXISTS observations_key ON observations (source, key, fetched_at)",
 )
 
+# Versioned boxscores (#82). The step writes revision 1 for each boxscore that the store holds,
+# from ``skater_games`` and ``goalie_games``. Those rows came from reads that kept no bytes, so
+# the observation has no payload and its parser is ``legacy:unavailable``. Its time is the newest
+# fetch time of the rows of the game: that is when the whole boxscore was in the store. The
+# source name and the URL are the values that ``store/recording.py`` writes for a boxscore.
+_LEGACY_PARSER = "legacy:unavailable"
+_LEGACY_BOXSCORE_ROWS = (
+    "SELECT game_id, fetched_at FROM skater_games UNION ALL"
+    " SELECT game_id, fetched_at FROM goalie_games"
+)
+_REVISIONS_V10 = (
+    "CREATE TABLE boxscore_revisions ("
+    " game_id INTEGER NOT NULL, derivation INTEGER NOT NULL, revision INTEGER NOT NULL,"
+    " obs_id INTEGER NOT NULL REFERENCES observations (obs_id), parser TEXT NOT NULL,"
+    " fetched_at TEXT NOT NULL,"
+    " completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'incomplete')),"
+    " identity TEXT NOT NULL CHECK (identity IN ('matched', 'mismatched')),"
+    " PRIMARY KEY (game_id, derivation, revision))",
+    "CREATE TABLE skater_game_revisions ("
+    " game_id INTEGER NOT NULL, derivation INTEGER NOT NULL, revision INTEGER NOT NULL,"
+    " team TEXT NOT NULL, nhl_id INTEGER NOT NULL, toi_seconds INTEGER, goals INTEGER,"
+    " assists INTEGER, PRIMARY KEY (game_id, derivation, revision, nhl_id),"
+    " FOREIGN KEY (game_id, derivation, revision)"
+    " REFERENCES boxscore_revisions (game_id, derivation, revision))",
+    "CREATE TABLE goalie_game_revisions ("
+    " game_id INTEGER NOT NULL, derivation INTEGER NOT NULL, revision INTEGER NOT NULL,"
+    " team TEXT NOT NULL, nhl_id INTEGER NOT NULL, toi_seconds INTEGER, started INTEGER,"
+    " PRIMARY KEY (game_id, derivation, revision, nhl_id),"
+    " FOREIGN KEY (game_id, derivation, revision)"
+    " REFERENCES boxscore_revisions (game_id, derivation, revision))",
+    "INSERT INTO observations (source, url, key, fetched_at, status, sha256, parser, error)"
+    " SELECT 'nhl_boxscores',"
+    " 'https://api-web.nhle.com/v1/gamecenter/' || game_id || '/boxscore',"
+    " CAST(game_id AS TEXT), MAX(fetched_at), 'ok', NULL, '" + _LEGACY_PARSER + "', NULL"
+    f" FROM ({_LEGACY_BOXSCORE_ROWS}) GROUP BY game_id ORDER BY game_id",
+    "INSERT INTO boxscore_revisions (game_id, derivation, revision, obs_id, parser, fetched_at,"
+    " completeness, identity)"
+    " SELECT CAST(o.key AS INTEGER), 1, 1, o.obs_id, o.parser, o.fetched_at,"
+    " CASE WHEN g.home IS NOT NULL"
+    " AND EXISTS (SELECT 1 FROM skater_games s WHERE s.game_id = g.game_id AND s.team = g.home)"
+    " AND EXISTS (SELECT 1 FROM skater_games s WHERE s.game_id = g.game_id AND s.team = g.away)"
+    " AND EXISTS (SELECT 1 FROM goalie_games s WHERE s.game_id = g.game_id AND s.team = g.home)"
+    " AND EXISTS (SELECT 1 FROM goalie_games s WHERE s.game_id = g.game_id AND s.team = g.away)"
+    " THEN 'complete' ELSE 'incomplete' END,"
+    " CASE WHEN g.home IS NOT NULL"
+    " AND NOT EXISTS (SELECT 1 FROM skater_games s WHERE s.game_id = g.game_id"
+    " AND s.team NOT IN (g.home, g.away))"
+    " AND NOT EXISTS (SELECT 1 FROM goalie_games s WHERE s.game_id = g.game_id"
+    " AND s.team NOT IN (g.home, g.away))"
+    " THEN 'matched' ELSE 'mismatched' END"
+    " FROM observations o LEFT JOIN"
+    " (SELECT x.game_id, x.home, x.away FROM games x WHERE x.fetched_at ="
+    " (SELECT MAX(y.fetched_at) FROM games y WHERE y.game_id = x.game_id)) g"
+    " ON g.game_id = CAST(o.key AS INTEGER)"
+    " WHERE o.source = 'nhl_boxscores' AND o.parser = '" + _LEGACY_PARSER + "'",
+    "INSERT INTO skater_game_revisions (game_id, derivation, revision, team, nhl_id,"
+    " toi_seconds, goals, assists)"
+    " SELECT game_id, 1, 1, team, nhl_id, toi_seconds, goals, assists FROM skater_games",
+    "INSERT INTO goalie_game_revisions (game_id, derivation, revision, team, nhl_id,"
+    " toi_seconds, started) SELECT game_id, 1, 1, team, nhl_id, toi_seconds, started"
+    " FROM goalie_games",
+)
+
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -223,6 +286,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS mp_team_games_team ON mp_team_games (team)",
     ),
     8: _ARCHIVE_V9,
+    9: _REVISIONS_V10,
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.

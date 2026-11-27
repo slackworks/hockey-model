@@ -17,6 +17,7 @@ from hockey_model.store.refresh_nhl import (
     score_gaps,
 )
 from hockey_model.store.refresh_old_work import old_work_left
+from hockey_model.store.refresh_revisit import revisit_boxscores
 from hockey_model.types import HockeyModelError
 
 # A backfill reads this many game days at a time. A refresh that spends its time budget
@@ -68,6 +69,7 @@ def nhl(run: RefreshRun) -> None:
         waiting = games_missing_boxscore(run.conn)
         with run.step("boxscores", "missing", len(waiting)):
             read_boxscores(run, waiting)
+        revisit_boxscores(run)
         return
     last_day = game_day_of(run.now) + timedelta(days=SCHEDULE_DAYS_AHEAD)
     if run.backfill_from > last_day:

@@ -1,0 +1,42 @@
+"""Choose the final games whose boxscore a refresh reads again (#82).
+
+A source can correct a boxscore after the game. A game is read again at each revisit day after
+its start, as long as no read came after that day.
+Design: docs/design/payload-archive.md
+"""
+
+import sqlite3
+from collections.abc import Sequence
+from datetime import datetime, timedelta
+
+from hockey_model.store.source_reads import BOXSCORES
+from hockey_model.store.timestamps import parse_iso_utc
+
+
+def _due_at(start: datetime, newest_read: datetime, after_days: Sequence[int]) -> datetime | None:
+    """Return the first revisit time that no read has met yet, or None when every one is met."""
+    for days in sorted(after_days):
+        point = start + timedelta(days=days)
+        if newest_read < point:
+            return point
+    return None
+
+
+def boxscores_due(conn: sqlite3.Connection, now: datetime, after_days: Sequence[int]) -> list[int]:
+    """Return the final games whose boxscore is due for a revisit, the oldest due time first.
+
+    A game is due when a revisit time has passed and the newest good read of its boxscore is
+    older than that time. A game with no good read is not a revisit: the first read covers it.
+    """
+    cursor = conn.execute(
+        "SELECT g.game_id, g.start_utc, MAX(o.fetched_at) FROM latest_final_games g"
+        " JOIN observations o ON o.source = ? AND o.key = CAST(g.game_id AS TEXT)"
+        " AND o.status = 'ok' GROUP BY g.game_id, g.start_utc",
+        (BOXSCORES,),
+    )
+    due: list[tuple[datetime, int]] = []
+    for game_id, start, newest in cursor:
+        point = _due_at(parse_iso_utc(start), parse_iso_utc(newest), after_days)
+        if point is not None and point <= now:
+            due.append((point, int(game_id)))
+    return [game_id for _, game_id in sorted(due)]
