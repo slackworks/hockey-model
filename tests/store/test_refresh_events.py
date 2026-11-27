@@ -89,7 +89,8 @@ def test_a_failed_play_by_play_stores_nothing_for_its_game(conn: sqlite3.Connect
         pbp_url(GAME): SourceError("nhl_pbp", pbp_url(GAME), "HTTP 503")
     }
     report = refresh(conn, FakeClient(failing), now=NOW)
-    assert len(report.errors) == 1
+    assert report.errors == ()
+    assert any(n.startswith("nhl_pbp: ") and "HTTP 503" in n for n in report.notes)
     assert GAME not in _games(conn, "pbp_events")
     assert GAME in _games(conn, "shifts")
     assert _status(conn) == []
@@ -100,7 +101,8 @@ def test_a_payload_for_another_game_is_a_failed_unit(conn: sqlite3.Connection) -
     other = json.loads(fixture("nhl/pbp_2025020709.json"))
     other["id"] = GAME + 1
     report = refresh(conn, FakeClient({pbp_url(GAME): json.dumps(other).encode()}), now=NOW)
-    assert len(report.errors) == 1
+    assert report.errors == ()
+    assert any(n.startswith("nhl_pbp: ") for n in report.notes)
     assert GAME not in _games(conn, "pbp_events")
 
 
@@ -144,8 +146,8 @@ def test_a_new_boxscore_revision_that_cannot_reconcile_removes_the_status(
         conn, FakeClient({BOX: fixture("nhl/boxscore_2025020709.json")}), NOW + timedelta(days=21)
     )
     read_boxscores(later, [GAME])
-    assert len(later.errors) == 1
-    assert "garbage" in str(later.errors[0])
+    assert later.errors == []
+    assert sum("garbage" in note for note in later.notes) == 1
     assert _status(conn) == []
 
 
@@ -159,7 +161,8 @@ def test_three_failed_units_in_a_row_stop_the_source(conn: sqlite3.Connection) -
         for game_id in range(2025020697, 2025020711)
     }
     report = refresh(conn, FakeClient(failing), now=NOW)
-    assert len(report.errors) == 3
+    assert report.errors == ()
+    assert sum(n.startswith("nhl_pbp: ") and "HTTP 503" in n for n in report.notes) == 3
     assert any("nhl_pbp: stopped after 3 failed reads; 11 not tried" in n for n in report.notes)
     assert _games(conn, "pbp_events") == set()
     assert len(_games(conn, "shifts")) == SCORED
@@ -214,6 +217,6 @@ def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
     run = RefreshRun(conn, FakeClient(served), NOW + timedelta(days=21))
     read_events(run, source, [GAME])
     assert _observations(conn, source) == 2
-    assert len(run.errors) == 1
-    assert "garbage" in str(run.errors[0])
+    assert run.errors == []
+    assert sum("garbage" in note for note in run.notes) == 1
     assert _status(conn) == []

@@ -21,7 +21,12 @@ from hockey_model.store.recording import (
     RecordingClient,
     key_of,
 )
-from hockey_model.store.source_reads import abandoned_urls, record_failed_read, record_read
+from hockey_model.store.source_reads import (
+    EVENT_SOURCES,
+    abandoned_urls,
+    record_failed_read,
+    record_read,
+)
 from hockey_model.types import HockeyModelError
 
 # Errors that a bad source response or a bad stored schedule cause. Other errors are bugs.
@@ -111,13 +116,14 @@ class RefreshRun:
         """Reconcile one game inside the transaction of the running unit (#35).
 
         A game that cannot reconcile has its stints and status removed by ``reconcile_game``, so
-        its status is unknown. The error goes to the report and does not fail the unit, because
-        the bytes that the unit read are good and the archive keeps them.
+        its status is unknown. The error goes to the notes of the report. It does not fail the
+        unit, because the bytes that the unit read are good and the archive keeps them, and it
+        does not fail the refresh, because the model reads no event.
         """
         try:
             reconcile_game(self.conn, game_id, self.last_stamp or self.now)
         except StoreError as exc:
-            self.errors.append(exc)
+            self.notes.append(f"reconcile: {exc}")
 
     def stop(self, note: str) -> None:
         """Record why a read stopped, in the notes of the refresh and in the progress step."""
@@ -202,12 +208,23 @@ class RefreshRun:
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
                 self._observe(capture, recorded.records, exc)
-            self.errors.append(exc)
+            self._report_failure(source, exc)
             return False
         finally:
             self.client = inner
         self.written[source] += written
         return True
+
+    def _report_failure(self, source: str, failure: HockeyModelError) -> None:
+        """Report a failed unit. The failure of an event source is a note, not an error.
+
+        The model reads no event, so an outage of the play-by-play or shift chart host must not
+        fail the refresh and stop the daily prepare before its backtest.
+        """
+        if source in EVENT_SOURCES:
+            self.notes.append(f"{source}: {failure}")
+        else:
+            self.errors.append(failure)
 
     def _observe(
         self, capture: Capture, records: list[RecordedFetch], failure: Exception | None
