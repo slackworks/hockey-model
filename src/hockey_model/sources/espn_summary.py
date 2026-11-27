@@ -116,9 +116,10 @@ def _team_skaters(side: object, where: str) -> list[EspnSkaterToi]:
     groups = as_list(SOURCE, field(SOURCE, entry, "statistics", where), f"{where} statistics")
     for raw in groups:
         group = as_mapping(SOURCE, raw, f"{where} stat group")
-        if group.get("name") not in SKATER_GROUPS:
+        kind = str_field(SOURCE, group, "name", f"{where} stat group")
+        if kind not in SKATER_GROUPS:
             continue
-        columns = _stat_columns(group, f"{where} {group.get('name')}")
+        columns = _stat_columns(group, f"{where} {kind}")
         athletes = as_list(SOURCE, field(SOURCE, group, "athletes", where), f"{where} athletes")
         skaters.extend(_skater(a, columns, team, f"{where} {team}") for a in athletes)
     return skaters

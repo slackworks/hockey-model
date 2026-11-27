@@ -1,6 +1,7 @@
 """Draw one random edit of a JSON document, for properties of a parser that reads untrusted JSON."""
 
 import copy
+from collections.abc import Iterator
 from typing import Any
 
 from hypothesis import strategies as st
@@ -27,6 +28,50 @@ def _paths(node: Any, path: tuple = ()) -> list[tuple]:
         found.append((*path, key))
         found.extend(_paths(value, (*path, key)))
     return found
+
+
+def _generic_paths(
+    node: Any, real: tuple = (), generic: tuple = ()
+) -> Iterator[tuple[tuple, tuple]]:
+    """Yield ``(real path, generic path)`` for each entry. A list of containers has one index."""
+    if isinstance(node, dict):
+        entries = [(key, key) for key in node]
+    elif isinstance(node, list):
+        flat = not any(isinstance(item, dict | list) for item in node)
+        entries = [(i, i if flat else "*") for i in range(len(node))]
+    else:
+        return
+    for key, name in entries:
+        yield (*real, key), (*generic, name)
+        yield from _generic_paths(node[key], (*real, key), (*generic, name))
+
+
+FAULTS: dict[str, Any] = {"null": None, "text": "x", "negative": -1, "huge": 2**63, "empty": []}
+
+
+def sweep(document: Any) -> Iterator[Any]:
+    """Yield a copy of ``document`` for each distinct field path and each fault.
+
+    A fault deletes the field or puts a bad value where it belongs. The first faults replace the
+    whole document. Many entries of one list share a generic path, so the sweep visits the first
+    one only.
+    """
+    yield from FAULTS.values()
+    seen: set[tuple] = set()
+    for real, generic in _generic_paths(document):
+        if generic in seen:
+            continue
+        seen.add(generic)
+        for name in ("delete", *FAULTS):
+            copied = copy.deepcopy(document)
+            parent: Any = copied
+            for step in real[:-1]:
+                parent = parent[step]
+            if name == "delete":
+                del parent[real[-1]]
+            else:
+                parent[real[-1]] = FAULTS[name]
+            yield copied
 
 
 def mutations(document: Any) -> st.SearchStrategy[Any]:

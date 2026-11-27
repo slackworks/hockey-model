@@ -194,3 +194,45 @@ def test_a_time_on_ice_past_the_longest_game_is_a_named_error() -> None:
 def test_a_url_for_an_event_id_that_is_not_digits_is_a_named_error(event: str) -> None:
     with pytest.raises(SourceParseError, match="1 to 12 ASCII digits"):
         summary_url(event)
+
+
+@pytest.mark.parametrize("name", [None, [], 3])
+def test_a_stat_group_whose_name_is_not_text_is_a_named_error(name: object) -> None:
+    payload = load()
+    payload["boxscore"]["players"][0]["statistics"][0]["name"] = name
+    with pytest.raises(SourceParseError, match="stat group"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_stat_group_with_no_name_is_a_named_error() -> None:
+    payload = load()
+    del payload["boxscore"]["players"][0]["statistics"][0]["name"]
+    with pytest.raises(SourceParseError, match="stat group"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_stat_row_that_ends_just_before_a_column_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    last = max(group["keys"].index(k) for k in ("timeOnIce", "shifts"))
+    group["athletes"][0]["stats"] = group["athletes"][0]["stats"][:last]
+    with pytest.raises(SourceParseError, match="no value for"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_group_that_is_not_skaters_does_not_hide_the_groups_after_it() -> None:
+    payload = load()
+    for side in payload["boxscore"]["players"]:
+        side["statistics"].sort(key=lambda g: g["name"] != "goalies")
+        assert side["statistics"][0]["name"] == "goalies"
+    assert parse_summary(payload, EVENT) == parse_summary(load(), EVENT)
+
+
+def test_a_fetch_of_a_body_that_is_not_json_names_the_source() -> None:
+    with pytest.raises(SourceParseError, match="^read espn_summary data: "):
+        fetch_summary(_Client(b"not json"), EVENT)
+
+
+def test_an_event_id_that_is_not_digits_names_the_source() -> None:
+    with pytest.raises(SourceParseError, match="^read espn_summary data: ESPN event id"):
+        summary_url("abc")
