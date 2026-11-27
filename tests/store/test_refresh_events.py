@@ -227,7 +227,7 @@ def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
 
 def test_the_derive_hook_refuses_to_run_before_the_unit(conn: sqlite3.Connection) -> None:
     run = RefreshRun(conn, FakeClient(), NOW)
-    _, reading = refresh_events._unit(run, NHL_SHIFTS, GAME)
+    _, reading = refresh_events._unit(run, NHL_SHIFTS, GAME, [])
     assert reading.derive is not None
     with pytest.raises(StoreError, match=rf"derive nhl_shifts {GAME}: .*no parsed rows"):
         reading.derive(conn, 1)
@@ -344,3 +344,17 @@ def test_a_spent_time_budget_stops_the_reconcile_of_pending_games(
     assert seen == []
     assert run.timed_out
     assert any("reconcile: stopped, because the time ran out; 2 not tried" in n for n in run.notes)
+
+
+def test_unpublished_feeds_do_not_count_toward_the_stop_after_three_failures(
+    conn: sqlite3.Connection,
+) -> None:
+    empty = b'{"data": [], "total": 0}'
+    pending: dict[str, bytes | Exception] = {
+        shifts_url(game_id): empty for game_id in (2025020697, 2025020698, 2025020699)
+    }
+    report = refresh(conn, FakeClient(pending), now=NOW)
+    assert report.errors == ()
+    assert not any("stopped after" in note for note in report.notes)
+    assert sum("may not exist yet" in note for note in report.notes) == 3
+    assert len(_games(conn, "shifts")) == SCORED - 3

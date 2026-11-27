@@ -62,8 +62,13 @@ _KINDS = {
 }
 
 
-def _unit(run: RefreshRun, source: str, game_id: int) -> tuple[Callable[[datetime], int], Reading]:
-    """Return the unit that reads one game of ``source``, and how its bytes are archived."""
+def _unit(
+    run: RefreshRun, source: str, game_id: int, pending: list[int]
+) -> tuple[Callable[[datetime], int], Reading]:
+    """Return the unit that reads one game of ``source``, and how its bytes are archived.
+
+    The unit adds the game to ``pending`` when the feed is not published yet.
+    """
     kind = _KINDS[source]
     held: list[Writer] = []
 
@@ -84,6 +89,7 @@ def _unit(run: RefreshRun, source: str, game_id: int) -> tuple[Callable[[datetim
     def not_yet(failure: Exception) -> str | None:
         """Say that a feed is not published yet. Such a read never counts toward a known gap."""
         if isinstance(failure, SourcePendingError):
+            pending.append(game_id)
             return f"{source}: game {game_id}: {failure}; the next refresh reads it again"
         return None
 
@@ -112,6 +118,7 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
     gaps = run.skipped(source)
     failures = 0
     gapped = waiting = 0
+    pending: list[int] = []
     for index, game_id in enumerate(game_ids):
         left = len(game_ids) - index
         if failures >= MAX_UNIT_FAILURES:
@@ -127,8 +134,11 @@ def read_events(run: RefreshRun, source: str, game_ids: Sequence[int]) -> None:
         elif failed_since(run.conn, source, url, run.now - RETRY_FAILED_AFTER):
             waiting += 1
         else:
-            unit, reading = _unit(run, source, game_id)
-            failures = 0 if run.attempt(source, url, unit, reading) else failures + 1
+            unit, reading = _unit(run, source, game_id, pending)
+            ok = run.attempt(source, url, unit, reading)
+            # The host answered for a feed that is not published yet, so the read is no failure.
+            failures = failures if pending else (0 if ok else failures + 1)
+            pending.clear()
         progress_log.advance()
     _note_skips(run, source, gapped, waiting)
 
