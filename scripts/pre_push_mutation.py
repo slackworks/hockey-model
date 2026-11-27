@@ -535,13 +535,37 @@ def owner_of(
     return None
 
 
-def missing_mutants(globs: list[str], statuses: dict[str, str]) -> list[str]:
-    """Name each selected function that mutmut produced no mutant for."""
-    return [
-        f"{glob}: mutmut has no mutant for it; check the module and function names"
-        for glob in globs
-        if not any(fnmatch.fnmatchcase(name, glob) for name in statuses)
-    ]
+def leaves_function_plain(repo: Path, path: str, qualname: str) -> bool:
+    """Return True when mutmut found nothing to change in the function.
+
+    A function with one f-string return has no mutant. mutmut copies it unchanged into
+    ``mutants/`` and writes no ``__mutmut_orig`` copy.
+    """
+    generated = repo / "mutants" / path
+    if not generated.is_file():
+        return False
+    text = generated.read_text()
+    leaf = re.escape(qualname.rsplit(".", 1)[-1])
+    has_original = f"{mutmut_name(qualname)}__mutmut_orig(" in text
+    return not has_original and re.search(rf"^\s*(?:async\s+)?def {leaf}\(", text, re.M) is not None
+
+
+def missing_mutants(
+    repo: Path, found: list[tuple[str, Target, set[int]]], statuses: dict[str, str]
+) -> list[str]:
+    """Name each selected function that mutmut produced no mutant for.
+
+    A function that mutmut left plain has nothing to mutate, so it passes.
+    """
+    failures: list[str] = []
+    for path, qualname in sorted({(path, target.qualname) for path, target, _ in found}):
+        glob = mutant_glob(path, qualname)
+        if any(fnmatch.fnmatchcase(name, glob) for name in statuses):
+            continue
+        if leaves_function_plain(repo, path, qualname):
+            continue
+        failures.append(f"{glob}: mutmut has no mutant for it; check the module and function names")
+    return failures
 
 
 def mutates_changed_line(repo: Path, name: str, owner: tuple[str, Target, set[int]]) -> bool:
@@ -619,7 +643,7 @@ def run_check(repo: Path) -> int:
     run_mutmut(repo, ["run", *globs])
     statuses = parse_results(run_mutmut(repo, ["results", "--all", "true"]))
     gate_failures, ignored = gate(repo, statuses, found)
-    failures = missing_mutants(globs, statuses) + gate_failures
+    failures = missing_mutants(repo, found, statuses) + gate_failures
     elapsed = time.monotonic() - started
     if ignored:
         print(
