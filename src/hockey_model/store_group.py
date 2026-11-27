@@ -48,7 +48,8 @@ def add_store_group(add_parser: Callable[..., argparse.ArgumentParser]) -> None:
     )
     reconcile = sub.add_parser(
         "reconcile",
-        help="build the stints and store the reconciliation status of each stored game",
+        help="build the stints and store the reconciliation status of each stored game; "
+        "exit 1 when a game fails or a named game has no inputs",
     )
     _add_db(reconcile, "store file to read and write; default is HOCKEY_MODEL_DB")
     reconcile.add_argument(
@@ -111,7 +112,8 @@ def _reconcile(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:
         report = reconcile_games(conn, datetime.now(UTC), games)
     finally:
         conn.close()
-    return asdict(report), 1 if report.failed else 0
+    named_and_skipped = args.game is not None and bool(report.skipped)
+    return asdict(report), 1 if report.failed or named_and_skipped else 0
 
 
 def run_store_group(args: argparse.Namespace, db_path: Path) -> tuple[object, int]:

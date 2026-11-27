@@ -84,6 +84,18 @@ def game_inputs(conn: sqlite3.Connection, game_id: int) -> GameInputs | None:
     return GameInputs(game_id, pbp, shift, home, away, intervals, roster)
 
 
+def missing_inputs(conn: sqlite3.Connection, game_id: int) -> str:
+    """Return why ``game_inputs`` gave no inputs for the game."""
+    found = {}
+    for source, label in ((NHL_PBP, "play-by-play"), (NHL_SHIFTS, "shift chart")):
+        found[source] = _latest_observation(conn, game_id, source)
+        if found[source] is None:
+            return f"no {label} observation"
+    if not conn.execute("SELECT 1 FROM shifts WHERE obs_id = ?", (found[NHL_SHIFTS],)).fetchone():
+        return "the newest shift chart has no rows"
+    return "the newest play-by-play has no rows"
+
+
 def _ids(players: tuple[int, ...]) -> str:
     return json.dumps(players, separators=(",", ":"))
 

@@ -5,6 +5,7 @@ the game. Then it is ``reconciled`` when every check passed, and ``incomplete`` 
 Design: docs/design/pbp-shift-dataset.md
 """
 
+import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -30,10 +31,14 @@ from hockey_model.store.stint_build import (
     GameInputs,
     GameStints,
     build_game_stints,
+    missing_inputs,
     write_stints,
 )
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
 from hockey_model.types import HockeyModelError
+
+# An NHL game id is ten ASCII digits. isdigit() also accepts other scripts.
+_GAME_KEY = re.compile(r"[0-9]{10}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,23 +204,35 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
 
 @dataclass(frozen=True, slots=True)
 class ReconcileReport:
-    """What ``reconcile_games`` did: the games it read and the status that each one got."""
+    """What ``reconcile_games`` did: the games it read and the status that each one got.
+
+    ``skipped`` and ``failed`` hold one line for each game, and the line names the game and the
+    reason.
+    """
 
     games: int
     provisional: int
     reconciled: int
     incomplete: int
-    skipped: tuple[int, ...]
+    skipped: tuple[str, ...]
     failed: tuple[str, ...]
 
 
-def _game_ids(conn: sqlite3.Connection) -> list[int]:
+def _game_ids(conn: sqlite3.Connection) -> tuple[list[int], list[str]]:
+    """Return the game ids of the event observations, and a line for each key that is not one."""
+    ids: set[int] = set()
+    bad: list[str] = []
     found = conn.execute(
-        "SELECT DISTINCT CAST(key AS INTEGER) FROM observations"
-        " WHERE source IN (?, ?) AND key IS NOT NULL ORDER BY 1",
+        "SELECT obs_id, source, key FROM observations WHERE source IN (?, ?) AND key IS NOT NULL"
+        " ORDER BY obs_id",
         (NHL_PBP, NHL_SHIFTS),
     )
-    return [game_id for (game_id,) in found]
+    for obs_id, source, key in found:
+        if _GAME_KEY.fullmatch(key) is None:
+            bad.append(f"observation {obs_id} of {source}: key {key!r} is not a game id")
+        else:
+            ids.add(int(key))
+    return sorted(ids), bad
 
 
 def reconcile_games(
@@ -223,24 +240,22 @@ def reconcile_games(
 ) -> ReconcileReport:
     """Reconcile each named game, or each game with a play-by-play or a shift chart.
 
-    A game with no inputs is skipped, and a game that raises a store error is named in
-    ``failed``, so one bad game does not stop the rest. The run is one transaction.
+    A game with no inputs is skipped with its reason, and a game that raises a store error is
+    named in ``failed``, so one bad game does not stop the rest. The run is one transaction.
     """
-    ids = _game_ids(conn) if game_ids is None else list(game_ids)
+    ids, failed = _game_ids(conn) if game_ids is None else (list(game_ids), [])
     counts = {"provisional": 0, "reconciled": 0, "incomplete": 0}
-    skipped: list[int] = []
-    failed: list[str] = []
+    skipped: list[str] = []
     with conn:
         for game_id in ids:
             try:
                 game = reconcile_game(conn, game_id, now)
+                if game is None:
+                    skipped.append(f"game {game_id}: {missing_inputs(conn, game_id)}")
+                else:
+                    counts[game.status] += 1
             except StoreError as exc:
                 failed.append(str(exc))
-                continue
-            if game is None:
-                skipped.append(game_id)
-            else:
-                counts[game.status] += 1
     return ReconcileReport(
         len(ids),
         counts["provisional"],
