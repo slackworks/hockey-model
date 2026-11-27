@@ -213,3 +213,75 @@ def test_an_event_in_no_stint_has_no_stints_around_it() -> None:
     stints = build_stints([_iv(1, HOME, 0, 60)], {}, HOME, AWAY).stints
     assert stints_around(stints, 1, 500) == ()
     assert stints_around(stints, 2, 30) == ()
+
+
+raw_intervals = st.lists(
+    st.tuples(
+        players,
+        st.sampled_from([HOME, AWAY]),
+        st.integers(1, 2),
+        st.integers(0, 40),
+        st.integers(0, 40),
+    ),
+    max_size=14,
+).map(lambda rows: [_iv(p, t, a, b, n) for p, t, n, a, b in rows])
+
+
+def _seconds(intervals: list[Interval]) -> set[tuple[int, int, str, int]]:
+    return {
+        (i.period, i.player_id, i.team, second)
+        for i in intervals
+        if i.end > i.start
+        for second in range(i.start, i.end)
+    }
+
+
+@given(raw_intervals)
+def test_the_merge_keeps_the_covered_time_and_drops_only_the_empty_intervals(
+    intervals: list[Interval],
+) -> None:
+    merged, dropped = merge_intervals(intervals)
+    assert _seconds(merged) == _seconds(intervals)
+    assert dropped == [i for i in intervals if i.end <= i.start]
+
+
+@given(raw_intervals)
+def test_the_merge_is_idempotent_and_leaves_gaps_between_the_intervals_of_a_player(
+    intervals: list[Interval],
+) -> None:
+    merged, _ = merge_intervals(intervals)
+    again, dropped = merge_intervals(merged)
+    assert again == merged
+    assert dropped == []
+    for left, right in zip(merged, merged[1:], strict=False):
+        if (left.period, left.player_id, left.team) == (right.period, right.player_id, right.team):
+            assert right.start > left.end
+
+
+@given(raw_intervals)
+def test_a_second_has_at_most_one_owner_and_stint_at_finds_it(intervals: list[Interval]) -> None:
+    stints = build_stints(intervals, {}, HOME, AWAY).stints
+    for period in (1, 2):
+        mine = [s for s in stints if s.period == period]
+        for second in range(-1, 45):
+            owners = [s for s in mine if s.start < second <= s.end]
+            assert len(owners) <= 1
+            first = mine[0] if mine and second == mine[0].start else None
+            expected = owners[0] if owners else first
+            assert stint_at(stints, period, second) == expected
+
+
+@given(raw_intervals, st.integers(1, 2), st.integers(-1, 45))
+def test_the_stints_around_an_event_are_its_owner_and_the_stint_that_starts_there(
+    intervals: list[Interval], period: int, second: int
+) -> None:
+    stints = build_stints(intervals, {}, HOME, AWAY).stints
+    owner = stint_at(stints, period, second)
+    around = stints_around(stints, period, second)
+    if owner is None:
+        assert around == ()
+        return
+    assert around[0] == owner
+    assert len(around) in (1, 2)
+    if len(around) == 2:
+        assert (around[1].period, around[1].start) == (period, second)

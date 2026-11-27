@@ -1,6 +1,10 @@
 """Tests for the pure reconciliation checks of the play-by-play and the shifts (#35)."""
 
+import json
+
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from hockey_model.reconcile import (
     CheckResult,
@@ -223,3 +227,57 @@ def test_a_game_state_that_is_not_final_fails_the_check(states: set[str]) -> Non
 def test_a_status_with_no_check_result_is_an_error(settled: bool) -> None:
     with pytest.raises(HockeyModelError, match="no check result"):
         status_of([], settled=settled)
+
+
+check_results = st.lists(
+    st.builds(
+        CheckResult,
+        st.text(min_size=1, max_size=8),
+        st.booleans(),
+        st.dictionaries(st.text(max_size=4), st.integers(0, 99), max_size=3),
+    ),
+    min_size=1,
+    max_size=6,
+)
+
+
+@given(check_results)
+def test_the_notes_read_back_to_the_results_in_order(results: list[CheckResult]) -> None:
+    entries = json.loads(notes_json(results))
+    assert entries == [{"check": r.name, "passed": r.passed, "detail": r.detail} for r in results]
+
+
+stint_counts = st.lists(st.tuples(st.integers(3, 6), st.integers(3, 6)), min_size=1, max_size=5)
+situation_rows = st.lists(
+    st.tuples(st.integers(0, 49), st.integers(3, 6), st.integers(3, 6)), max_size=8
+)
+
+
+def _stints_of(counts: list[tuple[int, int]], extra: int = 0) -> list[Stint]:
+    return [
+        Stint(
+            1,
+            10 * i,
+            10 * i + 10,
+            tuple(range(h + extra)),
+            tuple(range(20, 20 + a + extra)),
+            (),
+            (),
+        )
+        for i, (h, a) in enumerate(counts)
+    ]
+
+
+@given(stint_counts, situation_rows)
+def test_more_skaters_never_turn_a_passing_situation_check_into_a_failing_one(
+    counts: list[tuple[int, int]], rows: list[tuple[int, int, int]]
+) -> None:
+    events = [SituationEvent(i, 1, s, f"1{a}{h}1") for i, (s, h, a) in enumerate(rows)]
+    before = check_situation(events, _stints_of(counts))
+    after = check_situation(events, _stints_of(counts, extra=1))
+    if before.passed:
+        assert after.passed
+    if not before.passed and "total" in before.detail:
+        total = before.detail["total"]
+        assert isinstance(total, int)
+        assert total <= len(events)

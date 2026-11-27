@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from seeding import add_game
 
 from hockey_model.sources.nhl_events import parse_pbp
@@ -15,7 +17,13 @@ from hockey_model.store.archive import HTTP_ERROR, OK, Fetch, record_observation
 from hockey_model.store.db import StoreError, connect
 from hockey_model.store.event_writes import write_pbp, write_shifts
 from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS
-from hockey_model.store.stint_build import GameStints, build_game_stints, game_inputs, write_stints
+from hockey_model.store.stint_build import (
+    GameStints,
+    _ids,
+    build_game_stints,
+    game_inputs,
+    write_stints,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "nhl"
 GAME = 2025020709
@@ -145,3 +153,10 @@ def test_a_shift_for_a_team_of_neither_side_is_a_named_error(conn: sqlite3.Conne
     write_shifts(conn, shift, ShiftRows(GAME, (stray,), 1))
     with pytest.raises(StoreError, match=r"game 2025020709: .*neither the home team EDM"):
         _build(conn)
+
+
+@given(st.lists(st.integers(0, 2**63 - 1), max_size=12).map(sorted).map(tuple))
+def test_the_player_ids_of_a_stint_read_back_from_their_text(players: tuple[int, ...]) -> None:
+    text = _ids(players)
+    assert json.loads(text) == list(players)
+    assert " " not in text
