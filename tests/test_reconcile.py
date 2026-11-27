@@ -351,3 +351,11 @@ def test_each_result_of_a_check_says_passed_with_a_real_boolean() -> None:
         check_espn_teams({HOME}, HOME, AWAY),
     ]
     assert [type(r.passed) for r in results] == [bool] * 5
+
+
+def test_a_failed_situation_check_says_false_for_each_kind_of_failure() -> None:
+    stints = [_stint(0, 100, 5, 4)]
+    short = check_situation([SituationEvent(1, 1, 50, "1551")], stints)
+    unowned = check_situation([SituationEvent(7, 1, 500, "1551")], stints)
+    nothing = check_situation([SituationEvent(1, 1, 50, None)], stints)
+    assert [short.passed, unowned.passed, nothing.passed] == [False, False, False]
