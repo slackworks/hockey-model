@@ -13,6 +13,7 @@ from seeding import add_game, drop_revision_tables
 
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.nhl import BOXSCORE_PARSER, BoxscoreRows, parse_boxscore
+from hockey_model.store import boxscore_rebuild
 from hockey_model.store.archive import OK, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import (
     FIRST,
@@ -22,6 +23,7 @@ from hockey_model.store.boxscore_revisions import (
     record_revision,
 )
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
+from hockey_model.store.rebuild import rebuild_source
 from hockey_model.store.refresh import refresh
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.upgrade import upgrade_store
@@ -356,3 +358,63 @@ def test_a_pinned_derivation_that_the_game_lacks_is_refused(
         boxscore_rows(conn, MAIN_GAME, policy=LATEST, derivation=derivation)
     with pytest.raises(StoreError, match="no derivation"):
         boxscore_rows(conn, 1234567890, policy=LATEST, derivation=1)
+
+
+def test_a_game_read_since_the_archive_began_points_at_its_own_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vince's reproduction: the upgrade must not add a second observation of the same read."""
+    path = tmp_path / "v9.db"
+    store = connect(path)
+    refresh(store, FakeClient(), now=DAY_ONE)
+    drop_revision_tables(store)
+    store.execute("UPDATE schema_version SET version = 9")
+    store.commit()
+    store.close()
+    upgrade_store(path)
+    store = connect(path)
+    try:
+        observations = store.execute(
+            "SELECT obs_id, parser, sha256 IS NOT NULL FROM observations WHERE key = ?",
+            (str(MAIN_GAME),),
+        ).fetchall()
+        assert observations == [(observations[0][0], BOXSCORE_PARSER, 1)]
+        first = boxscore_rows(store, MAIN_GAME, policy=FIRST)
+        assert first is not None
+        assert (first.obs_id, first.parser) == (observations[0][0], BOXSCORE_PARSER)
+        monkeypatch.setattr(boxscore_rebuild, "BOXSCORE_PARSER", "nhl_boxscore:99")
+        monkeypatch.setattr(
+            boxscore_rebuild,
+            "parse_boxscore",
+            lambda payload: _without_assists(parse_boxscore(payload)),
+        )
+        rebuild_source(store, BOXSCORES, "nhl_boxscore:99")
+        rebuilt = boxscore_rows(store, MAIN_GAME, policy=FIRST)
+        latest = boxscore_rows(store, MAIN_GAME, policy=LATEST)
+        assert rebuilt is not None
+        assert latest is not None
+        assert (rebuilt.derivation, rebuilt.revision, rebuilt.parser) == (2, 1, "nhl_boxscore:99")
+        assert latest.revision == 1
+        assert all(s.assists == 0 for s in rebuilt.skaters)
+    finally:
+        store.close()
+
+
+def _without_assists(rows: BoxscoreRows) -> BoxscoreRows:
+    skaters = [s._replace(assists=0) for s in rows.skaters]
+    return BoxscoreRows(rows.game_id, rows.home, rows.away, rows.players, skaters, rows.goalies)
+
+
+def test_a_game_with_rows_from_two_reads_keeps_a_legacy_observation(tmp_path: Path) -> None:
+    """Two fetch times mean that no single archived read gave the rows."""
+    path = _v9_store(tmp_path / "v9.db")
+    upgrade_store(path)
+    store = connect(path)
+    try:
+        parser = store.execute(
+            "SELECT o.parser FROM boxscore_revisions r JOIN observations o USING (obs_id)"
+            " WHERE r.game_id = 11"
+        ).fetchone()
+        assert parser == ("legacy:unavailable",)
+    finally:
+        store.close()
