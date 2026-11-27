@@ -187,7 +187,11 @@ Delivery step 2 shipped with these changes from the plan above:
 - `store reconcile [--game ID]` builds the stints and stores the status of each game that has a play-by-play or a shift chart. It reads stored rows only and makes no request. A game with no rows in one of the two is skipped and named. A game that raises a store error is named in `failed`, the other games still run, and the exit code is 1.
 - The status is `provisional` until both observations were read at or after the start of the game plus the last day of `REVISIT_AFTER_DAYS`. Then it is `reconciled` when every check passed, and `incomplete` otherwise.
 - Checks 1, 2, 5, and 6 run. Checks 3 and 4 need `TOI_TOLERANCE_S` and `STRENGTH_TOI_TOLERANCE_S`, which come from the backfill of delivery step 4. Their constants and the checks land with that measurement.
-- A roster check runs as well: each player with a shift is in `pbp_roster`. The builder takes the goalies from the roster, and a player that it does not name counts as a skater.
+- Four checks run beside the design list. `roster`: each player with a shift is in `pbp_roster` with a position code of C, L, R, D, or G, because the builder takes a goalie from the code G and counts any other player as a skater. `shift_lengths`: no shift ends before it starts, and a shift with no length is only counted. `game_state`: the play-by-play of a final game says FINAL or OFF, as one value, so a feed that was read in play cannot reconcile. `espn_teams` always leaves a note.
+- A check fails when it checked nothing. The situation check fails when no event carries a situation code, and the player check fails when the newest boxscore revision is incomplete or mismatched. A pass of the situation check states how many events it read.
+- A goal with no owner team counts under its own key, so the team check fails on it.
+- `store rebuild` of a play-by-play, a shift chart, or an ESPN summary deletes the stints and the status that name its rows, and the next `store reconcile` makes them again.
+- `store reconcile` writes the stints and the status of a game only after every check ran. A skipped game carries its reason. A named game that is skipped exits 1.
 - Check 5 accepts an event when the stint that owns it, or the stint that starts at its second, has at least the skaters that the situation code gives. A faceoff after a penalty ends takes the code of the players after the change. On the saved game, three faceoffs need this rule.
-- `event_status.notes` holds the result of every check, and the number of shift rows that were dropped for having no length.
-- The ESPN team check (6) runs only when an ESPN summary of the game is stored.
+- `event_status.notes` holds the result of every check.
+- The ESPN team check (6) notes that it was skipped when no ESPN summary of the game is stored, and it fails when the newest summary was refused.
