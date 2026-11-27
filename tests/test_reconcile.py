@@ -120,7 +120,11 @@ def test_an_event_with_fewer_skaters_than_the_code_fails_and_adds_no_player() ->
     assert not result.passed
     assert result.detail["total"] == 1
     assert result.detail["events"] == [
-        {"event": 1, "expected": {"home": 5, "away": 5}, "found": {"home": 5, "away": 4}}
+        {
+            "event": 1,
+            "expected": {"home": 5, "away": 5, "home_goalies": 1, "away_goalies": 1},
+            "found": {"home": 5, "away": 4, "home_goalies": 1, "away_goalies": 1},
+        }
     ]
 
 
@@ -359,3 +363,38 @@ def test_a_failed_situation_check_says_false_for_each_kind_of_failure() -> None:
     unowned = check_situation([SituationEvent(7, 1, 500, "1551")], stints)
     nothing = check_situation([SituationEvent(1, 1, 50, None)], stints)
     assert [short.passed, unowned.passed, nothing.passed] == [False, False, False]
+
+
+def _goalie_stint(home_goalies: tuple[int, ...], away_goalies: tuple[int, ...]) -> Stint:
+    return Stint(1, 0, 100, (1, 2, 3, 4, 5), (11, 12, 13, 14, 15), home_goalies, away_goalies)
+
+
+def _failed_event(code: str, stint: Stint) -> dict[str, object]:
+    result = check_situation([SituationEvent(1, 1, 50, code)], [stint])
+    assert result.passed is False
+    events = result.detail["events"]
+    assert isinstance(events, list)
+    return events[0]
+
+
+def test_a_net_that_the_code_fills_and_the_stint_leaves_empty_fails_the_check() -> None:
+    assert _failed_event("1551", _goalie_stint((), ())) == {
+        "event": 1,
+        "expected": {"home": 5, "away": 5, "home_goalies": 1, "away_goalies": 1},
+        "found": {"home": 5, "away": 5, "home_goalies": 0, "away_goalies": 0},
+    }
+
+
+def test_each_goalie_digit_is_read_from_its_own_end_of_the_code() -> None:
+    """The first digit is the away goalie, and the last digit is the home goalie."""
+    away_empty = _failed_event("1551", _goalie_stint((90,), ()))
+    assert away_empty["found"] == {"home": 5, "away": 5, "home_goalies": 1, "away_goalies": 0}
+    home_empty = _failed_event("1551", _goalie_stint((), (91,)))
+    assert home_empty["found"] == {"home": 5, "away": 5, "home_goalies": 0, "away_goalies": 1}
+
+
+def test_an_empty_net_in_the_code_needs_no_goalie_on_the_ice() -> None:
+    """The code 1560 has the home net empty with six skaters, and 0551 has the away net empty."""
+    six_on_five = Stint(1, 0, 100, (1, 2, 3, 4, 5, 6), (11, 12, 13, 14, 15), (), (91,))
+    assert check_situation([SituationEvent(1, 1, 50, "1560")], [six_on_five]).passed
+    assert check_situation([SituationEvent(1, 1, 50, "0551")], [_goalie_stint((90,), ())]).passed

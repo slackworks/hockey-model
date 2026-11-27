@@ -387,3 +387,20 @@ def test_a_failed_game_loses_its_status_and_another_game_keeps_its_own(
     report = reconcile_games(conn, LATE)
     assert report.failed
     assert _served(conn) == (0, 0)
+
+
+def test_a_shift_chart_with_no_goalie_shift_cannot_reach_reconciled(
+    conn: sqlite3.Connection,
+) -> None:
+    """The probe of the review: every goalie shift is deleted, and the nets read as empty."""
+    _boxscore(conn)
+    _store(conn, LATE)
+    goalies = "SELECT player_id FROM pbp_roster WHERE position = 'G'"
+    conn.execute(f"DELETE FROM shifts WHERE player_id IN ({goalies})")
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    checks = _checks(conn)
+    assert checks["situation"] is False
+    assert checks["roster"] is True
+    assert checks["shift_lengths"] is True

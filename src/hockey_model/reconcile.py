@@ -108,21 +108,39 @@ def check_roster(shift_players: Iterable[int], positions: Mapping[int, str]) -> 
     return CheckResult("roster", passed, detail)
 
 
+COUNT_NAMES = ("home", "away", "home_goalies", "away_goalies")
+
+
+def _expected_counts(code: str) -> tuple[int, int, int, int]:
+    """Return the home skaters, away skaters, home goalies, and away goalies of a code.
+
+    The four digits are the away goalie, the away skaters, the home skaters, and the home goalie.
+    """
+    return int(code[2]), int(code[1]), int(code[3]), int(code[0])
+
+
+def _counts(stint: Stint) -> tuple[int, int, int, int]:
+    return (
+        len(stint.home_skaters),
+        len(stint.away_skaters),
+        len(stint.home_goalies),
+        len(stint.away_goalies),
+    )
+
+
 def _situation_failure(event: SituationEvent, stints: Sequence[Stint]) -> dict[str, object] | None:
     if event.code is None:
         return None
     around = stints_around(stints, event.period, event.second)
     if not around:
         return {"event": event.event_id, "reason": "no stint holds the event"}
-    # The four digits are the away goalie, the away skaters, the home skaters, the home goalie.
-    home, away = int(event.code[2]), int(event.code[1])
-    if any(len(s.home_skaters) >= home and len(s.away_skaters) >= away for s in around):
+    expected = _expected_counts(event.code)
+    if any(all(f >= e for f, e in zip(_counts(s), expected, strict=True)) for s in around):
         return None
-    owner = around[0]
     return {
         "event": event.event_id,
-        "expected": {"home": home, "away": away},
-        "found": {"home": len(owner.home_skaters), "away": len(owner.away_skaters)},
+        "expected": dict(zip(COUNT_NAMES, expected, strict=True)),
+        "found": dict(zip(COUNT_NAMES, _counts(around[0]), strict=True)),
     }
 
 
