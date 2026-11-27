@@ -179,3 +179,15 @@ Delivery step 1 shipped with these changes from the plan above:
 - The shared archive of #82 instead of the `raw_payloads` table of the issue body, so there is one payload scheme.
 - A schema version bump instead of DDL on connect, because a consumer open must not run DDL (#80). This changes the issue-body call ("additive tables need no version bump") for that reason.
 - `attack_x_sign` NULL when the feed has no side, instead of a period-parity guess, so a wrong direction cannot reach a shot model.
+
+Delivery step 2 shipped with these changes from the plan above:
+
+- The version is 12. `stints` and `event_status` are new tables, and `latest_stints` and `latest_event_status` give the rows of the newest pair of observations. A pair is the newest play-by-play and the newest shift chart of a game. A refused newer fetch leaves no rows in these views.
+- `stints` holds `home_goalies` and `away_goalies` as JSON arrays, like the skaters, in place of one goalie column for each side. An empty net is an empty array, and two goalies on the ice at once, which the feed can give, are both kept.
+- `store reconcile [--game ID]` builds the stints and stores the status of each game that has a play-by-play or a shift chart. It reads stored rows only and makes no request. A game with no rows in one of the two is skipped and named. A game that raises a store error is named in `failed`, the other games still run, and the exit code is 1.
+- The status is `provisional` until both observations were read at or after the start of the game plus the last day of `REVISIT_AFTER_DAYS`. Then it is `reconciled` when every check passed, and `incomplete` otherwise.
+- Checks 1, 2, 5, and 6 run. Checks 3 and 4 need `TOI_TOLERANCE_S` and `STRENGTH_TOI_TOLERANCE_S`, which come from the backfill of delivery step 4. Their constants and the checks land with that measurement.
+- A roster check runs as well: each player with a shift is in `pbp_roster`. The builder takes the goalies from the roster, and a player that it does not name counts as a skater.
+- Check 5 accepts an event when the stint that owns it, or the stint that starts at its second, has at least the skaters that the situation code gives. A faceoff after a penalty ends takes the code of the players after the change. On the saved game, three faceoffs need this rule.
+- `event_status.notes` holds the result of every check, and the number of shift rows that were dropped for having no length.
+- The ESPN team check (6) runs only when an ESPN summary of the game is stored.

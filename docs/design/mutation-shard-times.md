@@ -92,6 +92,6 @@ Record the generation step time of each shard next to its durations, so that the
 
 ## Modules added after the measurement
 
-`sources.nhl_events`, `sources.nhl_shifts`, `sources.espn_summary`, and `stints` (#35) are not in the table above, because no run has measured them.
+`sources.nhl_events`, `sources.nhl_shifts`, `sources.espn_summary`, `stints`, and `reconcile` (#35) are not in the table above, because no run has measured them.
 They sit in shards 2 and 3, beside modules of the same kind.
 The next measured run sizes them. The step limit leaves room for the added work until then.
