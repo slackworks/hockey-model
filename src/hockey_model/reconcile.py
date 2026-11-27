@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from hockey_model.sources.nhl import FINAL_STATES
 from hockey_model.stints import Stint, stints_around
+from hockey_model.types import HockeyModelError
 
 SHOOTOUT = "SO"
 # The position codes of the NHL roster: centre, left wing, right wing, defence, goalie.
@@ -153,6 +154,11 @@ def check_espn_teams(espn_teams: Collection[str], home: str, away: str) -> Check
 
 def status_of(results: Sequence[CheckResult], *, settled: bool) -> str:
     """Return ``provisional`` before the last revisit, then ``reconciled`` or ``incomplete``."""
+    if not results:
+        raise HockeyModelError(
+            "status_of got no check result, so no game can be called reconciled; "
+            "run the reconciliation checks first"
+        )
     if not settled:
         return "provisional"
     return "reconciled" if all(r.passed for r in results) else "incomplete"

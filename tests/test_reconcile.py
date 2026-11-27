@@ -16,6 +16,7 @@ from hockey_model.reconcile import (
     status_of,
 )
 from hockey_model.stints import Stint
+from hockey_model.types import HockeyModelError
 
 HOME = "EDM"
 AWAY = "LAK"
@@ -171,7 +172,6 @@ def _result(name: str, passed: bool) -> CheckResult:
         ((True, False), False, "provisional"),
         ((True, True), True, "reconciled"),
         ((True, False), True, "incomplete"),
-        ((), True, "reconciled"),
     ],
 )
 def test_the_status_follows_the_checks_and_the_last_revisit(
@@ -217,3 +217,9 @@ def test_a_game_state_that_is_not_final_fails_the_check(states: set[str]) -> Non
     result = check_game_state(states)
     assert not result.passed
     assert result.detail == {"states": sorted(states)}
+
+
+@pytest.mark.parametrize("settled", [True, False])
+def test_a_status_with_no_check_result_is_an_error(settled: bool) -> None:
+    with pytest.raises(HockeyModelError, match="no check result"):
+        status_of([], settled=settled)
