@@ -36,3 +36,26 @@ CREATE VIEW latest_players AS
 SELECT p.* FROM players p
 JOIN (SELECT nhl_id, MAX(fetched_at) AS latest FROM players GROUP BY nhl_id) n
     ON p.nhl_id = n.nhl_id AND p.fetched_at = n.latest;
+
+-- The rows of the newest observation of each game (#35). A rebuild or a revisit adds a newer
+-- observation, and the older rows stay in the table.
+DROP VIEW IF EXISTS latest_pbp_events;
+CREATE VIEW latest_pbp_events AS
+SELECT e.* FROM pbp_events e
+JOIN (SELECT game_id, MAX(obs_id) AS obs_id FROM pbp_events GROUP BY game_id) n
+    ON e.obs_id = n.obs_id;
+
+DROP VIEW IF EXISTS latest_shifts;
+CREATE VIEW latest_shifts AS
+SELECT s.* FROM shifts s
+JOIN (SELECT game_id, MAX(obs_id) AS obs_id FROM shifts GROUP BY game_id) n
+    ON s.obs_id = n.obs_id;
+
+DROP VIEW IF EXISTS latest_stints;
+CREATE VIEW latest_stints AS
+SELECT s.* FROM stints s
+JOIN (SELECT game_id, MAX(pbp_obs) AS pbp_obs FROM stints GROUP BY game_id) a
+    ON s.game_id = a.game_id AND s.pbp_obs = a.pbp_obs
+JOIN (SELECT game_id, pbp_obs, MAX(shift_obs) AS shift_obs FROM stints
+      GROUP BY game_id, pbp_obs) b
+    ON s.game_id = b.game_id AND s.pbp_obs = b.pbp_obs AND s.shift_obs = b.shift_obs;

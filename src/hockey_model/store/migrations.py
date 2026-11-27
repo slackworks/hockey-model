@@ -214,6 +214,42 @@ _REVISIONS_V10 = (
     " FROM goalie_games",
 )
 
+# The play-by-play, shift chart, and ESPN summary tables (#35). A store from an earlier version
+# holds none, so the tables start empty.
+_EVENTS_V11 = (
+    "CREATE TABLE pbp_roster (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "game_id INTEGER NOT NULL, player_id INTEGER NOT NULL, team TEXT NOT NULL, position TEXT "
+    "NOT NULL, PRIMARY KEY (obs_id, player_id))",
+    "CREATE TABLE pbp_events (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "game_id INTEGER NOT NULL, event_id INTEGER NOT NULL, sort_order INTEGER NOT NULL, period "
+    "INTEGER NOT NULL, period_type TEXT NOT NULL CHECK (period_type IN ('REG', 'OT', 'SO')), "
+    "period_second INTEGER NOT NULL, game_second INTEGER, type TEXT NOT NULL, situation_code "
+    "TEXT, owner_team TEXT, x REAL, y REAL, attack_x_sign INTEGER CHECK (attack_x_sign IN "
+    "(-1, 1)), zone TEXT, shot_type TEXT, player1 INTEGER, player2 INTEGER, player3 INTEGER, "
+    "goalie_in_net INTEGER, home_score INTEGER, away_score INTEGER, parser TEXT NOT NULL, "
+    "PRIMARY KEY (obs_id, event_id))",
+    "CREATE TABLE shifts (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), game_id "
+    "INTEGER NOT NULL, row_no INTEGER NOT NULL, player_id INTEGER NOT NULL, team TEXT NOT "
+    "NULL, period INTEGER NOT NULL, start_second INTEGER NOT NULL, end_second INTEGER NOT "
+    "NULL, shift_number INTEGER, parser TEXT NOT NULL, PRIMARY KEY (obs_id, row_no))",
+    "CREATE TABLE stints (game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL REFERENCES "
+    "observations (obs_id), shift_obs INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "stint INTEGER NOT NULL, period INTEGER NOT NULL, start_second INTEGER NOT NULL, "
+    "end_second INTEGER NOT NULL, home_skaters TEXT NOT NULL, away_skaters TEXT NOT NULL, "
+    "home_goalie INTEGER, away_goalie INTEGER, PRIMARY KEY (game_id, pbp_obs, shift_obs, "
+    "stint))",
+    "CREATE TABLE espn_skater_toi (obs_id INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "game_id INTEGER NOT NULL, team TEXT NOT NULL, espn_name TEXT NOT NULL, nhl_id INTEGER, "
+    "toi INTEGER NOT NULL, pp_toi INTEGER NOT NULL, sh_toi INTEGER NOT NULL, es_toi INTEGER "
+    "NOT NULL, shifts INTEGER NOT NULL, parser TEXT NOT NULL, PRIMARY KEY (obs_id, team, "
+    "espn_name))",
+    "CREATE TABLE event_status (game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL REFERENCES "
+    "observations (obs_id), shift_obs INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "status TEXT NOT NULL CHECK (status IN ('provisional', 'reconciled', 'incomplete')), "
+    "checked_at TEXT NOT NULL, notes TEXT NOT NULL, PRIMARY KEY (game_id, pbp_obs, "
+    "shift_obs))",
+)
+
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -309,6 +345,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     ),
     8: _ARCHIVE_V9,
     9: _REVISIONS_V10,
+    10: _EVENTS_V11,
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.

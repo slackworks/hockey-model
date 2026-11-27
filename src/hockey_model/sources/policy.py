@@ -18,6 +18,8 @@ class HostPolicy:
 
 HOST_POLICIES: Mapping[str, HostPolicy] = {
     "api-web.nhle.com": HostPolicy(min_interval_s=0.5, max_retries=3),
+    # The shift charts (#35). The host answers at the same pace as the web API.
+    "api.nhle.com": HostPolicy(min_interval_s=0.5, max_retries=3),
     "site.api.espn.com": HostPolicy(min_interval_s=2.0, max_retries=3),
     "www.dailyfaceoff.com": HostPolicy(min_interval_s=5.0, max_retries=3),
     # all_teams.csv is about 130 MB. On a link of 84 KB/s it takes about 26 minutes, so the

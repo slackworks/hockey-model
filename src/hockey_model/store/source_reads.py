@@ -18,6 +18,13 @@ DAILY_FACEOFF = "daily_faceoff"
 KNOWN_SOURCES = frozenset(
     {SCORES, BOXSCORES, MONEYPUCK, ESPN_STARTERS, ESPN_INJURIES, DAILY_FACEOFF}
 )
+# The play-by-play, shift chart, and ESPN summary of a game (#35). They are archived and read,
+# but they stay out of KNOWN_SOURCES until a model feature reads them: that list drives the stale
+# source notes of every prediction, and a store with no events would then report a stale source.
+NHL_PBP = "nhl_pbp"
+NHL_SHIFTS = "nhl_shifts"
+ESPN_SUMMARY = "espn_summary"
+EVENT_SOURCES = frozenset({NHL_PBP, NHL_SHIFTS, ESPN_SUMMARY})
 # A URL whose last this-many reads all failed is a known gap. A refresh skips it and says so.
 ABANDON_AFTER_FAILED_READS = 2
 # The failed reads must span at least this long, so one outage does not make a gap.

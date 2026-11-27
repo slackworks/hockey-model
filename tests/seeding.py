@@ -197,8 +197,25 @@ def drop_archive_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS payloads")
 
 
+EVENT_TABLES = (
+    "event_status",
+    "stints",
+    "espn_skater_toi",
+    "shifts",
+    "pbp_events",
+    "pbp_roster",
+)
+
+
+def drop_event_tables(conn: sqlite3.Connection) -> None:
+    """Remove the tables that the 10->11 step adds, so a store can pass for version 10."""
+    for table in EVENT_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 def drop_revision_tables(conn: sqlite3.Connection) -> None:
-    """Remove the tables that the 9->10 step adds, so a store can pass for version 9."""
+    """Remove the tables that the 9->10 and 10->11 steps add, so a store can pass for version 9."""
+    drop_event_tables(conn)
     for table in ("goalie_game_revisions", "skater_game_revisions", "boxscore_revisions"):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
 

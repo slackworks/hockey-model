@@ -53,8 +53,14 @@ RESULT_FIELDS = (
 SHARDS: tuple[tuple[str, ...], ...] = (
     ("game_model.logistic",),
     ("experiments.models", "sources.moneypuck", "sources.payload"),
-    ("backtest.runner", "json_schema", "game_model.elo", "sources.http"),
-    ("backtest.metrics", "backtest.season_key", "backtest.shards"),
+    ("backtest.runner", "json_schema", "game_model.elo", "sources.http", "sources.nhl_events"),
+    (
+        "backtest.metrics",
+        "backtest.season_key",
+        "backtest.shards",
+        "sources.nhl_shifts",
+        "sources.espn_summary",
+    ),
     (
         "backtest.row_cache",
         "sources.nhl",

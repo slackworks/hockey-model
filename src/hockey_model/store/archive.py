@@ -17,6 +17,8 @@ from hockey_model.store.db import StoreError
 from hockey_model.store.source_reads import (
     ESPN_INJURIES,
     ESPN_STARTERS,
+    ESPN_SUMMARY,
+    EVENT_SOURCES,
     KNOWN_SOURCES,
 )
 from hockey_model.store.timestamps import iso_utc, parse_iso_utc
@@ -33,7 +35,7 @@ STATUSES = frozenset({OK, HTTP_ERROR, SHAPE_ERROR, STORE_ERROR})
 COMPRESS_LEVEL: Final = 6
 # The sources whose payload holds a betting market. The capture removes those fields before the
 # bytes reach the parser or the archive, so the source name decides that, not the caller (#82).
-MARKET_SOURCES = frozenset({ESPN_STARTERS, ESPN_INJURIES})
+MARKET_SOURCES = frozenset({ESPN_STARTERS, ESPN_INJURIES, ESPN_SUMMARY})
 
 
 def is_market_source(source: str) -> bool:
@@ -44,11 +46,11 @@ def is_market_source(source: str) -> bool:
     a source that a refresh does not record, so a new source cannot reach the store without a
     decision on its market fields. Design: docs/design/payload-archive.md
     """
-    if source not in KNOWN_SOURCES:
+    if source not in KNOWN_SOURCES | EVENT_SOURCES:
         raise StoreError(
-            f"read {source}: this source is not in KNOWN_SOURCES, so its bytes would never "
-            "reach the archive; add the source to store/source_reads.py with its archive rule "
-            "from docs/design/payload-archive.md"
+            f"read {source}: this source is not in KNOWN_SOURCES or EVENT_SOURCES, so its bytes "
+            "would never reach the archive; add the source to store/source_reads.py with its "
+            "archive rule from docs/design/payload-archive.md"
         )
     return source in MARKET_SOURCES
 
