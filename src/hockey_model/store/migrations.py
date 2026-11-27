@@ -242,6 +242,21 @@ _EVENTS_V11 = (
 
 # The change from each version to the next, in order. Each change is one statement. The
 # views are dropped before the first change and rebuilt after the commit.
+# The stint and event status tables (#35). A store from version 11 holds none, so they start
+# empty.
+_STINTS_V12 = (
+    "CREATE TABLE stints (game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL REFERENCES "
+    "observations (obs_id), shift_obs INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "stint INTEGER NOT NULL, period INTEGER NOT NULL, start_second INTEGER NOT NULL, "
+    "end_second INTEGER NOT NULL, home_skaters TEXT NOT NULL, away_skaters TEXT NOT NULL, "
+    "home_goalies TEXT NOT NULL, away_goalies TEXT NOT NULL, "
+    "PRIMARY KEY (game_id, pbp_obs, shift_obs, stint))",
+    "CREATE TABLE event_status (game_id INTEGER NOT NULL, pbp_obs INTEGER NOT NULL REFERENCES "
+    "observations (obs_id), shift_obs INTEGER NOT NULL REFERENCES observations (obs_id), "
+    "status TEXT NOT NULL CHECK (status IN ('provisional', 'reconciled', 'incomplete')), "
+    "checked_at TEXT NOT NULL, notes TEXT NOT NULL, PRIMARY KEY (game_id, pbp_obs, shift_obs))",
+)
+
 MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
         _MP_TEAM_GAMES_V2,
@@ -336,6 +351,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     8: _ARCHIVE_V9,
     9: _REVISIONS_V10,
     10: _EVENTS_V11,
+    11: _STINTS_V12,
 }
 # d05eb1a added NOT NULL to these two columns. A row that an earlier store wrote can hold a
 # NULL there, and the rebuild cannot invent a value, so the step stops before it copies one.
