@@ -12,6 +12,7 @@ from refresh_support import BOX_URL, MAIN_GAME, FakeClient
 from seeding import add_game, drop_revision_tables
 
 from hockey_model.sources.nhl import BoxscoreRows, parse_boxscore
+from hockey_model.sources.shape_errors import SourceParseError
 from hockey_model.store import boxscore_rebuild
 from hockey_model.store.archive import OK, SHAPE_ERROR, Fetch, record_observation
 from hockey_model.store.boxscore_revisions import FIRST, LATEST, boxscore_rows
@@ -137,11 +138,15 @@ def test_a_payload_that_names_the_wrong_teams_is_refused_and_counted(
     wrong["homeTeam"]["abbrev"], wrong["awayTeam"]["abbrev"] = "TOR", "MTL"
     record_observation(
         conn,
-        Fetch(BOXSCORES, URL, DAY_ONE, OK, PARSER, str(MAIN_GAME), json.dumps(wrong).encode()),
+        Fetch(
+            BOXSCORES, URL, DAY_ONE, SHAPE_ERROR, PARSER, str(MAIN_GAME), json.dumps(wrong).encode()
+        ),
     )
     _new_parser(monkeypatch, _no_assists)
     report = rebuild_source(conn, BOXSCORES, NEXT_PARSER)
     assert report.rejected == 1
+    assert f"game {MAIN_GAME}" in report.refused[0]
+    assert "TOR" in report.refused[0] or "stored game" in report.refused[0]
     latest = boxscore_rows(conn, MAIN_GAME, policy=LATEST)
     assert latest is not None
     assert latest.revision == 1
@@ -220,3 +225,43 @@ def test_the_store_command_names_a_missing_store(tmp_path: Path) -> None:
     )
     with pytest.raises(StoreError, match="no store file"):
         run_store_command(args)
+
+
+def test_a_payload_that_the_first_read_accepted_and_the_parser_refuses_stops_the_rebuild(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parser regression must not replace a good derivation with a lossy one."""
+    refresh(conn, FakeClient(), now=DAY_ONE)
+
+    def broken(payload: object) -> BoxscoreRows:
+        raise SourceParseError("nhl", "the parser lost the shape of the feed")
+
+    monkeypatch.setattr(boxscore_rebuild, "BOXSCORE_PARSER", NEXT_PARSER)
+    monkeypatch.setattr(boxscore_rebuild, "parse_boxscore", broken)
+    with pytest.raises(StoreError, match=r"game \d+ observation \d+: the parser .* refuses"):
+        rebuild_source(conn, BOXSCORES, NEXT_PARSER)
+    assert conn.execute("SELECT MAX(derivation) FROM boxscore_revisions").fetchone() == (1,)
+
+
+def test_a_deeply_nested_archived_body_is_a_refusal_and_not_a_crash(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    record_observation(
+        conn,
+        Fetch(BOXSCORES, URL, DAY_ONE, SHAPE_ERROR, PARSER, str(MAIN_GAME), b"[" * 200_000),
+    )
+    report = rebuild_source(conn, BOXSCORES, PARSER)
+    assert report.rejected == 1
+    assert "not valid JSON" in report.refused[0]
+    assert report.derived == 0
+
+
+def test_a_damaged_payload_row_names_the_game_and_the_observation(
+    conn: sqlite3.Connection,
+) -> None:
+    refresh(conn, FakeClient(), now=DAY_ONE)
+    conn.execute("UPDATE payloads SET body = x'00'")
+    conn.commit()
+    with pytest.raises(StoreError, match=rf"rebuild {BOXSCORES} game \d+ observation \d+"):
+        rebuild_source(conn, BOXSCORES, PARSER)
