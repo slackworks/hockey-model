@@ -71,7 +71,13 @@ def test_the_builder_merges_the_shifts_and_reports_the_dropped_ones() -> None:
     shifts = [_iv(1, HOME, 0, 50), _iv(1, HOME, 50, 100), _iv(2, HOME, 70, 70)]
     result = build_stints(shifts, {}, HOME, AWAY)
     assert [(s.start, s.end, s.home_skaters) for s in result.stints] == [(0, 100, (1,))]
-    assert [i.player_id for i in result.dropped] == [2]
+    assert (result.zero_length, result.negative_length) == (1, 0)
+
+
+def test_a_shift_that_ends_before_it_starts_is_counted_apart_from_a_zero_length_one() -> None:
+    shifts = [_iv(1, HOME, 0, 50), _iv(2, HOME, 60, 60), _iv(3, HOME, 70, 40), _iv(4, HOME, 80, 20)]
+    result = build_stints(shifts, {}, HOME, AWAY)
+    assert (result.zero_length, result.negative_length) == (1, 2)
 
 
 def test_neighbors_with_the_same_players_join_into_one_stint() -> None:

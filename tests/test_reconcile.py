@@ -9,6 +9,7 @@ from hockey_model.reconcile import (
     check_goals_by_player,
     check_goals_by_team,
     check_roster,
+    check_shift_lengths,
     check_situation,
     notes_json,
     status_of,
@@ -179,10 +180,17 @@ def test_the_status_follows_the_checks_and_the_last_revisit(
     assert status_of(results, settled=settled) == status
 
 
-def test_the_notes_hold_the_result_of_every_check_and_the_dropped_shift_count() -> None:
-    text = notes_json([_result("a", True), CheckResult("b", False, {"x": 1})], dropped_shifts=2)
+def test_a_zero_length_shift_is_noted_and_a_negative_one_fails_the_check() -> None:
+    ok = check_shift_lengths(zero_length=3, negative_length=0)
+    assert ok.passed
+    assert ok.detail == {"zero_length": 3, "negative_length": 0}
+    bad = check_shift_lengths(zero_length=0, negative_length=1)
+    assert not bad.passed
+    assert bad.detail == {"zero_length": 0, "negative_length": 1}
+
+
+def test_the_notes_hold_the_result_of_every_check() -> None:
+    text = notes_json([_result("a", True), CheckResult("b", False, {"x": 1})])
     assert text == (
-        '[{"check":"a","passed":true,"detail":{}},'
-        '{"check":"b","passed":false,"detail":{"x":1}},'
-        '{"check":"dropped_shifts","passed":true,"detail":{"count":2}}]'
+        '[{"check":"a","passed":true,"detail":{}},{"check":"b","passed":false,"detail":{"x":1}}]'
     )

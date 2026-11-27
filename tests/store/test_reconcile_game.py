@@ -87,7 +87,7 @@ def test_a_complete_game_after_the_last_revisit_is_reconciled(conn: sqlite3.Conn
         "roster": True,
         "situation": True,
         "espn_teams": True,
-        "dropped_shifts": True,
+        "shift_lengths": True,
     }
 
 
@@ -300,3 +300,18 @@ def test_an_unverified_boxscore_revision_is_read_and_the_check_can_pass(
     conn.execute("UPDATE boxscore_revisions SET identity = 'unverified'")
     reconcile_game(conn, GAME, LATE)
     assert _checks(conn)["goals_by_player"] is True
+
+
+def test_a_shift_that_ends_before_it_starts_makes_a_settled_game_incomplete(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    pbp, shift = _obs(conn, NHL_PBP, LATE), _obs(conn, NHL_SHIFTS, LATE)
+    write_pbp(conn, pbp, parse_pbp(_json("nhl/pbp_2025020709.json"), GAME))
+    rows = parse_shifts(_json("nhl/shifts_2025020709.json"), GAME)
+    inverted = replace(rows.shifts[0], start_second=500, end_second=400)
+    write_shifts(conn, shift, replace(rows, shifts=(*rows.shifts, inverted)))
+    result = reconcile_game(conn, GAME, LATE)
+    assert result is not None
+    assert result.status == "incomplete"
+    assert _checks(conn)["shift_lengths"] is False

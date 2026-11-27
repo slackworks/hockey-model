@@ -157,8 +157,13 @@ def status_of(results: Sequence[CheckResult], *, settled: bool) -> str:
     return "reconciled" if all(r.passed for r in results) else "incomplete"
 
 
-def notes_json(results: Sequence[CheckResult], *, dropped_shifts: int) -> str:
-    """Return the notes of an event status: the result of each check, and the dropped shifts."""
+def check_shift_lengths(*, zero_length: int, negative_length: int) -> CheckResult:
+    """No shift ends before it starts. A shift with no length is harmless and only counted."""
+    detail: dict[str, object] = {"zero_length": zero_length, "negative_length": negative_length}
+    return CheckResult("shift_lengths", negative_length == 0, detail)
+
+
+def notes_json(results: Sequence[CheckResult]) -> str:
+    """Return the notes of an event status: the result of each check."""
     entries = [{"check": r.name, "passed": r.passed, "detail": r.detail} for r in results]
-    entries.append({"check": "dropped_shifts", "passed": True, "detail": {"count": dropped_shifts}})
     return json.dumps(entries, separators=(",", ":"))

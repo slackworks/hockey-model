@@ -42,10 +42,14 @@ class Stint:
 
 @dataclass(frozen=True, slots=True)
 class Stints:
-    """The stints of a game in time order, and the intervals that had no length."""
+    """The stints of a game in time order, and the counts of the intervals that were dropped.
+
+    A zero length interval is harmless. An interval that ends before it starts is a fault of the
+    feed or of the clock parser."""
 
     stints: tuple[Stint, ...]
-    dropped: tuple[Interval, ...]
+    zero_length: int
+    negative_length: int
 
 
 def merge_intervals(intervals: Iterable[Interval]) -> tuple[list[Interval], list[Interval]]:
@@ -143,7 +147,7 @@ def _players(stint: Stint) -> tuple[tuple[int, ...], ...]:
 def build_stints(
     intervals: Iterable[Interval], positions: Mapping[int, str], home: str, away: str
 ) -> Stints:
-    """Return the stints of a game, in time order, and the intervals dropped for no length.
+    """Return the stints of a game, in time order, and the counts of the intervals dropped.
 
     The builder merges the intervals first. ``positions`` maps a player id to a position code,
     and the players with the code ``G`` are the goalies. A player that ``positions`` does not
@@ -166,7 +170,8 @@ def build_stints(
     stints: list[Stint] = []
     for period in sorted(by_period):
         stints.extend(_period_stints(period, by_period[period], goalies, home))
-    return Stints(tuple(stints), tuple(dropped))
+    negative = sum(1 for i in dropped if i.end < i.start)
+    return Stints(tuple(stints), len(dropped) - negative, negative)
 
 
 def stint_at(stints: Sequence[Stint], period: int, second: int) -> Stint | None:

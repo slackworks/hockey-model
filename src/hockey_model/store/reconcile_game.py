@@ -18,6 +18,7 @@ from hockey_model.reconcile import (
     check_goals_by_player,
     check_goals_by_team,
     check_roster,
+    check_shift_lengths,
     check_situation,
     notes_json,
     status_of,
@@ -164,6 +165,9 @@ def _checks(conn: sqlite3.Connection, built: GameStints, inputs: GameInputs) -> 
         _team_check(conn, inputs),
         _player_check(conn, inputs),
         check_roster((i.player_id for i in inputs.intervals), inputs.positions),
+        check_shift_lengths(
+            zero_length=built.stints.zero_length, negative_length=built.stints.negative_length
+        ),
         _situation_check(conn, built),
     ]
     return [*results, _espn_check(conn, inputs)]
@@ -196,7 +200,7 @@ def reconcile_game(conn: sqlite3.Connection, game_id: int, now: datetime) -> Gam
     results = _checks(conn, built, inputs)
     status = status_of(results, settled=_is_settled(conn, inputs))
     game = GameStatus(game_id, inputs.pbp_obs, inputs.shift_obs, status, tuple(results))
-    notes = notes_json(results, dropped_shifts=len(built.stints.dropped))
+    notes = notes_json(results)
     write_stints(conn, built)
     _write_status(conn, game, notes, now)
     return game
