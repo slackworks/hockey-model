@@ -1,0 +1,147 @@
+"""Tests for the ESPN summary parser. They read a saved game and make no network request."""
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+from hockey_model.sources.espn_summary import (
+    SUMMARY_PARSER,
+    fetch_summary,
+    parse_summary,
+    summary_url,
+)
+from hockey_model.sources.http import HttpClient
+from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
+
+FIXTURE = Path(__file__).parent.parent / "fixtures" / "espn" / "summary_401803060.json"
+EVENT = "401803060"
+
+
+def load() -> dict:
+    return json.loads(FIXTURE.read_text())
+
+
+def test_the_parser_names_its_version() -> None:
+    assert SUMMARY_PARSER.startswith("espn_summary:")
+
+
+def test_a_saved_summary_gives_the_skaters_of_both_teams() -> None:
+    rows = parse_summary(load(), EVENT)
+    assert rows.event_id == EVENT
+    assert len(rows.skaters) == 36
+    assert {s.team for s in rows.skaters} == {"EDM", "LAK"}
+
+
+def test_a_skater_has_the_time_on_ice_split_by_strength() -> None:
+    byfield = next(s for s in parse_summary(load(), EVENT).skaters if s.name == "Quinton Byfield")
+    assert byfield.team == "LAK"
+    assert (byfield.toi, byfield.pp_toi, byfield.sh_toi, byfield.es_toi) == (1276, 45, 175, 1056)
+    assert byfield.shifts == 27
+    assert byfield.toi == byfield.pp_toi + byfield.sh_toi + byfield.es_toi
+
+
+def test_the_goalies_are_not_skaters() -> None:
+    names = {s.name for s in parse_summary(load(), EVENT).skaters}
+    payload = load()
+    goalies = [
+        a["athlete"]["displayName"]
+        for side in payload["boxscore"]["players"]
+        for group in side["statistics"]
+        if group["name"] == "goalies"
+        for a in group["athletes"]
+    ]
+    assert goalies
+    assert names.isdisjoint(goalies)
+
+
+def test_the_market_keys_are_in_the_saved_payload_and_the_parser_reads_none() -> None:
+    payload = load()
+    assert {"pickcenter", "odds", "againstTheSpread"} <= payload.keys()
+    for key in ("pickcenter", "odds", "againstTheSpread"):
+        del payload[key]
+    assert parse_summary(payload, EVENT) == parse_summary(load(), EVENT)
+
+
+@pytest.mark.parametrize("key", ["boxscore"])
+def test_a_renamed_top_level_key_is_a_named_error(key: str) -> None:
+    payload = load()
+    payload[f"{key}_renamed"] = payload.pop(key)
+    with pytest.raises(SourceParseError, match=key):
+        parse_summary(payload, EVENT)
+
+
+def test_a_renamed_stat_column_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    group["keys"][group["keys"].index("timeOnIce")] = "timeOnIce_renamed"
+    with pytest.raises(SourceParseError, match="no stat column timeOnIce"):
+        parse_summary(payload, EVENT)
+
+
+@pytest.mark.parametrize("value", ["7", "21:61", "x", 21, None])
+def test_a_bad_time_is_a_named_error(value: object) -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    index = group["keys"].index("timeOnIce")
+    group["athletes"][0]["stats"][index] = value
+    with pytest.raises(SourceParseError, match="M:SS"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_bad_shift_count_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    index = group["keys"].index("shifts")
+    group["athletes"][0]["stats"][index] = "many"
+    with pytest.raises(SourceParseError, match="digits"):
+        parse_summary(payload, EVENT)
+
+
+def test_a_short_stat_row_is_a_named_error() -> None:
+    payload = load()
+    group = payload["boxscore"]["players"][0]["statistics"][0]
+    group["athletes"][0]["stats"] = group["athletes"][0]["stats"][:3]
+    with pytest.raises(SourceParseError, match="no value for"):
+        parse_summary(payload, EVENT)
+
+
+def test_an_unknown_team_code_is_a_named_error() -> None:
+    payload = load()
+    payload["boxscore"]["players"][0]["team"]["abbreviation"] = "XXX"
+    with pytest.raises(SourceShapeError):
+        parse_summary(payload, EVENT)
+
+
+def test_a_summary_with_no_skater_is_a_named_error() -> None:
+    payload = load()
+    for side in payload["boxscore"]["players"]:
+        side["statistics"] = [g for g in side["statistics"] if g["name"] == "goalies"]
+    with pytest.raises(SourceParseError, match="lists no skater"):
+        parse_summary(payload, EVENT)
+
+
+def test_the_parser_does_not_change_its_input() -> None:
+    payload = load()
+    before = copy.deepcopy(payload)
+    parse_summary(payload, EVENT)
+    assert payload == before
+
+
+class _Client(HttpClient):
+    def __init__(self, body: bytes) -> None:
+        super().__init__()
+        self.body = body
+        self.urls: list[str] = []
+
+    def get(self, source: str, url: str) -> bytes:
+        self.urls.append(url)
+        return self.body
+
+
+def test_fetch_reads_the_summary_url_of_the_event() -> None:
+    client = _Client(FIXTURE.read_bytes())
+    assert len(fetch_summary(client, EVENT).skaters) == 36
+    assert client.urls == [summary_url(EVENT)]
+    assert summary_url(EVENT).endswith(f"/summary?event={EVENT}")
