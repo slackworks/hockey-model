@@ -15,7 +15,7 @@ from hockey_model.sources.nhl import boxscore_url
 from hockey_model.sources.nhl_events import pbp_url
 from hockey_model.sources.nhl_shifts import shifts_url
 from hockey_model.store import refresh_events
-from hockey_model.store.db import connect
+from hockey_model.store.db import StoreError, connect
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_events import read_events
@@ -220,3 +220,11 @@ def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
     assert run.errors == []
     assert sum("garbage" in note for note in run.notes) == 1
     assert _status(conn) == []
+
+
+def test_the_derive_hook_refuses_to_run_before_the_unit(conn: sqlite3.Connection) -> None:
+    run = RefreshRun(conn, FakeClient(), NOW)
+    _, reading = refresh_events._unit(run, NHL_SHIFTS, GAME)
+    assert reading.derive is not None
+    with pytest.raises(StoreError, match=rf"derive nhl_shifts {GAME}: .*no parsed rows"):
+        reading.derive(conn, 1)
