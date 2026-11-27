@@ -24,6 +24,7 @@ KNOWN_SOURCES = frozenset(
 NHL_PBP = "nhl_pbp"
 NHL_SHIFTS = "nhl_shifts"
 ESPN_SUMMARY = "espn_summary"
+# The staleness and the known-gap reports read KNOWN_SOURCES only, so they leave these three out.
 EVENT_SOURCES = frozenset({NHL_PBP, NHL_SHIFTS, ESPN_SUMMARY})
 # A URL whose last this-many reads all failed is a known gap. A refresh skips it and says so.
 ABANDON_AFTER_FAILED_READS = 2

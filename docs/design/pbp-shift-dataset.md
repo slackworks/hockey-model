@@ -159,12 +159,14 @@ The list in the issue body is the acceptance list. Add these:
 Delivery step 1 shipped with these changes from the plan above:
 
 - `pbp_roster (obs_id, game_id, player_id, team, position)` holds the roster of the play-by-play, because the stint step needs the position `G`.
-- `shifts` is keyed on `(obs_id, row_no)`, where `row_no` is the place of the row in the feed. The feed can repeat a shift, and the stint step merges the repeats.
-- A derived row has a `parser` column, and a rebuild replaces the rows of one observation in place. The archive keeps the bytes, so the earlier parse is not lost.
-- `espn_skater_toi` is keyed on `(obs_id, team, espn_name)` and resolves `nhl_id` by the team and the name when one player matches.
+- `shifts` is keyed on `(obs_id, row_no)`, where `row_no` is the place of the shift among the shift rows of the feed. The feed can repeat a shift, and the stint step merges the repeats.
+- A derived row has a `parser` column, and a rebuild replaces the rows of one observation in place. The archive keeps the bytes, so the earlier parse is not lost. A payload that the rebuild refuses leaves no rows.
+- `espn_skater_toi` is keyed on `(obs_id, team, espn_name)` and has no `nhl_id`. A rebuild must give the rows of a first parse of the same bytes, and an id from the player catalog of the day would change it. The reconciliation joins the ESPN name to the roster of the game when it reads.
 - The observation key of `espn_summary` is the NHL game id, through `Reading.key`.
 - The version is 11. Schema version 10 is the boxscore revision tables of #82.
-- `store rebuild --source nhl_pbp`, `nhl_shifts`, or `espn_summary` rewrites the rows of each archived observation, and `--allow-refused` lets a stricter parser drop a payload that an earlier parser accepted.
+- The tables `stints` and `event_status`, the view `latest_stints`, and the stint builder return with the reconciliation step that writes them. They have no writer in step 1.
+- A parser refuses an empty feed, a payload for another game or event, a repeated event, player, or skater, a clock past its limit, and an id outside the integer range of the store. An event type with no entry in the role map keeps its type and no players, and the archived payload keeps the player keys for a later parser.
+- `store rebuild --source nhl_pbp`, `nhl_shifts`, or `espn_summary` rewrites the rows of each archived observation. `--allow-refused` lets a stricter parser drop a payload that an earlier parser accepted.
 
 ## Calls made
 
