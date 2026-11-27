@@ -6,9 +6,12 @@ raises ``FileNotFoundError`` there, and the run aborts (#253). The guard skips i
 In a normal checkout the same missing path is a broken test, and the guard fails (#198).
 """
 
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from mutation_copy import in_mutation_copy, require_path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -64,3 +67,25 @@ def test_a_present_script_is_returned() -> None:
 
 def test_a_present_directory_is_returned() -> None:
     assert require_path(SCRIPTS) == SCRIPTS
+
+
+_FOLDERS = st.lists(
+    st.text(alphabet="abcxyz019_", min_size=1, max_size=5).filter(lambda name: name != "mutants"),
+    max_size=3,
+)
+
+
+@given(_FOLDERS, _FOLDERS)
+def test_a_mutants_folder_is_a_copy_only_while_its_parent_holds_pyproject(
+    above: list[str], below: list[str]
+) -> None:
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder).joinpath(*above)
+        copy_file = root / "mutants" / Path(*below) / "test_x.py"
+        copy_file.parent.mkdir(parents=True)
+        plain_file = root / Path(*below) / "test_x.py"
+        plain_file.parent.mkdir(parents=True, exist_ok=True)
+        assert not in_mutation_copy(copy_file)
+        (root / "pyproject.toml").write_text("", encoding="utf-8")
+        assert in_mutation_copy(copy_file)
+        assert not in_mutation_copy(plain_file)

@@ -9,9 +9,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from git_env import clear_git_env
+from hypothesis import given
+from hypothesis import strategies as st
 
 TESTS_DIR = Path(__file__).resolve().parent
 
@@ -87,3 +90,28 @@ def test_a_pytest_run_under_a_hook_environment_starts_without_git_variables(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+_NAMES = st.text(
+    alphabet=st.characters(min_codepoint=33, max_codepoint=126, exclude_characters="="),
+    min_size=1,
+    max_size=10,
+)
+_ENVIRONMENTS = st.dictionaries(
+    st.one_of(_NAMES, _NAMES.map(lambda name: f"GIT_{name}")),
+    st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=8),
+    max_size=8,
+)
+
+
+@given(_ENVIRONMENTS)
+def test_the_clear_keeps_exactly_the_names_without_the_prefix_and_is_idempotent(
+    environment: dict[str, str],
+) -> None:
+    kept = {name: value for name, value in environment.items() if not name.startswith("GIT_")}
+    with mock.patch.dict(os.environ, environment, clear=True):
+        clear_git_env()
+        once = dict(os.environ)
+        clear_git_env()
+        assert dict(os.environ) == once
+    assert once == kept

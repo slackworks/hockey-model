@@ -10,9 +10,12 @@ module from forgetting it.
 import ast
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from mutation_copy import in_mutation_copy
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +178,44 @@ def test_the_guard_detector_matches_the_guard_that_other_modules_use() -> None:
     assert _has_guard(through_module) is True
     assert _has_guard(imported) is False
     assert _has_guard('"""A test of the mutants directory."""') is False
+
+
+_ENTRIES = st.sampled_from(MISSING_IN_COPY)
+_SUFFIXES = st.text(alphabet="abcXYZ019_", min_size=1, max_size=6)
+_ARGUMENTS = st.sampled_from(["path", "ROOT / 'x'", "SCRIPTS / 'a.sh'", ""])
+
+
+@given(st.text(max_size=200))
+def test_the_guard_detector_never_raises_on_any_text(text: str) -> None:
+    assert isinstance(_has_guard(text), bool)
+
+
+@given(_ARGUMENTS)
+def test_a_guard_call_is_found_at_any_depth_and_a_renamed_call_is_not(argument: str) -> None:
+    nested = f"def f():\n    if True:\n        require_path({argument})\n"
+    renamed = f"def f():\n    require_paths({argument})\n"
+    assert _has_guard(nested) is True
+    assert _has_guard(renamed) is False
+
+
+@given(_ENTRIES)
+def test_a_walk_to_an_entry_is_named_until_a_guard_call_clears_it(entry: str) -> None:
+    body = f'P = Path(__file__).parents[1] / "{entry}"\n'
+    with tempfile.TemporaryDirectory() as folder:
+        module = Path(folder) / "test_probe.py"
+        module.write_text(body, encoding="utf-8")
+        assert _unguarded_reads(module) == [entry]
+        module.write_text(body + "require_path(P)\n", encoding="utf-8")
+        assert _unguarded_reads(module) == []
+
+
+@given(_ENTRIES, _SUFFIXES)
+def test_an_entry_name_matches_alone_and_as_a_folder_but_not_as_a_longer_name(
+    entry: str, suffix: str
+) -> None:
+    assert _names_entry(f'"{entry}"', entry)
+    assert _names_entry(f"'{entry}/{suffix}'", entry)
+    assert not _names_entry(f'"{entry}{suffix}"', entry)
 
 
 def _tracked_root_entries() -> set[str]:
