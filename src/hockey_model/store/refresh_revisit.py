@@ -1,12 +1,11 @@
 """The revisit step of a refresh: read final boxscores again, to keep each correction (#82)."""
 
 from hockey_model.sources.nhl import boxscore_url
-from hockey_model.store.boxscore_revisit import boxscores_due
+from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS, boxscores_due
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_nhl import (
     BOXSCORES,
     MAX_REVISITS,
-    REVISIT_AFTER_DAYS,
     read_boxscores,
 )
 

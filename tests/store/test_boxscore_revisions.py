@@ -22,12 +22,11 @@ from hockey_model.store.boxscore_revisions import (
     boxscore_rows,
     record_revision,
 )
-from hockey_model.store.boxscore_revisit import boxscores_due
+from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS, boxscores_due
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.rebuild import rebuild_source
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import DeriveError
-from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.upgrade import upgrade_store
 

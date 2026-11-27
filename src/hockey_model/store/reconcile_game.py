@@ -33,8 +33,8 @@ from hockey_model.store.boxscore_revisions import (
     BoxscoreRevision,
     boxscore_rows,
 )
+from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS
 from hockey_model.store.db import StoreError
-from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import ESPN_SUMMARY, NHL_PBP, NHL_SHIFTS
 from hockey_model.store.stint_build import (
     GameInputs,

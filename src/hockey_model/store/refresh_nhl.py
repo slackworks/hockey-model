@@ -67,9 +67,6 @@ UNRESOLVED_OLD_AFTER = timedelta(days=14)
 UNRESOLVED_OLD_RETRY_AFTER = timedelta(days=7)
 # At most this many unresolved days are read again in one refresh, oldest first.
 MAX_UNRESOLVED_DAYS = 10
-# A final boxscore is read again this many days after its game started, when no read has come
-# since. The NHL corrects a boxscore after the game, and each correction is a new revision.
-REVISIT_AFTER_DAYS = (2, 14)
 # At most this many boxscores are read again in one refresh, the oldest due first.
 MAX_REVISITS = 100
 
