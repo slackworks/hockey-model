@@ -11,9 +11,11 @@ from hypothesis import strategies as st
 
 from hockey_model.sources.espn_events import (
     EspnEvent,
+    fetch_scoreboard_events,
     parse_scoreboard_events,
     scoreboard_url,
 )
+from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl import GameRow
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.sources.teams import from_espn
@@ -179,3 +181,64 @@ def _outcome(game: GameRow, events: list[EspnEvent]) -> str | None:
     except StoreError:
         return "ambiguous"
     return None if found is None else found.event_id
+
+
+class _Page(HttpClient):
+    """A client that answers every request with one body, and keeps the requests."""
+
+    def __init__(self, body: dict) -> None:
+        super().__init__()
+        self.body = json.dumps(body).encode()
+        self.requests: list[tuple[str, str]] = []
+
+    def get(self, source: str, url: str) -> bytes:
+        self.requests.append((source, url))
+        return self.body
+
+
+def test_a_fetch_makes_one_request_for_the_day_and_returns_its_events() -> None:
+    client = _Page(_board())
+    events = fetch_scoreboard_events(client, date(2026, 11, 3))
+    assert client.requests == [("espn", scoreboard_url(date(2026, 11, 3)))]
+    assert [event.event_id for event in events] == [e["id"] for e in _board()["events"]]
+
+
+def test_a_fetch_passes_the_notes_on_and_collects_the_skipped_events() -> None:
+    board = _board()
+    board["events"][0]["competitions"][0]["competitors"][0]["team"]["abbreviation"] = "ASG"
+    notes: list[str] = []
+    events = fetch_scoreboard_events(_Page(board), date(2026, 11, 3), notes)
+    assert len(events) == len(board["events"]) - 1
+    assert len(notes) == 1 and "ASG" in notes[0]
+    assert fetch_scoreboard_events(_Page(board), date(2026, 11, 3)) == events
+
+
+@pytest.mark.parametrize(
+    ("event_id", "valid"),
+    [("1", True), ("123456789012", True), ("1234567890123", False), ("", False), ("12a", False)],
+)
+def test_an_event_id_is_one_to_twelve_ascii_digits(event_id: str, valid: bool) -> None:
+    board = _board()
+    board["events"] = board["events"][:1]
+    board["events"][0]["id"] = event_id
+    if valid:
+        assert parse_scoreboard_events(board)[0].event_id == event_id
+    else:
+        with pytest.raises(SourceParseError, match="event id"):
+            parse_scoreboard_events(board)
+
+
+def test_the_message_of_each_fault_names_the_event_and_the_place() -> None:
+    board = _board()
+    first = board["events"][0]["id"]
+    board["events"][0]["competitions"][0]["competitors"][0]["homeAway"] = "x"
+    with pytest.raises(SourceParseError, match=rf"event {first} has homeAway 'x'"):
+        parse_scoreboard_events(board)
+    board = _board()
+    board["events"][0]["competitions"][0]["competitors"].pop()
+    with pytest.raises(SourceParseError, match=rf"event {first} must list two competitors, got 1"):
+        parse_scoreboard_events(board)
+    board = _board()
+    board["events"][0]["competitions"] = []
+    with pytest.raises(SourceParseError, match=rf"event {first} has an empty 'competitions'"):
+        parse_scoreboard_events(board)

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from json_mutation import sweep
 
+from hockey_model.sources.espn_events import parse_scoreboard_events
 from hockey_model.sources.espn_summary import parse_summary
 from hockey_model.sources.nhl_events import parse_pbp
 from hockey_model.sources.nhl_shifts import parse_shifts
@@ -55,10 +56,17 @@ def _espn() -> dict:
     return _load("espn/summary_401803060.json")
 
 
+def _scoreboard() -> dict:
+    document = _load("espn/scoreboard_20261103.json")
+    document["events"] = document["events"][:2]
+    return document
+
+
 CASES: dict[str, tuple[Callable[[], dict], Callable[[object], object]]] = {
     "pbp": (_pbp, lambda doc: parse_pbp(doc, GAME)),
     "shifts": (_shifts, lambda doc: parse_shifts(doc, GAME)),
     "espn": (_espn, lambda doc: parse_summary(doc, "401803060")),
+    "scoreboard": (_scoreboard, parse_scoreboard_events),
 }
 
 
@@ -103,6 +111,27 @@ def _edit_skater_twice(document: dict) -> None:
     group["athletes"].append(dict(group["athletes"][0]))
 
 
+def _edit_event_twice(document: dict) -> None:
+    document["events"].append(dict(document["events"][0]))
+
+
+def _edit_no_games(document: dict) -> None:
+    document["events"][0]["competitions"] = []
+
+
+def _edit_one_competitor(document: dict) -> None:
+    document["events"][0]["competitions"][0]["competitors"].pop()
+
+
+def _edit_same_side(document: dict) -> None:
+    competitors = document["events"][0]["competitions"][0]["competitors"]
+    competitors[1]["homeAway"] = competitors[0]["homeAway"]
+
+
+def _edit_event_id(document: dict) -> None:
+    document["events"][0]["id"] = "1234567890123"
+
+
 SCENARIOS: dict[str, list[Callable[[dict], None]]] = {
     "pbp": [
         _edit_clock,
@@ -116,6 +145,13 @@ SCENARIOS: dict[str, list[Callable[[dict], None]]] = {
     ],
     "shifts": [],
     "espn": [_edit_skater_twice],
+    "scoreboard": [
+        _edit_event_twice,
+        _edit_no_games,
+        _edit_one_competitor,
+        _edit_same_side,
+        _edit_event_id,
+    ],
 }
 
 
