@@ -13,6 +13,7 @@ from hockey_model.sources.http import HttpClient
 from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
 from hockey_model.store.archive import OK, STORE_ERROR, record_observation
 from hockey_model.store.db import StoreError
+from hockey_model.store.reconcile_game import forget_game, reconcile_game
 from hockey_model.store.recording import (
     Capture,
     Reading,
@@ -20,7 +21,12 @@ from hockey_model.store.recording import (
     RecordingClient,
     key_of,
 )
-from hockey_model.store.source_reads import abandoned_urls, record_failed_read, record_read
+from hockey_model.store.source_reads import (
+    EVENT_SOURCES,
+    abandoned_urls,
+    record_failed_read,
+    record_read,
+)
 from hockey_model.types import HockeyModelError
 
 # Errors that a bad source response or a bad stored schedule cause. Other errors are bugs.
@@ -106,6 +112,26 @@ class RefreshRun:
         self.last_stamp = self.now if self.clock is None else self.clock()
         return self.last_stamp
 
+    def reconcile_in_unit(self, game_id: int) -> None:
+        """Reconcile one game inside the transaction of the running unit (#35).
+
+        The reconcile code runs under a savepoint, because the unit may be a boxscore read that
+        the model uses, and a fault of the event dataset must not undo it. A store error leaves
+        the game with no status, as ``reconcile_game`` makes it. Any other fault rolls back the
+        writes of the reconcile code and removes the status of the game. Both go to the notes of
+        the report, and the next refresh reconciles the game again.
+        """
+        self.conn.execute("SAVEPOINT reconcile_game")
+        try:
+            reconcile_game(self.conn, game_id, self.last_stamp or self.now)
+        except StoreError as exc:
+            self.notes.append(f"reconcile: {exc}")
+        except Exception as exc:  # noqa: BLE001 - a fault here must not undo the unit
+            self.conn.execute("ROLLBACK TO reconcile_game")
+            forget_game(self.conn, game_id)
+            self.notes.append(f"reconcile: game {game_id}: {type(exc).__name__}: {exc}")
+        self.conn.execute("RELEASE reconcile_game")
+
     def stop(self, note: str) -> None:
         """Record why a read stopped, in the notes of the refresh and in the progress step."""
         self.notes.append(note)
@@ -189,12 +215,23 @@ class RefreshRun:
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
                 self._observe(capture, recorded.records, exc)
-            self.errors.append(exc)
+            self._report_failure(source, exc)
             return False
         finally:
             self.client = inner
         self.written[source] += written
         return True
+
+    def _report_failure(self, source: str, failure: HockeyModelError) -> None:
+        """Report a failed unit. The failure of an event source is a note, not an error.
+
+        The model reads no event, so an outage of the play-by-play or shift chart host must not
+        fail the refresh and stop the daily prepare before its backtest.
+        """
+        if source in EVENT_SOURCES:
+            self.notes.append(f"{source}: {failure}")
+        else:
+            self.errors.append(failure)
 
     def _observe(
         self, capture: Capture, records: list[RecordedFetch], failure: Exception | None

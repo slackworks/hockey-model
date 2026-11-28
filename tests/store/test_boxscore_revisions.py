@@ -22,12 +22,11 @@ from hockey_model.store.boxscore_revisions import (
     boxscore_rows,
     record_revision,
 )
-from hockey_model.store.boxscore_revisit import boxscores_due
+from hockey_model.store.boxscore_revisit import REVISIT_AFTER_DAYS, boxscores_due
 from hockey_model.store.db import SCHEMA_VERSION, StoreError, connect
 from hockey_model.store.rebuild import rebuild_source
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import DeriveError
-from hockey_model.store.refresh_nhl import REVISIT_AFTER_DAYS
 from hockey_model.store.source_reads import BOXSCORES
 from hockey_model.store.upgrade import upgrade_store
 
@@ -378,8 +377,9 @@ def test_a_game_read_since_the_archive_began_points_at_its_own_observation(
     store = connect(path)
     try:
         observations = store.execute(
-            "SELECT obs_id, parser, sha256 IS NOT NULL FROM observations WHERE key = ?",
-            (str(MAIN_GAME),),
+            "SELECT obs_id, parser, sha256 IS NOT NULL FROM observations"
+            " WHERE key = ? AND source = ?",
+            (str(MAIN_GAME), BOXSCORES),
         ).fetchall()
         assert observations == [(observations[0][0], BOXSCORE_PARSER, 1)]
         first = boxscore_rows(store, MAIN_GAME, policy=FIRST)
@@ -445,3 +445,16 @@ def test_a_revisit_whose_derive_fails_is_still_due_after_the_fix(
     monkeypatch.undo()
     refresh(conn, FakeClient(), now=DAY_FOUR)
     assert MAIN_GAME not in boxscores_due(conn, DAY_FOUR, REVISIT_AFTER_DAYS)
+
+
+def test_a_revision_with_a_bad_stored_time_raises_a_store_error_that_names_it(
+    tmp_path: Path,
+) -> None:
+    store = connect(tmp_path / "store.db")
+    try:
+        refresh(store, FakeClient(), now=DAY_ONE)
+        store.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
+        with pytest.raises(StoreError, match=rf"game {MAIN_GAME}: boxscore revision 1 .*garbage"):
+            boxscore_rows(store, MAIN_GAME, policy=LATEST)
+    finally:
+        store.close()

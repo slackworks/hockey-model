@@ -301,7 +301,6 @@
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 homeTeam must be an object, got str",
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 lists a player twice in its roster",
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 lists event 54 twice",
-    "SourceParseError: read nhl_pbp data: play-by-play 2025020709 lists no play; the game may not have started",
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 lists no roster spot",
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 names game 2025020710",
     "SourceParseError: read nhl_pbp data: play-by-play 2025020709 names one team as both teams",
@@ -343,6 +342,7 @@
     "SourceParseError: read nhl_pbp data: the play-by-play must be an object, got int",
     "SourceParseError: read nhl_pbp data: the play-by-play must be an object, got list",
     "SourceParseError: read nhl_pbp data: the play-by-play must be an object, got str",
+    "SourcePendingError: read nhl_pbp data: play-by-play 2025020709 lists no play; the game may not have started",
     "SourceShapeError: map nhl_pbp team code 'x': unknown code; add it to sources/teams.py"
   ],
   "shifts": [
@@ -355,7 +355,6 @@
     "SourceParseError: read nhl_shifts data: a shift chart row must be an object, got int",
     "SourceParseError: read nhl_shifts data: a shift chart row must be an object, got list",
     "SourceParseError: read nhl_shifts data: a shift chart row must be an object, got str",
-    "SourceParseError: read nhl_shifts data: shift chart of game 2025020709 lists no shift; the chart may not exist yet",
     "SourceParseError: read nhl_shifts data: shift chart row 16075712 of game 2025020709 field 'gameId' must be an integer, got 'x'",
     "SourceParseError: read nhl_shifts data: shift chart row 16075712 of game 2025020709 field 'gameId' must be an integer, got None",
     "SourceParseError: read nhl_shifts data: shift chart row 16075712 of game 2025020709 field 'gameId' must be an integer, got []",
@@ -396,6 +395,7 @@
     "SourceParseError: read nhl_shifts data: the shift chart must be an object, got int",
     "SourceParseError: read nhl_shifts data: the shift chart must be an object, got list",
     "SourceParseError: read nhl_shifts data: the shift chart must be an object, got str",
+    "SourcePendingError: read nhl_shifts data: shift chart of game 2025020709 lists no shift; the chart may not exist yet",
     "SourceShapeError: map nhl_shifts team code 'x': unknown code; add it to sources/teams.py"
   ]
 }

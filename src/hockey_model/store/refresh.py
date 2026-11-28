@@ -7,10 +7,11 @@ from datetime import date, datetime, timedelta
 from hockey_model.sources.http import HttpClient
 from hockey_model.store.refresh_backfill import nhl
 from hockey_model.store.refresh_context import RefreshReport, RefreshRun
+from hockey_model.store.refresh_events import events
 from hockey_model.store.refresh_nhl import score_days
 from hockey_model.store.refresh_other import daily_faceoff, espn_injuries, espn_starters, moneypuck
 
-_STEPS = (nhl, moneypuck, espn_starters, espn_injuries, daily_faceoff)
+_STEPS = (nhl, events, moneypuck, espn_starters, espn_injuries, daily_faceoff)
 # The sources that change between the hourly full refresh and puck drop: game times and states,
 # probable and confirmed goalies, and injuries. The boxscores and MoneyPuck files do not.
 _STARTER_STEPS = (score_days, espn_starters, espn_injuries, daily_faceoff)

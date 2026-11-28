@@ -453,3 +453,17 @@ def test_a_run_for_one_game_leaves_the_rows_of_another_game(conn: sqlite3.Connec
     assert conn.execute(
         "SELECT COUNT(*) FROM event_status WHERE game_id = ?", (GAME + 1,)
     ).fetchone() == (1,)
+
+
+def test_a_boxscore_revision_with_a_bad_time_fails_only_its_game(
+    conn: sqlite3.Connection,
+) -> None:
+    _boxscore(conn)
+    _store(conn, LATE)
+    assert reconcile_game(conn, GAME, LATE) is not None
+    conn.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
+    report = reconcile_games(conn, LATE, [GAME])
+    assert len(report.failed) == 1
+    assert f"game {GAME}" in report.failed[0]
+    assert "garbage" in report.failed[0]
+    assert _status(conn) == []

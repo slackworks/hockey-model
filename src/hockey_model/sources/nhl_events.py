@@ -19,7 +19,7 @@ from hockey_model.sources.payload import (
     int_field,
     str_field,
 )
-from hockey_model.sources.shape_errors import SourceParseError, SourceShapeError
+from hockey_model.sources.shape_errors import SourceParseError, SourcePendingError, SourceShapeError
 from hockey_model.team_codes import NHL_TEAM_CODES
 
 SOURCE = "nhl_pbp"
@@ -272,7 +272,7 @@ def parse_pbp(payload: object, game_id: int) -> PbpRows:
     state = str_field(SOURCE, top, "gameState", where)
     plays = as_list(SOURCE, field(SOURCE, top, "plays", where), f"{where} plays")
     if not plays:
-        raise SourceParseError(SOURCE, f"{where} lists no play; the game may not have started")
+        raise SourcePendingError(SOURCE, f"{where} lists no play; the game may not have started")
     events = [_parse_event(raw, codes, home) for raw in plays]
     seen: set[int] = set()
     for event in events:

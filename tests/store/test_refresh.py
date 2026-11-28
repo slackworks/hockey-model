@@ -26,6 +26,8 @@ from seeding import add_game, utc
 from hockey_model.sources.errors import SourceError
 from hockey_model.sources.moneypuck import MONEYPUCK_CREDIT, TEAM_GAMES_URL, goalie_games_url
 from hockey_model.sources.nhl import BOXSCORE_PARSER, score_day_url
+from hockey_model.sources.nhl_events import PBP_PARSER
+from hockey_model.sources.nhl_shifts import SHIFTS_PARSER
 from hockey_model.store.db import connect
 from hockey_model.store.nhl_writes import games_missing_boxscore
 from hockey_model.store.refresh import refresh, refresh_starters
@@ -65,6 +67,8 @@ def test_a_refresh_names_the_parser_of_every_source_it_reads(conn: sqlite3.Conne
         "moneypuck": {"moneypuck_team:1", "moneypuck_goalie:1"},
         "nhl_boxscores": {BOXSCORE_PARSER},
         "nhl_scores": {"nhl_score:2"},
+        "nhl_pbp": {PBP_PARSER},
+        "nhl_shifts": {SHIFTS_PARSER},
     }
 
 
