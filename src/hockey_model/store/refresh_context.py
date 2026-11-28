@@ -102,6 +102,9 @@ class RefreshRun:
     # True once a step stopped because the time budget ran out. It is the only reason that
     # makes a stopped backfill a budget stall, so a source failure is never blamed on the budget.
     timed_out: bool = False
+    # The count of reads that found an event feed not published yet. A read of that kind is
+    # no failure, so a loop that counts failures compares this count before and after a unit.
+    unpublished: int = 0
     # The boxscores this refresh already read, so one game costs one request per refresh.
     boxscores_read: set[int] = field(default_factory=set)
     # The time of the newest read of the clock, for the progress lines.
@@ -210,17 +213,24 @@ class RefreshRun:
                 # the failed read and the error are absent, so the absence never becomes a gap.
                 with self.conn:
                     self._observe(capture, recorded.records, exc)
+                    self._after_failure(reading)
                 self.notes.append(absent)
                 return False
             with self.conn:
                 record_failed_read(self.conn, source, url, stamp, exc)
                 self._observe(capture, recorded.records, exc)
+                self._after_failure(reading)
             self._report_failure(source, exc)
             return False
         finally:
             self.client = inner
         self.written[source] += written
         return True
+
+    def _after_failure(self, reading: Reading) -> None:
+        """Run the failure hook of a reading, in the transaction that records the failure."""
+        if reading.on_failure is not None:
+            reading.on_failure(self.conn)
 
     def _report_failure(self, source: str, failure: HockeyModelError) -> None:
         """Report a failed unit. The failure of an event source is a note, not an error.

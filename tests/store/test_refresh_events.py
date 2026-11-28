@@ -7,15 +7,15 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from events_support import BOX, GAME, reconciled_game, status_rows
 from refresh_support import NOW, FakeClient, fixture
-from seeding import add_game
 
 from hockey_model.sources.errors import SourceError
-from hockey_model.sources.nhl import boxscore_url
 from hockey_model.sources.nhl_events import pbp_url
-from hockey_model.sources.nhl_shifts import shifts_url
+from hockey_model.sources.nhl_shifts import SHIFTS_PARSER, shifts_url
 from hockey_model.store import refresh_context, refresh_events, refresh_revisit
 from hockey_model.store.db import StoreError, connect
+from hockey_model.store.event_unit import event_unit
 from hockey_model.store.refresh import refresh
 from hockey_model.store.refresh_context import RefreshRun
 from hockey_model.store.refresh_events import events, read_events
@@ -23,8 +23,6 @@ from hockey_model.store.refresh_nhl import read_boxscores
 from hockey_model.store.source_reads import NHL_PBP, NHL_SHIFTS, abandoned_urls
 
 SCORED = 14
-GAME = 2025020709
-BOX = boxscore_url(GAME)
 
 
 @pytest.fixture
@@ -42,12 +40,6 @@ def _observations(conn: sqlite3.Connection, source: str, game_id: int = GAME) ->
     return conn.execute(
         "SELECT COUNT(*) FROM observations WHERE source = ? AND key = ?", (source, str(game_id))
     ).fetchone()[0]
-
-
-def _status(conn: sqlite3.Connection, game_id: int = GAME) -> list[tuple]:
-    return conn.execute(
-        "SELECT status, checked_at FROM event_status WHERE game_id = ?", (game_id,)
-    ).fetchall()
 
 
 def test_a_refresh_stores_the_events_and_shifts_of_every_final_game(
@@ -81,7 +73,7 @@ def test_a_game_is_read_again_at_the_revisit_days(conn: sqlite3.Connection) -> N
     refresh(conn, FakeClient(), now=NOW + timedelta(days=3))
     assert _observations(conn, NHL_PBP) == 2
     assert _observations(conn, NHL_SHIFTS) == 2
-    assert len(_status(conn)) == 1
+    assert len(status_rows(conn)) == 1
 
 
 def test_a_failed_play_by_play_stores_nothing_for_its_game(conn: sqlite3.Connection) -> None:
@@ -93,7 +85,7 @@ def test_a_failed_play_by_play_stores_nothing_for_its_game(conn: sqlite3.Connect
     assert any(n.startswith("nhl_pbp: ") and "HTTP 503" in n for n in report.notes)
     assert GAME not in _games(conn, "pbp_events")
     assert GAME in _games(conn, "shifts")
-    assert _status(conn) == []
+    assert status_rows(conn) == []
     assert len(_games(conn, "pbp_events")) == SCORED - 1
 
 
@@ -106,25 +98,9 @@ def test_a_payload_for_another_game_is_a_failed_unit(conn: sqlite3.Connection) -
     assert GAME not in _games(conn, "pbp_events")
 
 
-def _reconciled_game(conn: sqlite3.Connection) -> None:
-    """Store the boxscore and the events of one game, read long after its last revisit day."""
-    add_game(conn, GAME, "2026-01-10T01:00:00.000000+00:00", home="EDM", away="LAK", score=(3, 4))
-    conn.execute("UPDATE games SET last_period = 'SO'")
-    served: dict[str, bytes | Exception] = {
-        BOX: fixture("nhl/boxscore_2025020709.json"),
-        pbp_url(GAME): fixture("nhl/pbp_2025020709.json"),
-        shifts_url(GAME): fixture("nhl/shifts_2025020709.json"),
-    }
-    run = RefreshRun(conn, FakeClient(served), NOW + timedelta(days=20))
-    read_boxscores(run, [GAME])
-    read_events(run, NHL_PBP, [GAME])
-    read_events(run, NHL_SHIFTS, [GAME])
-    assert run.errors == []
-
-
-def test_a_new_boxscore_revision_changes_the_stored_status(conn: sqlite3.Connection) -> None:
-    _reconciled_game(conn)
-    assert [row[0] for row in _status(conn)] == ["reconciled"]
+def test_a_new_boxscore_revision_changes_the_storedstatus_rows(conn: sqlite3.Connection) -> None:
+    reconciled_game(conn)
+    assert [row[0] for row in status_rows(conn)] == ["reconciled"]
     body = json.loads(fixture("nhl/boxscore_2025020709.json"))
     for side in body["playerByGameStats"].values():
         for group in side.values():
@@ -134,13 +110,13 @@ def test_a_new_boxscore_revision_changes_the_stored_status(conn: sqlite3.Connect
     later = RefreshRun(conn, FakeClient({BOX: json.dumps(body).encode()}), NOW + timedelta(days=21))
     read_boxscores(later, [GAME])
     assert later.errors == []
-    assert [row[0] for row in _status(conn)] == ["incomplete"]
+    assert [row[0] for row in status_rows(conn)] == ["incomplete"]
 
 
-def test_a_new_boxscore_revision_that_cannot_reconcile_removes_the_status(
+def test_a_new_boxscore_revision_that_cannot_reconcile_removes_thestatus_rows(
     conn: sqlite3.Connection,
 ) -> None:
-    _reconciled_game(conn)
+    reconciled_game(conn)
     conn.execute("UPDATE observations SET fetched_at = 'garbage' WHERE source = ?", (NHL_PBP,))
     later = RefreshRun(
         conn, FakeClient({BOX: fixture("nhl/boxscore_2025020709.json")}), NOW + timedelta(days=21)
@@ -148,7 +124,7 @@ def test_a_new_boxscore_revision_that_cannot_reconcile_removes_the_status(
     read_boxscores(later, [GAME])
     assert later.errors == []
     assert sum("garbage" in note for note in later.notes) == 1
-    assert _status(conn) == []
+    assert status_rows(conn) == []
 
 
 def _failing(url: str) -> dict[str, bytes | Exception]:
@@ -211,7 +187,7 @@ def test_a_revisit_bound_names_the_games_left_for_the_next_refresh(
 def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
     conn: sqlite3.Connection, source: str
 ) -> None:
-    _reconciled_game(conn)
+    reconciled_game(conn)
     conn.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
     served: dict[str, bytes | Exception] = {
         pbp_url(GAME): fixture("nhl/pbp_2025020709.json"),
@@ -222,12 +198,12 @@ def test_a_unit_keeps_its_rows_when_the_game_cannot_reconcile(
     assert _observations(conn, source) == 2
     assert run.errors == []
     assert sum("garbage" in note for note in run.notes) == 1
-    assert _status(conn) == []
+    assert status_rows(conn) == []
 
 
 def test_the_derive_hook_refuses_to_run_before_the_unit(conn: sqlite3.Connection) -> None:
     run = RefreshRun(conn, FakeClient(), NOW)
-    _, reading = refresh_events._unit(run, NHL_SHIFTS, GAME, [])
+    _, reading = event_unit(run, NHL_SHIFTS, GAME, SHIFTS_PARSER, lambda _client: lambda *_: None)
     assert reading.derive is not None
     with pytest.raises(StoreError, match=rf"derive nhl_shifts {GAME}: .*no parsed rows"):
         reading.derive(conn, 1)
@@ -243,21 +219,21 @@ def _both() -> dict[str, bytes | Exception]:
 def test_a_game_without_a_status_is_reconciled_again_in_the_next_refresh(
     conn: sqlite3.Connection,
 ) -> None:
-    _reconciled_game(conn)
+    reconciled_game(conn)
     (good,) = conn.execute("SELECT DISTINCT fetched_at FROM boxscore_revisions").fetchall()
     conn.execute("UPDATE boxscore_revisions SET fetched_at = 'garbage'")
     first = RefreshRun(conn, FakeClient(_both()), NOW + timedelta(days=21))
     read_events(first, NHL_PBP, [GAME])
-    assert _status(conn) == []
+    assert status_rows(conn) == []
     assert sum("garbage" in note for note in first.notes) == 1
     again = RefreshRun(conn, FakeClient(), NOW + timedelta(days=22))
     events(again)
-    assert _status(conn) == []
+    assert status_rows(conn) == []
     assert sum("garbage" in note for note in again.notes) == 1
     conn.execute("UPDATE boxscore_revisions SET fetched_at = ?", good)
     last = RefreshRun(conn, FakeClient(), NOW + timedelta(days=23))
     events(last)
-    assert [row[0] for row in _status(conn)] == ["reconciled"]
+    assert [row[0] for row in status_rows(conn)] == ["reconciled"]
     assert last.notes == []
 
 
@@ -290,7 +266,7 @@ def test_a_feed_that_is_not_published_yet_never_becomes_a_known_gap(
 def test_a_bug_in_the_reconcile_code_leaves_the_boxscore_read_intact(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, failure: Exception
 ) -> None:
-    _reconciled_game(conn)
+    reconciled_game(conn)
     revisions = conn.execute("SELECT COUNT(*) FROM boxscore_revisions").fetchone()[0]
 
     def broken(db: sqlite3.Connection, game_id: int, now: object) -> None:
@@ -312,8 +288,8 @@ def test_a_bug_in_the_reconcile_code_leaves_the_boxscore_read_intact(
     read_boxscores(later, [GAME])
     assert later.errors == []
     assert conn.execute("SELECT COUNT(*) FROM boxscore_revisions").fetchone()[0] > revisions
-    assert _status(conn) == []
-    assert _status(conn, GAME + 1) == []
+    assert status_rows(conn) == []
+    assert status_rows(conn, GAME + 1) == []
     assert conn.execute("SELECT COUNT(*) FROM stints").fetchone() == (0,)
     assert sum(type(failure).__name__ in note for note in later.notes) == 1
 

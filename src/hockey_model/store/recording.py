@@ -114,6 +114,8 @@ class Reading:
     exist yet. ``key`` names the resource when the URL does not, such as the NHL game id of an
     ESPN summary. ``derive`` runs after a good unit, in the same transaction, with the id of the
     observation that holds the bytes of the unit. A source with versioned rows writes them there.
+    ``on_failure`` runs after a failed unit, in the transaction that writes its observation, so a
+    status that reads the newest observation sees the failure with it.
     """
 
     parser: str
@@ -121,6 +123,7 @@ class Reading:
     keep_body: bool = True
     key: str | None = None
     derive: Callable[[sqlite3.Connection, int], None] | None = None
+    on_failure: Callable[[sqlite3.Connection], None] | None = None
 
     def __post_init__(self) -> None:
         """Refuse a key that is not an NHL game id, so a short id never becomes a key."""

@@ -3,6 +3,7 @@
 ESPN does not support these endpoints. Fetch sparingly. Read no odds field.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -22,6 +23,8 @@ from hockey_model.sources.starters import StarterRead
 from hockey_model.sources.teams import from_espn
 
 SOURCE = "espn"
+# An ESPN event id is 1 to 12 ASCII digits.
+EVENT_ID = re.compile(r"[0-9]{1,12}")
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl"
 # The parser name that an archived payload records. Change the version when a parser change can
 # change a parsed row. Both parsers took version 2 with the unnamed-status handling (#325).

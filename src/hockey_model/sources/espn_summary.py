@@ -10,6 +10,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from hockey_model.sources.espn import EVENT_ID
 from hockey_model.sources.http import HttpClient
 from hockey_model.sources.nhl_events import clock_seconds
 from hockey_model.sources.payload import (
@@ -40,7 +41,6 @@ _STAT_KEYS = (
 MAX_TOI_SECONDS = 7200
 # ASCII digits only, so a Unicode digit never parses as a number.
 _COUNT = re.compile(r"[0-9]{1,4}")
-_EVENT_ID = re.compile(r"[0-9]{1,12}")
 _ATHLETE_ID = re.compile(r"[0-9]{1,12}")
 
 
@@ -165,7 +165,7 @@ def parse_summary(payload: object, event_id: str) -> EspnSummary:
 
 def summary_url(event_id: str) -> str:
     """Return the URL of the ESPN summary of one event, or raise for an id that is not digits."""
-    if _EVENT_ID.fullmatch(event_id) is None:
+    if EVENT_ID.fullmatch(event_id) is None:
         raise SourceParseError(
             SOURCE, f"ESPN event id must be 1 to 12 ASCII digits, got {event_id!r}"
         )
