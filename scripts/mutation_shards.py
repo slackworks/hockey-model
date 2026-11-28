@@ -60,6 +60,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "backtest.shards",
         "sources.nhl_shifts",
         "sources.espn_summary",
+        "sources.espn_events",
     ),
     (
         "backtest.row_cache",
