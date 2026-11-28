@@ -56,11 +56,12 @@ def event_unit(
             return f"{source}: game {game_id}: {failure}; the next refresh reads it again"
         return None
 
-    def reconcile(_conn: sqlite3.Connection) -> None:
-        run.reconcile_in_unit(game_id)
-
     # The URL of an ESPN summary names the ESPN event, so its key is the NHL game id.
     key = str(game_id) if source == ESPN_SUMMARY else None
     return unit, Reading(
-        parser, key=key, expected_absence=not_yet, derive=derive, on_failure=reconcile
+        parser,
+        key=key,
+        expected_absence=not_yet,
+        derive=derive,
+        on_failure=lambda _conn: run.reconcile_in_unit(game_id),
     )
